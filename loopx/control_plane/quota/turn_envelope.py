@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
-import json
 from typing import Any, cast
+import json
 import zlib
 
 from ..effect_runtime import _encode_rpc_json, effect_runtime_projection_result, source_number_tokens
@@ -97,17 +97,14 @@ def _turn_envelope_result(
         operation in {"build", "quota_signature", "replan_cli_view", "bind_capture",
                       "capability_automation_source"}
         and isinstance(payload, Mapping)
-        and (
-            (operation == "replan_cli_view" and params.get("source_edits") is True)
-            or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv")))
-        )
+        and ((operation == "replan_cli_view" and params.get("source_edits") is True)
+             or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv"))))
     )
-    if complete or operation == "compose_complete" or operation == "replan_view" or staged_replan or operation == "reference_context":
-        tokens = source_number_tokens(payload)
-        if tokens:
-            request["source_number_tokens"] = tokens
-    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
-        tokens = source_number_tokens(params)
+    token_source = payload if isinstance(payload, Mapping) else params
+    if complete or staged_replan or operation in {"replan_view", "reference_context",
+            "compose_complete", "context_delivery", "context_recovery",
+            "progressive_context_delivery", "context_read_sections"}:
+        tokens = source_number_tokens(token_source)
         if tokens:
             request["source_number_tokens"] = tokens
     if operation == "capability_automation_source" and set(params) == {"payload"} and isinstance(payload, Mapping):
@@ -203,6 +200,10 @@ def complete_turn_host_source(
                                  **({"recorded_capability_result": True} if recorded_capability_result else {}),
                                  **({"include_model_context": True} if include_model_context else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
+    if "complete_host_request" in wire and operation in {"execution_context", "plan_work"}:
+        # Materialize source-owned fields from their exact original Python
+        # values rather than round-tripping them through JS number encoding.
+        return _apply_context_projection_changes(dict(request["work_contract"]), checked, base={})
     if include_model_context:
         changes = checked.pop("model_context_changes", None)
         if not isinstance(changes, dict):
@@ -319,16 +320,41 @@ def compose_turn_decision(
     payload: Mapping[str, Any], *, scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
-    composed_settlement: bool = False,
+    capability_context: Sequence[Mapping[str, Any]] = (),
+    share_inline_diagnostics: bool = False,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
+    source, request = _complete_composition_input(payload, scheduler_execution_context, capability_context)
+    result = _turn_envelope_result("compose_complete", payload=source, source_edits=True,
+        **request,
+        **({"share_inline_diagnostics": True} if share_inline_diagnostics else {}))
+    return _apply_context_projection_changes(source, result)
+
+
+def _complete_composition_input(
+    payload: Mapping[str, Any],
+    scheduler_execution_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+    capability_context: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
     source = dict(payload)
-    result = _turn_envelope_result("compose_complete", payload=source,
-        scheduler_execution_args=args, source_edits=True,
-        **({"composed_settlement": composed_settlement} if composed_settlement is not False else {}))
-    return _apply_context_projection_changes(source, result)
+    if capability_context:
+        if "turn_context_contributions" in source:
+            raise ValueError("New capability context cannot replace recorded contributions")
+        source["turn_context_contributions"] = list(capability_context)
+    return source, {"scheduler_execution_args": args,
+                    **({"embed_in_complete_source": True} if capability_context else {})}
+
+
+def compose_host_todo_settlement_guard(
+    payload: Mapping[str, Any], *,
+    scheduler_execution_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+    capability_context: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Compose the current decision and return its compact MCP observation."""
+    source, request = _complete_composition_input(payload, scheduler_execution_context, capability_context)
+    return _turn_envelope_result("compose_complete", payload=source, host_todo_settlement=True, **request)
 
 
 def is_legacy_saved_quota_decision(payload: Mapping[str, Any]) -> bool:
@@ -362,19 +388,7 @@ def build_turn_envelope(
     ) = None,
     captured_decision_path: str | None = None,
 ) -> dict[str, Any]:
-    """Project one full quota decision through the canonical TS transaction."""
-
-    return _build_turn_projection(payload,
-        scheduler_execution_context=scheduler_execution_context,
-        captured_decision_path=captured_decision_path)
-
-
-def _build_turn_projection(
-    payload: Mapping[str, Any], *, scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
-    ) = None,
-    captured_decision_path: str | None = None,
-) -> dict[str, Any]:
+    """Build the v0 comparison view through the existing TypeScript owner."""
 
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     scheduler_execution_args: object = ""

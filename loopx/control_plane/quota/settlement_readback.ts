@@ -785,6 +785,13 @@ function spendResult(
   )]);
 }
 
+function committedSpendReceiptSource(event: JsonObject | null): string | null {
+  if (event === null || !optionalString(event.event_id)) return null;
+  const {slots, source} = details(event);
+  return slots === ORIGINAL_TURN_SPEND_SLOTS && (source === "heartbeat" || source === "visible-goal")
+    ? source : null;
+}
+
 function terminalResult(
   identity: SettlementIdentity,
   event: JsonObject | null,
@@ -1505,8 +1512,13 @@ function readQuotaSettlementFromRequest(
     ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
     : refreshDecision;
 
+  // Fully committed historical debits retain their original accounting.
+  // An incomplete settlement still uses the source authorized by admission.
+  const replaySource = settled.failure === null && spend.failure === null && noSpendKind === null
+    ? committedSpendReceiptSource(spendEvent) : null;
   const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
     receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  if (replaySource !== null) progress.quota_spend_source = replaySource;
   // The combined caller consumes controls and receipts after verification.
   // Keep original bodies by default and throughout any pending recovery,
   // including the same Runs carried by the four result bundles. Identity,
@@ -1628,7 +1640,7 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       // Snapshot readers for history and guard discovery use the bounded index.
       const retained = matchedSpend.run !== null
         ? await readQuotaSpendEventFromRun(join(request.runtime_root, "goals", request.goal_id, "runs"),
-          matchedSpend.run, request.goal_id)
+          matchedSpend.run, request.goal_id, !spendPrecheck && request.refresh_retry === null)
         : null;
       const ledger = {slots: retained?.slots ?? undefined, source: retained?.source ?? undefined};
       let conflict = spendTermsConflict(ledger, receipt);
@@ -1717,9 +1729,11 @@ function originalSpendRejection(
   const recordedSource = ledger.source ?? receipt.source;
   const fallbackSource = recordedSource === "heartbeat" || recordedSource === "visible-goal"
     ? recordedSource : progress.quota_spend_source;
-  const source = authorizedSource ?? fallbackSource;
-  // Every admitted CLI settlement plan authorizes one slot and the original
-  // source. The same check gates initial spend, receipt repair, and replay.
+  const replaySource = progress.state === "settled" && progress.closeout_kind == null && spendRun !== null
+    ? committedSpendReceiptSource(spendEvent) : null;
+  const source = replaySource ?? authorizedSource ?? fallbackSource;
+  // First debit and receipt repair must match admission. A fully receipted
+  // replay must match the existing debit and cannot append another charge.
   if (proposed.slots !== ORIGINAL_TURN_SPEND_SLOTS || proposed.source !== source) {
     return rejectedSpend(`original Turn settlement requires --slots ${ORIGINAL_TURN_SPEND_SLOTS} --source ${String(source)}`);
   }

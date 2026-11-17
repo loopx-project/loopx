@@ -157,6 +157,62 @@ def test_operation_cli_stop_preempts_actual_native_boundary(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_operation_cli_recovers_session_prepared_before_dispatch_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    runtime, registry, native, turns, arguments = _fixture(tmp_path, monkeypatch, provider)
+    executable = Path(arguments[arguments.index("--codex-bin") + 1])
+    thread_requests = tmp_path / "thread-requests.jsonl"
+    thread_request_branch = 'elif method in {"thread/start", "thread/resume"}:'
+    executable.write_text(executable.read_text().replace(
+        thread_request_branch, thread_request_branch + "\n"
+        f"        with pathlib.Path({str(thread_requests)!r}).open('a') as log: "
+        "log.write(json.dumps([method, row['params'].get('threadId')]) + '\\n')", 1,
+    ))
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    todo = ["--goal-id", "loopx-turn-fixture", "--todo-id", "todo_fixture0001"]
+
+    def require_capability(capability: str, operation: str) -> None:
+        code, current = _cli([*prefix, "todo", "list", *todo])
+        assert code == 0, current
+        code, updated = _cli([*prefix, "todo", "update", *todo, "--agent-id", "codex-fixture",
+            "--required-capability", capability, "--update-operation-id", operation,
+            "--update-expected-provider-revision", current["authority_read"]["provider_revision"], "--execute"])
+        assert code == 0, updated
+
+    require_capability("shell", "fixture-require-shell")
+    arguments.extend(["--available-capability", "shell"])
+    real_input = codex_operation_host.prepare_codex_cli_input
+
+    def require_network_before_dispatch(request):
+        require_capability("network", "fixture-require-network")
+        return real_input(request)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(codex_operation_host, "prepare_codex_cli_input", require_network_before_dispatch)
+        code, refused = _cli([*arguments, "--execute"])
+    assert code == 1 and refused["error_code"] == "goal_launch_not_allowed", refused
+    assert refused["status"] == "failed" and refused["host_failure"]["kind"] == "contract_rejected"
+    assert not any(refused["effects"].values())
+    assert native.exists() and not turns.exists()
+    assert [json.loads(row) for row in thread_requests.read_text().splitlines()] == [["thread/start", None]]
+    require_capability("shell", "fixture-restore-shell")
+
+    index = arguments.index("--turn-instance-id")
+    del arguments[index:index + 2]
+    code, resumed = _cli([*arguments, "--resume-turn-key", refused["resume_turn_key"],
+                          "--retry-failed-turn", "--execute"])
+    assert code == 0 and resumed["status"] == "stopped", resumed
+    assert resumed["resume_turn_key"] == refused["resume_turn_key"]
+    assert resumed["recovery"]["actual"]["host_invoked"] is True
+    assert [json.loads(row) for row in thread_requests.read_text().splitlines()] == [
+        ["thread/start", None], ["thread/resume", "owned-app-server-thread"],
+    ]
+    assert turns.read_text().splitlines() == ["owned-app-server-thread"]
+    assert not resumed["effects"]["quota_spent"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_legacy_active_variant_cli_preview_and_real_launch_agree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:

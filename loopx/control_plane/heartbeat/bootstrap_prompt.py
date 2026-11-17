@@ -36,7 +36,9 @@ def render_heartbeat_bootstrap(command: list[str]) -> str:
     )
 
 
-def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
+def _goal_command(
+    args: Any, *, registry: Path, legacy: bool, preserve_turn_envelope: bool = False,
+) -> list[str]:
     """Preserve explicit caller inputs, not yesterday's resolved registry values.
 
     The loaded command deliberately omits --bootstrap: one load cannot recurse.
@@ -85,9 +87,10 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
             command += [flag, value]
     if args.cli_bin != "loopx":
         command += ["--cli-bin", args.cli_bin]
-    if getattr(args, "turn_envelope", False):
+    turn_envelope = getattr(args, "turn_envelope", False)
+    if turn_envelope and preserve_turn_envelope:
         command.append("--turn-envelope")
-    if getattr(args, "complete_turn", False):
+    elif getattr(args, "complete_turn", False):
         command.append("--complete-turn")
     if legacy:
         if args.codex_app:
@@ -100,7 +103,7 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
     return command
 
 
-def goal_bootstrap(args: Any, *, registry: Path) -> str:
+def goal_bootstrap(args: Any, *, registry: Path, preserve_turn_envelope: bool = False) -> str:
     """Use the heartbeat wrapper only for an App heartbeat scheduler."""
     heartbeat = (
         args.codex_app
@@ -109,7 +112,8 @@ def goal_bootstrap(args: Any, *, registry: Path) -> str:
         or getattr(args, "runtime_profile", None)
         in {"codex_app_heartbeat", "trae_app", "antigravity_app"}
     )
-    command = _goal_command(args, registry=registry, legacy=not heartbeat)
+    command = _goal_command(args, registry=registry, legacy=not heartbeat,
+                            preserve_turn_envelope=preserve_turn_envelope)
     if heartbeat:
         return render_heartbeat_bootstrap(command)
     return render_bootstrap(command, title=LEGACY_HOST_BOOTSTRAP,
@@ -161,10 +165,14 @@ def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
                 return None
             index += 2
         registry = Path(values.pop("registry"))
-        expected = goal_bootstrap(SimpleNamespace(**values), registry=registry)
+        if values["turn_envelope"] and values.get("complete_turn"):
+            return None
+        # Reproduce the recorded spelling only for byte-exact recognition.
+        args = SimpleNamespace(**values)
+        expected = goal_bootstrap(args, registry=registry, preserve_turn_envelope=True)
         if prompt.startswith(LEGACY_HOST_BOOTSTRAP + "\n"):
             expected = render_bootstrap(
-                _goal_command(SimpleNamespace(**values), registry=registry, legacy=True),
+                _goal_command(args, registry=registry, legacy=True, preserve_turn_envelope=True),
                 title=LEGACY_HOST_BOOTSTRAP,
                 entry=LEGACY_HOST_BOOTSTRAP_ENTRY,
             )

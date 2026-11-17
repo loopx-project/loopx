@@ -58,6 +58,15 @@ def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provi
             capture.write_bytes(original)
             reader_path = capture
             original_path.unlink()
+        if entry in {"numeric", "staged"}:
+            # Exercise historical inputs explicitly. The current guard's signed
+            # capture cannot be edited into a precision fixture or legacy view.
+            source = {key: value for key, value in source.items()
+                      if key not in {"schema_version", "contract_binding"}}
+            capture = reader_path = tmp_path / "legacy-source.json"
+            source["replan_read_path"] = str(reader_path)
+            if entry == "staged":
+                write_decision_capture(reader_path, source)
         if entry == "numeric":
             # These two acceptance carriers compare equal after JSON.parse.
             # Both exact values must survive this synthetic source and view.
@@ -73,8 +82,6 @@ def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provi
                 "source": "goal_acceptance", "content": {"status": "loaded", "goal_acceptance_contract": distinct},
             })
             source["precision_fixture"] = {"exact_integer": 2**53 + 1, "exact_float": 1.0}
-            capture = tmp_path / "precision-source.json"
-            reader_path = capture
             write_decision_capture(capture, source)
         if entry == "staged":
             capture = tmp_path / "already-staged.json"
@@ -130,6 +137,11 @@ with patch.object(turn_envelope, '_turn_envelope_result', fail):
         assert result.returncode == 0, result.stdout + result.stderr
         response = json.loads(result.stdout)
         assert response["ok"], response
+        if entry == "selected":
+            assert response["eof"]
+            assert json.loads(response["content"])["selections"] == [
+                {"pointer": "/replan_action_packet", "value": source["replan_action_packet"]},
+            ]
         first_review = None
         staged = entry in {"original", "copied", "staged", "numeric"}
         if staged:

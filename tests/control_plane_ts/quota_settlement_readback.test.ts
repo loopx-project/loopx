@@ -1017,6 +1017,43 @@ test("settlement progress preserves typed source and rejects malformed sources",
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
+test("a complete legacy spend replays its charged source, but partial or conflicting records do not", async (t) => {
+  for (const state of ["committed", "missing_receipt", "conflicting_artifact"] as const) {
+    await t.test(state, async () => {
+      const root = await fixture({writeback: true, spend: true});
+      try {
+        const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+        const index = join(root, "goals", goalId, "runs", "index.jsonl");
+        const lines = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        const runs = (await readFile(index, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        lines.find(event => event.event_kind === "quota_should_run").details.quota_spend_source = "visible-goal";
+        const receipt = lines.find(event => event.event_kind === "quota_spend");
+        Object.assign(receipt.details, {slots: 1, source: "heartbeat"});
+        runs.find(run => run.classification === "quota_slot_spent").quota_event = {
+          slots: 1, source: state === "conflicting_artifact" ? "visible-goal" : "heartbeat",
+        };
+        const events = state === "missing_receipt" ? lines.filter(event => event !== receipt) : lines;
+        await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+        await writeFile(index, runs.map(run => JSON.stringify(run)).join("\n") + "\n");
+        const precheck = (source: string, slots = 1) => readQuotaSettlement(request(root, {
+          spend_precheck: true, spend_request: {source, slots},
+        }));
+
+        const replay = await precheck("heartbeat");
+        assert.equal(Boolean(replay.spend_request_rejection), state !== "committed");
+        assert.ok((await precheck("visible-goal")).spend_request_rejection);
+        assert.ok((await precheck("heartbeat", 2)).spend_request_rejection);
+        if (state !== "conflicting_artifact") {
+          assert.equal(requireJsonObject(replay.progress, "progress").quota_spend_source,
+            state === "committed" ? "heartbeat" : "visible-goal");
+        }
+      } finally {
+        await rm(root, {recursive: true, force: true});
+      }
+    });
+  }
+});
+
 test("accepted in-flight writeback closes only the exact Turn, not its Todo", async t => {
   const checkpoint = {
     schema_version: "vision_checkpoint_v0", agent_id: agentId, satisfied: true,

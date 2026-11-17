@@ -397,6 +397,7 @@ describe('DSH admission-to-closeout integration', () => {
       '--turn-instance-id', turnInstanceId,
     ])
     expect(unselected.exitCode).toBe(0)
+    expect(unselected.payload.schema_version).toBe('loopx_turn_envelope_v1')
     const unselectedChannel = record(record(unselected.payload.interaction_contract).cli_channel)
     expect(unselectedChannel.selection_required).toBe(true)
     expect(unselectedChannel.settlement_plan).toBeUndefined()
@@ -424,6 +425,8 @@ describe('DSH admission-to-closeout integration', () => {
     expect(guardReplay.exitCode).toBe(0)
     expect(guard.exitCode).toBe(0)
     expect(guard.payload.ok).toBe(true)
+    expect(guard.payload.schema_version).toBe('loopx_turn_envelope_v1')
+    expect(guardReplay.payload.schema_version).toBe('loopx_turn_envelope_v1')
     const heartbeatReceipt = record(guard.payload.heartbeat_receipt)
     expect(heartbeatReceipt.turn_instance_id).toBe(turnInstanceId)
     const cliChannel = record(record(guard.payload.interaction_contract).cli_channel)

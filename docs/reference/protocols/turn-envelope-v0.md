@@ -5,12 +5,15 @@ computed `quota should-run` decision. It gives an agent the next action and its
 safety contract without replaying every diagnostic lane in the full quota
 payload.
 
-This page describes the current versioned representation. The
+This page retains the historical v0 representation and recovery contract. The
 [unified-contract RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
-proposes replacing the live quota/envelope format choice with one complete
-contract, including differential delivery. Historical captures retain their
-original schema and signature. The explicit complete-v1 Host entry below does
-not switch existing quota or v0 consumers to the proposed unified default.
+replaces the active quota/envelope format choice with one complete contract,
+including differential delivery. In the C1 candidate, new quota calls use the
+complete v1 source by default, including the deprecated `--turn-envelope`
+spelling. Context delivery off keeps that source inline. The removed v0 display
+projector is not a fallback for new work. Historical captures keep their original
+schema, signature, recorded command and reader; the remaining v0 examples below
+explain those historical records, rather than a way to generate new v0 work.
 The proposed composition point precedes capture and encoding. Today's action
 signature compares its registered projection; equality alone does not establish
 complete source-clause preservation or qualify the unified contract.
@@ -19,15 +22,135 @@ also covers the direct Turn producer and final host prompts. Quota CLI output
 parity alone does not qualify those consumers. Historical v0 decoding remains
 separate from switching new admissions to a future unified version.
 
-中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
-的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
-历史捕获保留原 schema 与签名。下述显式完整 v1 Host 入口不将既有 quota 或 v0
-消费者切换到提案的统一默认。
+A managed handoff checks and releases the exact complete capture before output.
+Interrupted-tool recovery reads that complete original, with its original
+settlement identity. New heartbeat and checkpoint preflight producers request
+only the complete source. The frozen v0 builder remains for historical model
+comparisons and versioned recovery validation, not an active CLI display.
+
+Thin `heartbeat-prompt` now renders the complete guard for new captured work,
+including an exact saved loader with the old option. Regenerated bootstrap
+commands use the complete source. Direct quota accepts the deprecated spelling
+as an alias; sealed pending commands retain their original recovery reader.
+
+The C1 native candidate reuses advisory outcome navigation and the generic
+same-capture selector. Its existing native planner and full/delta encoder retain
+their two calls; the retired mandatory scoped-reading wrapper adds no third
+owner. IO publishes current original recovery before planning and commits the
+required artifact before publishing delivery. Full views page their existing
+immutable capture; only deltas need a separate encoded file. This changes neither
+the model-facing page contract nor historical decoding, default activation,
+execution or settlement authority.
+The candidate's `turn run-once` also reads selection, task commitment, admitted
+action and replan/writeback conditions together from the checked complete source.
+It reuses the task-source boundary call and existing effect projection. The old
+adapter remains for integrity checks and unmigrated consumers, with its execution
+decoder used only for requests that omit the complete contract. Invalid supplied
+contracts never fall back. This does not qualify full adapter retirement or
+outcome/full-cost benefit over original quota.
+New structured Host preparation also consumes that complete source instead of
+flattening the legacy authority layout. Executable-action and admitted-replan
+facts retain their typed owner; Codex boundary guidance uses the complete source.
+The original capture metadata and historical-only decoder remain supported.
+This changes no complete model input, effect owner or cross-attempt freshness rule.
+Codex CLI and operation-equipped app-server input preparation share one complete
+source check for prompt and result schema within that launch. The internal reply
+returns resolved metadata without echoing the source. Standalone consumers and
+post-execution result conversion still validate independently; no cross-attempt
+cache or new model-facing contract is introduced.
+Within the C1 candidate, planning and failed-session recovery consume ordinary
+and adaptive selection in the existing checked action-hash preimage. They reuse
+the typed work owner; Python preserves historical JSON/number encoding without
+selecting work again. Historical primary-ID scalar/whitespace hints are not trimmed again and cannot override a
+complete source. Other v0 readers remain until their own migration and recovery
+qualification; no extra model-facing field or bridge call is introduced.
+
+The native launch check now reuses the planner's selected work. CLI preparation
+and post-validation completion classification share the existing execution-context
+reader in `turn_driver/driver.py`, backed by the typed source owner. Completion
+classification rechecks complete source/projection integrity even when its outcome
+is already saved in the journal; malformed supplied input cannot use historical
+fallback. Historical omission retains its decoder and accepted-receipt recovery.
+This adds one coarse request per complete completion classification, with no
+additional launch request. It preserves original Turn identity, effect order and
+once-only recovery; it does not establish a net efficiency improvement.
+
+The unmerged C1 complete binding now declares `hash_codec=context_source_numbers_v2`.
+Composition and complete consumers reuse the existing typed source identity to
+commit original numeric tokens alongside canonical JSON. Replan, capture and Host
+checks consume that same binding; missing/unsupported codecs or lost numeric
+transport reject before dependent work. The shared Python IO collector supplies
+tokens only for integral floats, signed zero and integers outside JavaScript's
+safe range. Ordinary fractional doubles need no repeated path/token metadata.
+Python applies source edits; it does not own another digest rule.
+These tokens retain the producer's numeric value/type encoding; exact byte layout
+and alternative numeric spellings remain the capture-byte check's responsibility.
+Historical v0 hashes and Turn keys retain their decoder. The earlier experimental
+`context_source_numbers_v1` committed all float tokens; changing that identity
+requires this explicit codec transition. Old v1 bindings and bindings without a
+codec are unavailable for new execution, while raw captures remain unchanged and
+their pinned readers remain available for historical inspection. Do not migrate
+outstanding work by re-signing its source. This is integrity checking, not
+authentication or execution authority; the original-quota benefit gate stays open.
+The standalone complete-input adapter also uses the existing compact Host check;
+its unused full-source echo operation is retired. Model input still uses the
+original source, with no extra validation request or model-facing view.
+
+中文：本页保留历史 v0 表示与恢复合同。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+取消活跃 quota/envelope 格式选择。C1 候选中的所有新 quota 调用默认使用完整 v1
+来源，包括已经废弃的 `--turn-envelope` 拼写；关闭上下文交付时将同一来源保持在
+inline。v0 展示 projector 已删除，不为新工作兜底。历史捕获保留原 schema、签名、
+原命令和 reader；下文其余 v0 示例说明历史记录，不再产生新的 v0 工作。
+托管 handoff 在输出前核验并放行同一完整捕获；工具中断时仍按原身份读取原包。
+新 heartbeat 与 checkpoint preflight 只请求完整来源。冻结的 v0 builder 仅服务
+历史模型对照与版本化恢复验证，不再作为活跃 CLI 展示入口。
 提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
 仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
 RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
 还覆盖直接生产契约的 Turn 入口和最终 host prompt；仅 quota CLI 输出等价不能验收
 这些消费者。历史 v0 解码与新准入切换到未来统一版本分别处理。
+
+C1 的 native 候选复用成果建议导航和通用同 capture selector。既有原生 planner 与
+full/delta encoder 保持两次调用；已退役的强制 scoped-reading wrapper 不增加第三个
+owner。IO 在规划前发布当前原始恢复引用，并在发布交付前落盘所需产物。全文视图直接
+分页已有不可变 capture，只有 delta 需要额外编码文件；模型侧分页契约、历史 decoder、
+默认激活、执行及结算权限均不改变。
+候选 `turn run-once` 也在同一次经过校验的完整来源读取中获得选定工作、正文摘要、
+已准入动作及 replan／写回条件，复用正文来源的边界调用与既有效果投影。旧 adapter
+仍供完整性校验和未迁移消费者使用；只有缺省完整契约的请求使用旧执行 decoder，
+显式无效契约不回退。完整 adapter 退役及优于原 quota 的成果／完整成本收益仍未资格。
+新结构化 Host 准备也直接消费完整来源，不再展开旧 authority 布局；可执行行动与
+已准入 replan 事实仍由既有 typed owner 提供，Codex 边界指导读取完整来源。
+原 capture 元数据和仅用于历史请求的 decoder 保留；完整模型输入、effect 归属及
+跨 attempt 新鲜度规则不变。
+Codex CLI 与启用 operation tools 的 app-server 在一次启动的输入准备中，让提示词
+与结果 schema 共用完整来源校验；内部响应只返回已解析元数据，不原样回传来源。
+独立消费者与执行后的结果转换仍各自校验，不引入跨 attempt 缓存或新的模型侧契约。
+在 C1 候选中，规划与失败会话恢复从已有、经校验的动作 hash preimage 消费普通及
+自适应主任务选择，复用 typed 工作 owner；Python 只保留历史 JSON／数字编码，
+不再重新选择。历史 primary-ID scalar／空白提示不再重复 trim，也不能覆盖完整来源；其他 v0 reader
+须各自完成迁移及恢复资格后退役，不新增模型侧字段或 bridge 调用。
+
+原生启动检查现在复用 planner 已返回的选中工作。CLI 准备与任务验证后的完成分类
+共用 `turn_driver/driver.py` 中的既有 execution-context reader，由 typed 来源
+owner 校验。即使 journal 已保存完成 outcome，仍重新检查完整来源／投影一致性；
+显式无效输入不能走历史回退。省略完整输入的历史请求保留 decoder 和已接受回执
+恢复。完整完成分类每次新增一次粗粒度请求，启动检查不新增请求；原 Turn 身份、
+effect 顺序和一次恢复语义保持，不据此认定净效率提升。
+
+尚未合并的 C1 完整 binding 现声明 `hash_codec=context_source_numbers_v2`，组合与完整
+消费者复用既有 typed 来源身份，把原数值 token 与 canonical JSON 一起纳入承诺。
+Replan、capture 与 Host 检查消费同一 binding；缺失／不支持的 codec 或丢失原数值运输
+信息在依赖工作前拒绝。共用的 Python IO collector 只为整数值 float、带符号零及超出
+JavaScript 安全范围的整数提供 token；普通小数 double 不必重复携带路径／token。
+Python 应用来源 edits，不新增 digest 决策。Token 保留 producer 的数值／类型编码；
+精确字节布局与其他数值写法仍由 capture 字节校验负责。历史 v0 hash 与 Turn key 保留
+原 decoder；先前实验 `context_source_numbers_v1` 承诺全部 float token，这项身份变化
+通过显式 codec 升级区分。旧 v1 及缺少 codec 的 binding 不可用于新执行；原始 capture
+不变，历史检查使用对应版本固定的 reader，不通过重签来源迁移未完成工作。完整性
+校验不授予认证或执行权限；原 quota 的收益验收仍开放。
+独立完整输入 adapter 也复用既有紧凑 Host 检查，退役已无调用方的完整来源 echo
+operation；模型输入仍使用原来源，不增加验证请求或模型侧视图。
 
 Preview it explicitly:
 
@@ -48,10 +171,12 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
   --turn-instance-id <turn-id> --complete-turn --decision-output-dir ./complete-001
 ```
 
-The flag is mutually exclusive with legacy `--turn-envelope`. Omitting it keeps
-the existing quota/v0 behavior, including App callers. Context delivery is
-independent: `--context-delivery off` returns the complete v1 document without
-progressive presentation; it does not undo the explicit version choice.
+Ordinary quota and the deprecated `--turn-envelope` spelling now share the same
+complete source. `--complete-turn` additionally requests the qualified composed
+Host settlement recipe; a source spelling cannot choose a different owner.
+Context delivery is independent: `--context-delivery off` returns the explicit
+complete v1 document inline. A returned selection command and native lease
+preparation retain the selected source format through same-Turn reentry.
 An older CLI rejects the new flag before guard execution. Omit it to roll back;
 existing complete captures remain readable through their original digest-bound
 `quota context-read`/`context-project` recovery.
@@ -69,6 +194,16 @@ explicit digest-bound references. For a rejected ready capture, the native
 hook can still read back its recorded claim and lease references. A
 diagnostic read cannot acknowledge delivery of ready work context. Optional
 presentation failures after verification can still refer to the verified capture.
+An explicit complete-source native preparation does not fall back to the
+ordinary reader if the ready capture loses its version and binding.
+
+When a bound replan qualifies for successor creation, navigation can offer
+`replan_review_command` alongside the ordinary staged first read. The optional
+reader pins the review evidence and original Turn identity to the saved
+decision. The staged reader still leads to the full authoring and settlement
+contract for other outcomes. Benchmark checkpoint preflight uses the source
+requested by its own invocation and verifies the complete source when that
+invocation requests C1.
 
 For eligible original Todo plans, the same typed settlement owner projects one
 `refresh-state ... --settle-turn --settlement-receipt` command. It retains the
@@ -76,7 +211,12 @@ original effect identity, validation and terminal conditions. A non-ready
 preparation or mismatched receipt never becomes ready; partial failure returns
 the original `settlement_owed` recovery instead of a second debit. Contract
 composition failure preserves the decided receipt and available original
-capture, reports failure, and grants no work or automatic retry.
+capture, reports failure, and grants no work or automatic retry. C1 selects this
+explicit Host settlement profile through the existing native CLI projection
+before sealing the source. The composer still preserves its canonical plan and
+rejects transport flags that try to change settlement ownership. The projection
+sends only eligibility facts alongside the existing plan and receipt, without
+copying the full Goal/context to another request or adding a second composer.
 
 `heartbeat-prompt --thin --complete-turn` preserves the selection on its guard
 and same-Turn selection commands. External benchmark heartbeat adapters may
@@ -86,13 +226,21 @@ permission or execution allowance. User task time requirements remain task
 context; the caller's private current deadline and runtime guidance are not new
 model context. Actual live adoption and efficiency still require separate proof.
 
-中文：只有显式选择 `--complete-turn` 才让 JSON guard 在 capture 前生成完整 v1；
-未选择的 quota/App 与旧 `--turn-envelope` 行为保留，两种版本选项互斥。
-渐进/差分交付独立控制；关闭上下文交付时仍返回已显式选择的完整 v1 文档。
+中文：普通 quota 和已经废弃的 `--turn-envelope` 拼写均使用同一完整 v1 来源。
+`--complete-turn` 另外请求合格的 Host 组合结算 recipe；来源拼写不得另选结算 owner。
+渐进/差分交付独立控制；关闭上下文交付时仍内联返回显式选择的完整 v1 文档。
+返回的选题命令和原生 lease 准备在同一 Turn 再次进入时保留已选的来源格式。
+显式选用完整来源的原生准备如果发现 ready capture 丢失版本和绑定，不会改用普通 reader。
+具备创建后继任务资格的重规划可在普通分阶段首读之外提供 `replan_review_command`。
+该读取将评审证据与原 Turn 身份绑定到原捕获，其他结果仍经分阶段读取取得完整的编写与结算合同。
+Benchmark checkpoint 预检按自身调用确定预期来源，显式选择 C1 时核验完整来源。
 读取按原摘要绑定的分页，不为补读重新准入。原验收、Stop、权限、必要读取与用户
 任务时间要求保留；不会把调用方私有当前倒计时或常驻 runtime 指导新增到模型输入。
 可执行的原 Todo 结算计划复用同一 typed owner，合并为一条写回并保留原 effect id，
-不把未 ready 的准备或错误回执转成授权。部分失败只沿原 `settlement_owed` 恢复。
+不把未 ready 的准备或错误回执转成授权。C1 在封存来源前经既有 native CLI 投影
+选择显式 Host 结算方式，composer 仍只保留已决定的原计划，不接受改结算的传输参数。
+请求只补充必要资格事实，不再复制整份 Goal/上下文，也不增加第二个 composer。
+部分失败只沿原 `settlement_owed` 恢复。
 旧 CLI 在 guard 前拒绝新选项，回滚时移除该选项；旧完整 capture 仍用原 reader。
 
 `quota context-project` 先校验已保存的完整决定，再将它呈现为当前上下文。仅开启差分
@@ -470,7 +618,18 @@ Executing `turn run-once --execute` now saves the original full decision before
 Host invocation and binds the received envelope's detail route to that private
 observation. This is the native Turn execution default; ordinary quota capture
 remains opt-in. `turn plan`, `managed-step` inspection and `run-once` previews
-remain read-only. No new capability or configuration switch is introduced.
+remain read-only with respect to Goal state and execution.
+
+For a complete-contract plan ready for a host or replan, default JSON
+`turn plan` keeps the current decision, scope and required reads inline.
+Host-ready plans retain scheduler and handoff constraints. Replan keeps
+executable Vision authoring inline. On hosts with private capture support,
+`detail_ref.command` reads the exact work contract for that inspection.
+Append `--list` to discover fields or `--select` to read the current Goal,
+acceptance or evidence needed for the decision.
+This snapshot lives in the private context transport directory. Explicit
+`--include-transaction-detail` and hosts without a usable capture directory
+retain the complete inline contract.
 
 The Turn journal owns the native Turn identity. Its capture reference includes
 Goal, Agent, Turn instance, Turn key and the existing source-decision hash; it
@@ -484,13 +643,18 @@ included in public logs or artifacts.
 
 Host retry validates and reuses the original journal's capture. Before native
 Codex or an external stdio Host launches with a verified selected Todo, the
-current complete contract must still match the original task body, required write scopes and
-required capabilities. Progress notes do not invalidate that work. A mismatch
-returns `current_turn_work_changed` before dispatching the model. For stdio,
-the shared process supervisor holds the launch guard through spawn. The
-journal records the refused attempt and its original capture remains readable.
-Use a fresh eligible Turn for the changed task. Keep original captures and receipts for
-readback. Reading detail does not invoke quota or spend a slot. Current source
+current complete contract must still match the original task body, required
+write scopes and required capabilities. Work under a hard lease must also keep
+the original lease's idempotency key. Renewing that lease or updating progress
+notes preserves the binding. A mismatch returns `current_turn_work_changed`
+before dispatching the model. For a bound Todo, Host launch holds the canonical
+Todo and lease writers' lock from the current decision through process spawn
+or publication of the in-process `turn/start` request. Lease writers can
+proceed once dispatch returns. If the current registry is busy while the
+canonical lock is held, the launch fails closed without waiting on the registry.
+The journal records the refused attempt and its original capture remains readable.
+Use a fresh eligible Turn for the changed task. Keep original captures and
+receipts for readback. Reading detail does not invoke quota or spend a slot. Current source
 admission, cancellation, workspace/lease and mutation checks retain their
 existing owners; the observation grants no fresh authority.
 Missing, corrupt, wrong-identity or source-hash-mismatched captures refuse Host
@@ -515,7 +679,8 @@ performing recovery or a debit. Retain the historical reader until the last
 supported journal and its recovery window are reconciled.
 
 原生 Codex 和外部 stdio Host 启动前会用当前完整契约复核所选 Todo 的已验证正文、
-所需写入范围和能力。只改进度备注可以继续。改变工作声明会在模型调用前返回
+所需写入范围和能力。硬租约工作还需核对原租约的幂等键。续期原租约或更新进度备注
+可以继续。工作声明或租约身份变化时，模型调用前会返回
 `current_turn_work_changed`。stdio 进程由共用的进程管理器在准入锁内启动。
 journal 记录已拒绝的尝试。变更后的工作使用新的合格 Turn，原捕获与回执仍可读回。
 
@@ -531,11 +696,18 @@ result recovery must preserve that task context; explicit Todo lifecycle
 operations retain their existing authority and validation.
 
 中文：原生 `turn run-once --execute` 在启动 Host 前保存完整原始决策，实际短包详情
-与失败重试均读取该快照，预览不写入。Turn 身份来自原 journal，不伪造 heartbeat
+与失败重试均读取该快照。预览不更新 Goal 或执行状态。Turn 身份来自原 journal，不伪造 heartbeat
 准入记录。旧观察不授予新权限；缺失、损坏或身份／哈希不符时拒绝重新启动 Host。
 无快照的旧 journal 保留终态回读和已缓存结果的结算恢复，但不能重新构造当时的完整
 上下文后继续调用 Host；先处置原效果，再按当前准入创建新 Turn。文件含私有上下文，
 保留在运行时目录，禁止放入公开产物。
+
+完整契约的宿主就绪和重规划分支中，默认 JSON `turn plan` 直接交付当前决策、范围和
+必读项。宿主就绪时保留调度及交接约束，重规划时保留可执行的 Vision 写回指导。
+宿主支持私有捕获时，`detail_ref.command` 从同一预览的完整工作契约读取。可加
+`--list` 查找字段，或加 `--select` 读取本次决策所需的 Goal、验收及证据。
+快照保存在私有上下文目录。显式 `--include-transaction-detail` 和私有捕获不可用时保留
+完整内联契约。
 
 For repeated host-owned guards, `--decision-output-root ./private-decisions`
 allocates a unique child directory per invocation below an **existing** directory.
@@ -559,19 +731,14 @@ Capture and display are independent. `--decision-output-root` saves complete
 decisions; `--decision-handoff-socket` optionally holds their output for a
 caller-owned checkpoint. Neither enables TurnEnvelope. This corrects the old
 renderer behavior where requesting capture also selected the short dispatcher.
-Existing capture callers that intentionally want the short view must now add
-`--turn-envelope` to `heartbeat-prompt`; the generated guard and thin regeneration
-command retain that explicit choice. Quota's existing explicit flag is unchanged.
-
-With that display opt-in, execute its guard, read the short action/contract/writeback fields, and use
-`detail_ref.full_decision` to read the **same invocation** when selection, replan,
-an `agent_context.detail_ref` or truncation requires detail. Replan history remains with the
-existing owner; this option neither invents another history store nor chooses a
-strategy. The renderer rejects full/compact/brief modes, missing Turn identity,
-native Goal-owned Turns and invalid roots. Stable bootstrap prompts cannot pin a
-Turn. Omit `--turn-envelope` to use the ordinary dispatcher, including when
-checkpoint capture remains enabled. Captured files retain the full decision in
-both display modes.
+New heartbeat guards and thin regeneration commands no longer emit the retired
+`--turn-envelope` spelling. Generic CLI keeps its original manual settlement;
+qualified native profiles keep their runtime-owned recipe. A historical saved
+bootstrap is still recognized byte-for-byte, while its next new guard uses the
+complete source. Read work context and required reads, then follow the returned
+same-capture selection/replan/recovery instructions. The renderer still rejects
+invalid modes, missing Turn identity and invalid capture roots. A stable bootstrap
+cannot pin an individual Turn.
 
 Capability planning context stays inline under the existing context owner's
 3 KiB bound, including when the envelope exceeds its diagnostic budget. Read it
@@ -618,20 +785,18 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-此前捕获目录同时启用短包的行为已修正。需要短包的调用者须对
-`heartbeat-prompt` 显式传 `--turn-envelope`；省略该开关时仍使用普通输入，
-选择、结算、身份与完整私有捕获不变。旧运行的实际输入与设置不得追溯改写。
+新 heartbeat guard 与 thin 再生命令不再输出已经废弃的 `--turn-envelope` 拼写。
+普通 CLI 保留原手动结算，合格 native profile 保留 runtime recipe。历史保存的
+bootstrap 仍按原字节识别，其后新 guard 使用完整来源。先读工作上下文与必读材料，
+再按返回的原捕获指令选择、重规划或恢复；原模式、Turn 与目录限制保留，稳定引导
+不得固定单次 Turn。旧运行实际输入、设置与 checkpoint 的原命令不得追溯改写。
 
-This is Python filesystem/command transport under the existing quota/context
-owner, not a new capability or Python decision rule. The shared benchmark
-heartbeat worker has a separate default-off `turn_envelope` option documented in
-[its runtime guide](../../../benchmark/runtime/RUNTIME.md). Native `/goal`, Turn
-driver, installed App automations, frontend and Lark are not switched by this
-research-runner setting. Real local worker/renderer/selection/settlement tests
-qualify transport; model token/IO costs, decision quality and long-run adoption
-still require a separately pinned experiment. Capture grants no additional
-read/write/lease authority. Keep captures private; disable the option in the
-next run and use ordinary file management to remove unneeded records.
+This is existing Python filesystem/command transport under the quota/context
+owner, not another capability or decision rule. The benchmark option now records
+only the caller's deprecated request spelling; new work always requests the
+complete source. Transport tests do not qualify model costs, decision quality or
+installed adoption. Capture grants no additional read/write/lease authority;
+keep its private evidence and original recovery identity.
 
 Whole-Goal requirements and selected work have different sources. After final
 delivery admission, the shared typed interaction owner adds these pre-work reads
@@ -682,37 +847,43 @@ work context 中已加载的来源，其次保留 planning horizon 或第一份�
 签名覆盖的 work context，拒绝缺失或不可用来源。这只证明展示成本下降，尚不证明
 上游读取减少、模型采用或完整任务效率提升。
 
-Known Todo diagnostic lanes share `quota/diagnostic_projection.ts` through the
-existing coarse context call. Read-only status/plan projects all rows in one
-call, rather than a call per Goal or lane. Unknown lists, fields, versions and
-complex nested item content remain full; field recognition reuses the canonical
-Todo contract. Retained items, capability candidates, portfolio text, planning
-horizon and selected-work sources are not shortened. Explicit detail returns the
-original summaries. Upstream compaction remains visible as `source_projection`.
-Status/plan adds one projection request; Agent/vision detail still needs one
-when the User summary remains compact. Explicit full Todo roles bypass that
-diagnostic request. These transport costs must be included in comparisons.
+Known Todo diagnostic lanes use `quota/diagnostic_projection.ts` in the same
+coarse legacy context call and in scoped native model-context composition.
+Read-only `quota status`/`plan` projects its entire row collection in one call.
+Unknown lists, nested fields and complete retained items survive; no suffix
+heuristic removes future obligations. A known lane with unknown item fields,
+an unknown item version or complex nested content stays full; field recognition
+reuses the canonical Todo contract. Capability candidates, portfolio text,
+planning horizon and full selected-work sources remain complete. Explicit
+legacy detail preserves the original summaries. Legacy detail commands observe
+current state; they cannot recover an earlier decision. A scoped native
+summary's `full_detail_capture_ref` resolves to `source_capture`; read that
+immutable original file with its digest, without repeating a command per lane. Upstream summary-compaction metadata remains available
+as `source_projection`; this reader restores captured diagnostics, not omitted
+canonical records. Full/delta baselines and context-loss recovery contain the
+exact delivered presentation. Unscoped native/failure fallback retains the
+original complete input. This is presentation reuse, not default promotion or
+proof of model retention, reduced total cost or better accepted outcomes.
+
 Diagnostic replies carry only display edits and references to the immutable
 input. The Python adapter applies them to its original facts, preserving float
 spelling, negative zero, large-integer precision and relocated upstream metadata.
 Reference-only callers keep their existing transport; no Python compaction
 decision is reintroduced. The read codec's `content_revision` is recognized as
 known display metadata and remains on retained items.
-The legacy detail command observes current state and cannot recover an earlier
-decision. The scoped native consumer and original-capture reference are a separate
-[controller integration proposal](https://github.com/loopx-project/loopx/pull/7430),
-which reuses this same owner. This does not change admission, claims, leases,
-settlement or native context defaults; it does not qualify net efficiency gains.
 
-中文：已知 Todo 诊断列表通过既有粗粒度上下文调用复用同一 typed owner；只读
-status/plan 整批行只调用一次，不逐 Goal 或列表调用。未知列表、字段、版本和
-复杂嵌套条目保留全文，字段识别复用规范 Todo 契约；保留条目、候选、portfolio
-正文、规划视野和当前工作来源不截短，详情返回原摘要，上游压缩信息保留于
-`source_projection`。旧详情命令读取当前状态，不能恢复历史决定。
-status/plan 新增一次投影请求；Agent/vision 详情若仍压缩 User 摘要，也需一次；
-显式展开两类 Todo 则跳过诊断投影。这些传输成本须计入比较。scoped 原生
-消费者及同 capture 引用属于单独的 controller 集成提案 #7430，复用同一 owner。
-此处不改准入、claim、lease、结算或原生默认，也不代表完整效率收益通过。
+中文：已登记的 Todo 诊断列表由 `quota/diagnostic_projection.ts` 统一投影，旧 CLI
+复用同一次上下文调用，scoped 原生输入在同一组合调用中采用；只读 status/plan
+整批行只调用一次。未知列表、嵌套字段和保留条目的完整字段不删除，不按名称后缀
+推测新义务。已知列表含未知条目字段、未知版本或复杂嵌套内容时保留全文，字段识别
+复用规范 Todo 契约。候选、portfolio 正文、规划视野和完整当前工作来源保持；旧详情选项
+保留完整原摘要。旧详情命令读取当前状态，不能恢复过去的决定；scoped 原生摘要
+的 `full_detail_capture_ref` 指向已有 `source_capture`，据原文件和 digest 补读，
+不逐列表重复完整命令。上游压缩信息保留于
+`source_projection`，恢复的是已捕获诊断，不是来源本已省略的规范记录。full/delta
+基线及上下文丢失恢复都使用实际交付的完整 presentation；未 scoped 或失败回退仍
+保留原完整输入。此处只证明展示代码复用，不代表默认转正、模型保持、完整成本
+下降或验收成果提高。
 诊断回复只传展示变更及不可变输入的引用；Python adapter 在原始事实上应用，
 保留浮点表示、负零、大整数精度及迁移后的上游元数据。仅引用的旧调用方保持
 原传输行为，不重新引入 Python 裁剪决定。读取 codec 已有的 `content_revision`

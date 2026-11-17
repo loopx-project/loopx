@@ -890,6 +890,7 @@ def test_heartbeat_should_run_routes_into_shared_turn_context(
         "ok": True,
         "should_run": True,
         "heartbeat_receipt": {"status": "committed"},
+        "interaction_contract": {"agent_channel": {"required_reads": []}},
         "retirement_basis": {"target_symbols": ["old_api"]},
     }
     quota_reward_memory.attach_reward_memory_recall_after_should_run(
@@ -907,6 +908,7 @@ def test_heartbeat_should_run_routes_into_shared_turn_context(
         "agent_id": "a1",
         "decision": payload,
         "turn_instance_id": "hb-1",
+        "embed_in_complete_source": True,
     }
 
 

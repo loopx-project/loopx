@@ -21,13 +21,17 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.turn_driver.decision_capture import bind_handoff_capture_root
 from .checkpoint import _mark_replan_attempt, _participant_id, held_quota_decision, read_checkpoint_request
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
+from .codex import Execution
 
 
 class CheckpointWake:
     """One private listener survives all source-session resumptions in a wake."""
 
-    def __init__(self, env, receipt):
+    def __init__(self, env, receipt, *, guard_execution: Execution | None = None):
         self.env, self.receipt = env, receipt
+        # New producers supply the actual Execution. Omission retains only the
+        # original receipt interpretation for recorded pending-guard recovery.
+        self.guard_execution = guard_execution
         self.stack = ExitStack()
         self.listener = None
         self.socket_path = None
@@ -135,8 +139,10 @@ class CheckpointWake:
                          "registry": self.env["LOOPX_REGISTRY"], "runtime_root": self.env["LOOPX_RUNTIME_ROOT"],
                          "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
                          "turn_instance_id": held["quota"]["heartbeat_receipt"]["turn_instance_id"],
-                         "turn_envelope": self.receipt.get("turn_envelope", False),
-                         "complete_turn": self.receipt.get("complete_turn", False),
+                         "turn_envelope": (self.guard_execution.turn_envelope if self.guard_execution is not None
+                                           else self.receipt.get("turn_envelope", False)),
+                         "complete_turn": (self.guard_execution.complete_turn if self.guard_execution is not None
+                                           else self.receipt.get("complete_turn", False)),
                          "capture_root": str(self.capture_root), "socket_path": self.socket_path,
                          "decision_sha256": held["sha256"]}
                 if self.env.get("LOOPX_CODEX_CONTEXT_DIR"):

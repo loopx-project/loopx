@@ -918,9 +918,13 @@ jobs:
       - name: Qualify native PowerShell settlement recovery and its immutable baseline
         run: >-
           python -m pytest -q --basetemp "${{ runner.temp }}/lxs-${{ github.run_id }}-${{ github.run_attempt }}"
+          tests/control_plane/test_refresh_settle_turn.py::test_exact_spend_and_combined_replay_reject_disagreeing_billing_terms
+          tests/control_plane/test_refresh_settle_turn.py::test_missing_spend_receipt_preserves_the_original_debit
+          tests/control_plane/test_refresh_settle_turn.py::test_exact_spend_and_refresh_reject_another_turns_debit_file
           tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery
           tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
           tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once
+          tests/control_plane/test_replan_progress_native_cli.py::test_replan_stage_commands_run_verbatim_in_powershell
 
       - name: Restore the primary Windows Node runtime
         uses: actions/setup-node@v6

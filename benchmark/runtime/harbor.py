@@ -194,7 +194,7 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("provider_request_admission requires the Responses wire API")
 
     def _turn_envelope_receipt(self) -> dict:
-        return {**turn_envelope_receipt(explicit=self.execution.turn_envelope, complete=self.execution.complete_turn),
+        return {**turn_envelope_receipt(self.execution),
                 **({"native_child_limit": self.execution.native_child_limit}
                    if self.execution.native_child_limit is not None else {}),
                 **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}

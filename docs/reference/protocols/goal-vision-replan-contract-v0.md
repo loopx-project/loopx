@@ -155,7 +155,7 @@ agent pane. Long reasoning belongs in evidence artifacts or design docs.
 | `replan_trigger_summary` | 240 | Why the latest replan is required. |
 | `dreaming_policy` | 240 | Whether advisory dreaming can propose a patch. |
 | `last_patch_summary` | 240 | What changed in the latest bounded vision patch. |
-| `total_agent_vision` | 1800 | Aggregate budget for one agent's active vision packet, including path delta and fallback declarations. |
+| `total_agent_vision` | 1800 | Shared budget for Vision fields, path delta, Stride decision and fallback declarations. |
 
 The aggregate allowance was raised from 1,200 to 1,800 characters to accommodate
 direction, acceptance and evidence-linked replanning together. This is additional
@@ -165,9 +165,22 @@ unchanged; concise evidence references still replace long reports. Older packets
 remain valid. Older runtimes may reject newly admitted larger packets, so use an
 updated runtime for writes and preserve the original intent when correcting input.
 
+For a progressive C1 writeback with an enabled Stride review, follow
+`writeback_contract.vision_authoring_ref` to the durable-writeback step in the
+same response. Its example combines Vision, path delta and the captured Stride
+template under the same budget. The normal validator counts the example.
+Preserve the current Vision and bind the actual decision to its evidence and
+original Turn. The captured plan and its recovery reader retain the original
+fields and identity.
+
 整包预算从 1,200 提升到 1,800 字符，让方向、验收与路径调整能够共同表达；
 这不是要求填满的长度，也不扩大 quota 输出预算。摘要字段、列表数量及
 240 字符的 unchanged reason 限制不变，旧数据继续可读，较大新包需使用新版运行时写入。
+
+C1 的渐进写回启用 Stride 复盘时，沿同一响应的
+`writeback_contract.vision_authoring_ref` 读取持久写回步骤。示例将 Vision、路径决定和
+原捕获的 Stride 模板放在同一份预算内，计数来自实际校验器。写回沿用当前 Vision，
+将真实决定绑定到证据和原 Turn。原捕获及恢复入口保留原字段与身份。
 
 Required write-path behavior:
 

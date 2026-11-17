@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {settlementPlanPayload} from "../../loopx/control_plane/effect_program.ts";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
-import {projectMcpInteraction} from "../../loopx/control_plane/turn_driver/host_interaction.ts";
-import {completeCliSettlementChannel, composedCliSettlementChannel, nativeCliSettlementProjection, turnScopedCliSettlementPlan}
+import {nativeCliSettlementProjection, turnScopedCliSettlementPlan}
   from "../../loopx/control_plane/quota/settlement_plan.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../../loopx/control_plane/work_items/execution_preparation.ts";
 import {DELIVERY_OUTCOMES, decodeOptionalDeliveryOutcome, isTurnScopedSettlementOutcome}
@@ -19,6 +18,18 @@ const input = {
   },
 };
 
+function assertCombinedWriteback(result: ReturnType<typeof nativeCliSettlementProjection>, writebackIndex: number) {
+  assert.ok(Array.isArray(result.changes));
+  assert.ok(result.changes.some(change =>
+    change.path.join("/") === "settlement_plan/schema_version" && change.value === "quota_settlement_plan_v2"));
+  assert.ok(result.changes.some(change =>
+    change.path.join("/") === `next_cli_actions/${writebackIndex}` &&
+    change.value === "writeback --settle-turn --settlement-receipt"));
+  assert.ok(result.changes.some(change =>
+    change.path.join("/") === `next_cli_actions/${writebackIndex + 1}` && change.remove === true));
+  assert.ok(result.changes.every(change => !change.path.includes("identity")));
+}
+
 test("native settlement only replaces matching executable steps on the original ready Turn", () => {
   const plan = settlementPlanPayload(turnScopedCliSettlementPlan(input));
   const preparation = {schema_version: EXECUTION_PREPARATION_SCHEMA_VERSION, state: "ready",
@@ -29,10 +40,7 @@ test("native settlement only replaces matching executable steps on the original 
     settlement_identity: plan.identity};
   const request = {cli, receipt, todo_id: "todo"};
   for (const status of ["committed", "upgraded", "replayed"])
-    assert.ok(Array.isArray(nativeCliSettlementProjection({...request, receipt: {...receipt, status}}).changes));
-  const projected = composedCliSettlementChannel(cli);
-  assert.deepEqual(projected.next_cli_actions, ["supporting action", "writeback --settle-turn --settlement-receipt"]);
-  assert.equal((projected.settlement_plan as typeof plan).identity, plan.identity);
+    assertCombinedWriteback(nativeCliSettlementProjection({...request, receipt: {...receipt, status}}), 1);
   for (const changed of [
     {todo_id: "other"},
     {receipt: {...receipt, turn_instance_id: "other"}},
@@ -52,35 +60,29 @@ test("complete consumers compose the original admitted CLI plan without inventin
   const plan = settlementPlanPayload(turnScopedCliSettlementPlan(input));
   const cli = {settlement_plan: plan, spend_after_validation: true,
     next_cli_actions: ["writeback", "spend"]};
-  const source = {goal_id: "goal", agent_identity: {agent_id: "agent"}, selected_todo: {todo_id: "todo"},
-    should_run: true, effective_action: "normal_run", normal_delivery_allowed: true,
-    interaction_contract: {agent_channel: {delivery_allowed: true}, cli_channel: cli},
-    heartbeat_receipt: {status: "committed", closeout_required: true, turn_instance_id: "turn",
-      settlement_identity: plan.identity}};
-  const before = structuredClone(source);
-  assert.deepEqual(completeCliSettlementChannel(source).next_cli_actions,
-    ["writeback --settle-turn --settlement-receipt"]);
+  const receipt = {status: "committed", closeout_required: true, turn_instance_id: "turn",
+    settlement_identity: plan.identity};
+  const scope = {goal_id: "goal", agent_id: "agent", should_run: true,
+    effective_action: "normal_run", normal_delivery_allowed: true, delivery_allowed: true};
+  const request = {cli, receipt, todo_id: "todo", complete_scope: scope};
+  const before = structuredClone(request);
+  assertCombinedWriteback(nativeCliSettlementProjection(request), 0);
+  assert.deepEqual(nativeCliSettlementProjection({cli, receipt, todo_id: "todo"}), {});
+  for (const changed of [{complete_scope: null}, {complete_scope: {}},
+    {cli: {...cli, spend_after_validation: false}}, {todo_id: "other"},
+    {receipt: {...receipt, status: "pending"}}, {receipt: {...receipt, settlement_binding_owed: true}},
+    {receipt: {...receipt, settlement_identity: {...plan.identity as object, turn_instance_id: "other"}}}])
+    assert.deepEqual(nativeCliSettlementProjection({...request, ...changed}), {});
+  for (const changed of [{goal_id: "other"}, {agent_id: "other"}, {delivery_allowed: false},
+    {normal_delivery_allowed: false}, {should_run: false}, {effective_action: "replan_required"}])
+    assert.deepEqual(nativeCliSettlementProjection({...request, complete_scope: {...scope, ...changed}}), {});
   const prepared = {schema_version: EXECUTION_PREPARATION_SCHEMA_VERSION, state: "ready",
     todo_id: "todo", agent_id: "agent", delivery_allowed: true};
-  for (const execution_preparation of [prepared, undefined]) {
-    const channel = {...cli, ...(execution_preparation ? {execution_preparation} : {})};
-    assert.equal((completeCliSettlementChannel({...source, interaction_contract: {
-      ...source.interaction_contract, cli_channel: channel}}).settlement_plan as typeof plan).schema_version,
-      "quota_settlement_plan_v2");
-  }
-  for (const changed of [{goal_id: "other"}, {agent_identity: {agent_id: "other"}},
-    {selected_todo: {todo_id: "other"}}, {normal_delivery_allowed: false}, {should_run: false},
-    {effective_action: "replan_required"}, {heartbeat_receipt: {...source.heartbeat_receipt, settlement_binding_owed: true}},
-    {heartbeat_receipt: {...source.heartbeat_receipt, settlement_identity: {...plan.identity as object, turn_instance_id: "other"}}}]) {
-    assert.equal(completeCliSettlementChannel({...source, ...changed}), cli);
-  }
+  assertCombinedWriteback(nativeCliSettlementProjection({...request, cli: {...cli, execution_preparation: prepared}}), 0);
   for (const execution_preparation of [null, "ready", {}, {...prepared, state: "claim_required"},
-    {...prepared, todo_id: "other"}, {...prepared, delivery_allowed: false}]) {
-    const channel = {...cli, execution_preparation};
-    assert.equal(completeCliSettlementChannel({...source, interaction_contract: {
-      ...source.interaction_contract, cli_channel: channel}}), channel);
-  }
-  assert.deepEqual(source, before);
+    {...prepared, todo_id: "other"}, {...prepared, delivery_allowed: false}])
+    assert.deepEqual(nativeCliSettlementProjection({...request, cli: {...cli, execution_preparation}}), {});
+  assert.deepEqual(request, before);
 });
 
 for (const lane of ["ordinary", "in_flight", "autonomous_replan"]) {
@@ -272,19 +274,12 @@ test("incomplete command facts or ambiguous identity fail closed", () => {
 });
 
 
-test("material CLI and MCP retain authoring while in-flight CLI omits material closeout guidance", () => {
+test("material CLI retains authoring while in-flight CLI omits material closeout guidance", () => {
   for (const delivery_boundary of [undefined, "in_flight_continuation"]) {
     const wire = settlementPlanPayload(turnScopedCliSettlementPlan({...input, delivery_boundary}));
     const steps = wire.ordered_steps as Record<string, unknown>[];
     const material = delivery_boundary === undefined;
     assert.equal(steps.filter(step => step.vision_authoring).length, material ? 1 : 0);
     assert.deepEqual(steps[1].vision_authoring, material ? visionAuthoringContract() : undefined);
-    const mcp = projectMcpInteraction({ok: true, normal_delivery_allowed: true,
-      selected_todo: {todo_id: "todo"}, interaction_contract: {cli_channel: {settlement_plan: wire}}});
-    const contract = mcp.interaction_contract as Record<string, Record<string, unknown>>;
-    assert.equal(contract.cli_channel.settlement_plan, undefined);
-    // MCP complete_task is material completion even when the CLI can continue in-flight.
-    assert.deepEqual(contract.mcp_channel.vision_authoring, visionAuthoringContract());
-    assert.match(visionAuthoringContract().authoring_hint as string, /original committed Turn writeback/);
   }
 });

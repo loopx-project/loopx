@@ -14,9 +14,28 @@ import math
 import os
 import time
 from pathlib import Path, PurePosixPath
+from typing import Any
 
-from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.coordination.canonical_snapshot import read_canonical_snapshot
+from loopx.control_plane.effect_runtime import (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS, effect_runtime_result, source_number_tokens,
+)
+from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
+
+
+def select_checkpoint_replan(quota: dict[str, Any], *, goal_id: str, agent_id: str, turn_instance_id: str | None,
+                             timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                             allow_legacy_source: bool = False) -> dict[str, Any]:
+    """Pass the original quota source and its exact numbers to the artifact owner."""
+    request: dict[str, Any] = {"action": "select_replan", "quota": quota, "goal_id": goal_id,
+                              "agent_id": agent_id, "turn_instance_id": turn_instance_id}
+    if allow_legacy_source:
+        request["allow_legacy_source"] = True
+    if isinstance(quota, dict) and quota.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
+        tokens = source_number_tokens(quota)
+        if tokens:
+            request["source_number_tokens"] = tokens
+    return effect_runtime_result("runtime.checkpoint_artifacts", request, timeout=timeout, large_local_snapshot=True)
 
 
 def canonical_context(env: dict[str, str], *, deadline: float) -> dict:
