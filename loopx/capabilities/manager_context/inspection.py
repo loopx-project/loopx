@@ -60,8 +60,7 @@ READ_TOOL = {
             "include_outcome_gaps": {"type": "boolean", "description": "Local deliveries: include recorded outcome_gap counterevidence alongside progress. Default false for ordinary delivery queries; report_source always includes it. Observations and untyped host failures are not delivery outcomes."},
             "window_start": {"type": "string", "description": "Local deliveries/report_source: exact inclusive ISO-8601 timestamp with offset. Pair with window_end instead of days, e.g. a frozen report window."},
             "window_end": {"type": "string", "description": "Local deliveries/report_source: exact exclusive ISO-8601 timestamp with offset. Boundaries do not move while paging; report_source requires a closed window."},
-            "expected_source_revision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries/report_source: copy source.source_revision when paging. Exact local Todo detail pages: copy the complete read_reference, including this revision. On conflict restart from the exact record; never merge different revisions."},
-            "detail_offset": {"type": "integer", "minimum": 0, "description": "Exact local Todo only: Unicode character offset into the complete permitted JSON record. Use its read_reference with expected_source_revision; follow detail_page.next_read until EOF. Ordinary offset continues to paginate rows."},
+            "expected_source_revision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries/report_source: copy source.source_revision when paging. Exact local Todo: copy its read_reference; this revision selects bounded JSON detail pages, where offset counts Unicode characters. Follow detail_page.next_read. On conflict restart the exact read; never merge revisions."},
             "delivery_ref": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries only: use an observed row's source_ref to recover its full permitted recorded_details and evidence references within the same read window/revision. Does not read referenced artifacts or prove the recorded claims."},
             "goal_id": {"type": "string"},
             "agent_id": {"type": "string", "minLength": 1,
@@ -195,20 +194,14 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
             rejected.append("include_outcome_gaps:must_be_a_boolean")
     if not isinstance(arguments.get("source_id", "local"), str):
         rejected.append("source_id:must_be_a_string")
-    detail_read = "detail_offset" in arguments
+    detail_read = view == "todos" and "expected_source_revision" in arguments
     if detail_read:
-        if view != "todos" or not arguments.get("goal_id") or not arguments.get("todo_id"):
-            rejected.append("detail_offset:requires_exact_todo")
-        if type(arguments["detail_offset"]) is not int or arguments["detail_offset"] < 0:
-            rejected.append("detail_offset:must_be_an_integer_at_least_0")
-        if offset != 0:
-            rejected.append("detail_offset:requires_row_offset_0")
-        if "expected_source_revision" not in arguments:
-            rejected.append("expected_source_revision:required_for_todo_detail")
+        if not arguments.get("goal_id") or not arguments.get("todo_id"):
+            rejected.append("expected_source_revision:requires_exact_todo")
         if arguments.get("source_id", "local") != "local":
-            rejected.append("detail_offset:only_for_source_local")
+            rejected.append("expected_source_revision:only_for_source_local")
     exact_arguments = {"window_start", "window_end", "delivery_ref"} & arguments.keys()
-    if "expected_source_revision" in arguments and not (detail_read and view == "todos"):
+    if "expected_source_revision" in arguments and not detail_read:
         exact_arguments.add("expected_source_revision")
     for name in sorted(exact_arguments):
         if view not in {"deliveries", "report_source"} or name == "delivery_ref" and view != "deliveries":
@@ -251,16 +244,16 @@ def _todo_detail_revision(row: dict[str, Any], source: dict[str, Any]) -> str:
 def _todo_detail_page(row: dict[str, Any], arguments: dict[str, Any], revision: str) -> dict[str, Any]:
     """Page transport encoding only; canonical selection and redaction stay in Core."""
     text = json.dumps(row, ensure_ascii=False, sort_keys=True)
-    offset = arguments["detail_offset"]
+    offset = arguments.get("offset", 0)
     if offset >= len(text):
         return {"ok": False, "error": "todo_detail_offset_out_of_range"}
-    reference = {**arguments, "source_id": "local", "offset": 0}
+    reference = {**arguments, "source_id": "local"}
 
     def page(end: int) -> dict[str, Any]:
         return {"offset": offset, "next_offset": end if end < len(text) else None,
                 "total_characters": len(text), "source_revision": revision,
                 "text": text[offset:end], "eof": end == len(text),
-                "next_read": {**reference, "detail_offset": end} if end < len(text) else None}
+                "next_read": {**reference, "offset": end} if end < len(text) else None}
 
     # The JSON string escapes quotes/control characters again. Budget the
     # encoded page, not just the original text, without splitting Unicode.
@@ -766,7 +759,7 @@ class ManagerInspection:
                 goal_id,
                 owner_scope=self.owner_scope,
                 limit=limit,
-                offset=offset,
+                offset=0 if "expected_source_revision" in arguments else offset,
                 todo_id=arguments.get("todo_id"),
                 query=arguments.get("query", ""),
             )
@@ -806,7 +799,7 @@ class ManagerInspection:
             page = [{**r, "todo_title": titles.get(r.get("todo_id"))} for r in page]
         if not self.scope_valid():
             return {"ok": False, "error": "authorization_changed"}
-        if "detail_offset" in arguments:
+        if view == "todos" and "expected_source_revision" in arguments:
             if source.get("status") != "read":
                 return {"ok": False, "error": "todo_detail_unavailable"}
             if len(page) != 1:
@@ -842,9 +835,10 @@ class ManagerInspection:
                 if view == "todos" and arguments.get("todo_id") and source.get("source_revision"):
                     page[i]["read_reference"] = {
                         "view": "todos", "source_id": "local", "goal_id": goal_id,
-                        "todo_id": arguments["todo_id"], "detail_offset": 0,
+                        "todo_id": arguments["todo_id"], "offset": 0,
                         "expected_source_revision": _todo_detail_revision(row, source),
                     }
+                    page[i]["read_instruction"] = _TODO_DETAIL_GUIDANCE
         # Building an oversized index crosses the typed presentation owner;
         # a grant revoked during that read must suppress the entire response.
         if view == "portfolio" and oversized and not self.scope_valid():

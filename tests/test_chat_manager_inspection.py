@@ -534,7 +534,7 @@ def test_todo_detail_rechecks_revision_scope_and_encoded_bounds(tmp_path, monkey
     assert len(records) == count
     reference = tool.read(TOOL_NAME, exact)["rows"][0]["read_reference"]
     assert tool.read(TOOL_NAME, reference)["ok"]
-    assert tool.read(TOOL_NAME, {**reference, "detail_offset": 10**9}) == {
+    assert tool.read(TOOL_NAME, {**reference, "offset": 10**9}) == {
         "ok": False, "error": "todo_detail_offset_out_of_range"}
     # Revocation during the canonical read withholds all fragments and logs.
     grants = iter([True, False])
@@ -551,8 +551,8 @@ def test_todo_detail_rechecks_revision_scope_and_encoded_bounds(tmp_path, monkey
 
 
 @pytest.mark.parametrize("changes", [
-    {"detail_offset": True}, {"detail_offset": -1}, {"detail_offset": 0.5},
-    {"offset": 1}, {"source_id": "ssh:other"}, {"view": "portfolio"},
+    {"offset": True}, {"offset": -1}, {"offset": 0.5},
+    {"query": "other"}, {"source_id": "ssh:other"}, {"view": "portfolio"},
     {"todo_id": None}, {"expected_source_revision": "bad"},
     {"expected_source_revision": None},
 ])
@@ -560,7 +560,7 @@ def test_invalid_todo_detail_does_not_read_core(tmp_path, monkeypatch, changes):
     monkeypatch.setattr(details, "list_goal_todos", lambda **_: pytest.fail("No source read"))
     tool, records = inspector(tmp_path)
     args = {"view": "todos", "goal_id": "alpha", "todo_id": "todo_report",
-            "detail_offset": 0, "expected_source_revision": "sha256:" + "a" * 64, **changes}
+            "offset": 0, "expected_source_revision": "sha256:" + "a" * 64, **changes}
     assert tool.read(TOOL_NAME, args)["error"] == "invalid_arguments"
     assert not records
 
