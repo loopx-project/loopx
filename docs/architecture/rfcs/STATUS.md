@@ -81,6 +81,8 @@ appendix may keep dated history, but no dated log heading may precede it.
 | --- | --- | --- | --- |
 | [RFC: Personal Follow-through (v0)](personal-follow-through-v0.md) | Superseded | none; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 entry](ledger/personal-follow-through-v0/) |
 
-## Retired (0)
+## Retired (1)
 
-_none_
+| RFC | Header status | Supersedes / closes | Ledger |
+| --- | --- | --- | --- |
+| [RFC: Sparse Working Memory at Context Compaction (v0)](sparse-compaction-working-memory-v0.md) | Retired | none | [2 entries](ledger/sparse-compaction-working-memory-v0/) |

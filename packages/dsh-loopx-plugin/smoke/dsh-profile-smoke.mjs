@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { reconcileClientPackage } from './dsh-sdk-client-registry.mjs'
 import { spawnSync } from 'node:child_process'
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -171,7 +172,7 @@ async function assertClientDiscovery(installed, manifest) {
   const resolved = registry.resolveMeta(packageId, baseUrl)
   assert.equal(resolved.meta.clientPath, join(installed, 'lib', 'client.js'))
   assert.deepEqual(resolved.meta.inject, manifest.dsh.client.inject)
-  assert.equal(registry.processOne(packageId, error => { throw error }), true)
+  assert.equal(reconcileClientPackage(registry, packageId, error => { throw error }), true)
   const entry = registry.table.get(packageId)?.entry
   assert.equal(typeof entry?.rev, 'string')
   assert(entry.rev.length > 0, 'DSH omitted the client revision')

@@ -281,9 +281,17 @@ export function MachineConfigurationSettings({ section, onChanged }: {
 
   async function setContextDelivery(mode: "off" | "on" | "auto", key: "mode" | "delta_delivery" = "mode") {
     if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
-    const namespace = selected.machine_namespace;
     const configuration: Record<string, unknown> = {...selected.default, ...selectedCurrent,
       schema_version: selected.default?.schema_version ?? selectedCurrent?.schema_version, [key]: mode};
+    const label = key === "delta_delivery"
+      ? locale === "zh-CN" ? "跨轮差分" : "Cross-turn delta"
+      : locale === "zh-CN" ? "渐进读取" : "Progressive reads";
+    await saveImmediatePreference(configuration, label);
+  }
+
+  async function saveImmediatePreference(configuration: Record<string, unknown>, label: string) {
+    if (busy || !editorAvailable || !selected?.machine_namespace) return;
+    const namespace = selected.machine_namespace;
     const generation = editorGeneration.current;
     setBusy("apply"); setError(null); setNotice(null);
     try {
@@ -297,13 +305,10 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       setInspection(next);
       setReadbackPending(null);
       const saved = next.machine_configuration?.namespaces[namespace];
-      if (saved?.mode !== configuration.mode || saved?.delta_delivery !== configuration.delta_delivery) {
+      if (next.status === "invalid" || Object.entries(configuration).some(([key, value]) => saved?.[key] !== value)) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
-      const targetLabel = key === "delta_delivery"
-        ? locale === "zh-CN" ? "跨轮差分" : "Cross-turn delta"
-        : locale === "zh-CN" ? "渐进读取" : "Progressive reads";
-      setNotice(locale === "zh-CN" ? `${targetLabel}偏好已保存。` : `${targetLabel} preference saved.`);
+      setNotice(locale === "zh-CN" ? `${label}偏好已保存。` : `${label} preference saved.`);
       onChanged?.();
     } catch (cause) {
       if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.applyError"));

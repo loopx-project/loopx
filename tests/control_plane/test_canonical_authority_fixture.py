@@ -1,4 +1,4 @@
-"""Canonical CLI tests must not reuse a host's warmed Effect runtime."""
+"""Canonical CLI fixtures retain runtime isolation and actual backend identity."""
 from __future__ import annotations
 
 import subprocess
@@ -37,3 +37,36 @@ def test_runtime_isolation_restores_the_process_cache(tmp_path, monkeypatch):
 
     assert tempfile.tempdir == str(shared)
     assert _runtime_dir().parent == shared
+
+
+@pytest.mark.parametrize("provider", ["postgresql", "unknown"])
+def test_local_fixture_rejects_unsupported_provider_without_writing(tmp_path, monkeypatch, provider):
+    import test_quota_settlement_cli as fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, _ = fixture._write_fixture(tmp_path)
+    state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    original = state.read_bytes()
+
+    with pytest.raises(ValueError, match="File/SQLite"):
+        fixture._initialize_fixture_authority(project, runtime, provider=provider)
+
+    assert not runtime.exists()  # No authority store, selector or writer fence.
+    assert state.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_local_fixture_reads_its_actual_provider_through_cli(tmp_path, monkeypatch, provider):
+    import test_quota_settlement_cli as fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    code, result = fixture._run_cli(registry, runtime, "todo", "list",
+        "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID, cwd=project)
+
+    assert code == 0, result
+    assert result["source"] == provider + "_v0"
+    assert result["todo"]["todo_id"] == fixture.TODO_ID
+    assert result["authority_read"]["decision_read_from_provider"]
+    assert not result["authority_read"]["legacy_fallback_used"]

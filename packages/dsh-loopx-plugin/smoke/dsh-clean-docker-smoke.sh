@@ -90,7 +90,10 @@ container_smoke() {
     fi
   done
   python3 "$runtime_dir/loopx_cli.py" --version | grep -E '^loopx '
-  node "$SCRIPT_DIR/dsh-clean-docker-probe.mjs" "$base_url" "$workspace"
+  if ! node "$SCRIPT_DIR/dsh-clean-docker-probe.mjs" "$base_url" "$workspace"; then
+    print_dsh_log
+    return 1
+  fi
   printf '\nclean Docker smoke passed\n'
 }
 

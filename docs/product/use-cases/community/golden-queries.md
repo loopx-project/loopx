@@ -6,6 +6,14 @@ that every capability is shipped**. This pack sits alongside the
 community entry, rather than the private owner's portfolio. It adds no routing
 keyword list, runtime authority, evaluation engine or scheduler.
 
+For a first task, use the [assistant quickstart](README.md)
+([简体中文](README.zh-CN.md)). The member uses the installed host entry and
+asks for a concrete outcome; the assistant handles project and work setup.
+Use the [SQLite developer exercise](manual-cli.md) when the question specifically
+asks how Goal, Todo, lease or evidence work. The [community FAQ](faq.md)
+provides sources for context, collaboration and FAQ updates. Verify the cited
+evidence against the version in each question.
+
 A member should be able to ask an ordinary project question, share an error,
 discuss a technical claim or request a bounded contribution. The assistant
 uses the authorized repository, skills and tools, investigates when necessary,
@@ -101,7 +109,7 @@ Do not score the mere presence of a tool call: inspect the answer and its result
 
 | ID | Natural request / 自然请求 | Observable acceptance |
 | --- | --- | --- |
-| CQ01 | 我已经用 Codex 做项目了，LoopX 能多解决什么？给一个能试的小例子，也说说现在的限制。 | Explains the division between host execution and persistent coordination, provides a small version-supported journey, and distinguishes shipped behavior from roadmap. A short answer invents no Goal. |
+| CQ01 | 我已经用 Codex 做项目了，LoopX 能多解决什么？给一个能试的小例子，也说说现在的限制。 | Uses the installed host entry to show how to submit a real task, check its result, and request a follow-up. Manual Goal, Agent, Todo and lease setup is not a prerequisite. Explains what the host must support and distinguishes shipped behavior from roadmap. A short answer invents no Goal. |
 | CQ02 | 我主要想跟踪开源项目、定期整理资料，偶尔修代码。哪些部分适合 LoopX，哪些直接用现有工具更简单？ | Maps requirements to supported paths, costs and limits, including setup/maintenance effort and recurring execution/scheduling costs without invented prices or savings; can recommend a simpler path. Does not assume every task needs a team or a new daemon. Any proposed external service has a concrete reason. |
 | CQ03 | Goal、Todo、Session 和 Agent 分别管什么？为什么还需要 lease 和 quota？用一次中断后继续工作的例子解释。 | Checks current public docs/source, connects the concepts through one coherent journey, and distinguishes scheduling, ownership, conversation and completion evidence. Does not equate a nonempty evidence reference with a proven result. |
 | CQ04 | 我已有一个 LoopX 安装，想升级但保留原来的目标和配置。怎么查安装来源、升级和回退？ | Gives the supported commands for the supplied platform/version, checks CLI ownership and preserves state. No overlapping installation, blind reinstall or destructive reset. This guidance case changes no member machine. |

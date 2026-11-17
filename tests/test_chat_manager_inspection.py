@@ -333,6 +333,97 @@ def test_current_work_portfolio_keeps_authorization_fence(tmp_path):
     assert not records and "private" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("body_size, first_page", [(100, 8), (8000, 2), (26000, 1)])
+def test_portfolio_bounds_collection_and_keeps_every_page(monkeypatch, tmp_path, body_size, first_page):
+    tool, _ = inspector(tmp_path)
+    ids = [f"goal-{i}" for i in range(8)]
+    tool.registry_path.write_text(json.dumps({"goals": [{"id": gid} for gid in ids]}))
+    tool.discovery_scope = lambda: ids
+    collected = []
+
+    def collect(*args, requested_goal_ids, **kwargs):
+        collected.extend(requested_goal_ids)
+        return {"snapshot_id": "fixture:" + ",".join(requested_goal_ids),
+                "goals": [{"goal_id": gid, "description": "证据😀" * (body_size // 3)}
+                          for gid in requested_goal_ids],
+                "coverage": {"discovered": len(requested_goal_ids),
+                             "attempted": len(requested_goal_ids),
+                             "verified": len(requested_goal_ids),
+                             "invalid_registry_entries": 0, "complete": True}}
+
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", collect)
+    seen, offset = [], 0
+    while offset is not None:
+        collected.clear()
+        page = tool.read(TOOL_NAME, {"view": "portfolio", "limit": 8, "offset": offset})
+        assert page["ok"] and not page["unknown"]
+        assert len(page["rows"]) == min(first_page, len(ids) - offset)
+        # One lookahead can establish the existing page budget, but later
+        # projects must not be read and discarded on every page.
+        assert len(collected) <= len(page["rows"]) + (body_size < 24000)
+        assert collected == ids[offset:offset + len(collected)]
+        assert page["matched"] == len(ids)
+        if body_size > 24000:
+            assert page["oversized_rows"] == [offset]
+        else:
+            assert [row["description"] for row in page["rows"]] == [
+                "证据😀" * (body_size // 3)] * len(page["rows"])
+        seen.extend(row["goal_id"] for row in page["rows"])
+        offset = page["next_offset"]
+    assert seen == ids
+
+
+@pytest.mark.parametrize("change", ["revocation", "registry"])
+def test_portfolio_does_not_publish_a_torn_page(monkeypatch, tmp_path, change):
+    allowed = {"current": True}
+    tool, records = inspector(tmp_path, lambda: allowed["current"])
+    ids = ["alpha", "beta"]
+    tool.registry_path.write_text(json.dumps({"goals": [{"id": gid} for gid in ids]}))
+    tool.discovery_scope = lambda: ids
+
+    def collect(*args, requested_goal_ids, **kwargs):
+        if change == "revocation":
+            allowed["current"] = False
+        else:
+            tool.registry_path.write_text(json.dumps({"goals": [{"id": "replacement"}]}))
+        return {"goals": [{"goal_id": gid, "description": "private evidence"}
+                          for gid in requested_goal_ids], "coverage": {"complete": True}}
+
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", collect)
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert result["ok"] is False
+    assert result["error"] == ("authorization_changed" if change == "revocation"
+                               else "goal_inventory_unavailable")
+    assert not records and "private evidence" not in json.dumps(result)
+
+
+def test_portfolio_keeps_the_shared_attention_budget_and_rejected_lookahead(monkeypatch, tmp_path):
+    tool, _ = inspector(tmp_path)
+    ids = ["alpha", "beta", "gamma", "omega"]
+    tool.registry_path.write_text(json.dumps({"goals": [{"id": gid} for gid in ids]}))
+    tool.discovery_scope = lambda: ids
+
+    def collect(*args, requested_goal_ids, **kwargs):
+        return {"goals": [{"goal_id": gid, "description": "x" * 8000,
+            "attention": {"status": "read", "coverage": {"known": 8}, "items": [
+                {"todo_id": f"{gid}-{i}", "owner_must_act": gid == "gamma"}
+                for i in range(8)]}} for gid in requested_goal_ids],
+            "coverage": {"complete": True}}
+
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", collect)
+    page = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert [row["goal_id"] for row in page["rows"]] == ids[:2]
+    # The existing typed owner permits twelve attention items across the page,
+    # rather than twelve per Goal. The rejected high-priority lookahead cannot
+    # consume the returned rows' allowance.
+    assert [[item["todo_id"] for item in row["attention"]["items"]] for row in page["rows"]] == [
+        [f"alpha-{i}" for i in range(8)], [f"beta-{i}" for i in range(4)]]
+    assert page["rows"][1]["attention"]["coverage"] == {"known": 8, "included": 4, "omitted": 4}
+    following = tool.read(TOOL_NAME, {"view": "portfolio", "offset": page["next_offset"]})
+    assert [row["goal_id"] for row in following["rows"]] == ids[2:]
+    assert following["next_offset"] is None
+
+
 def test_directory_attention_preview_keeps_all_workers_and_exact_scoped_read(monkeypatch, tmp_path):
     text = "Review the complete plan. " * 50 + "Only proceed after owner acceptance."
     task = {"todo_id": "todo_gate", "role": "user", "task_class": "user_gate",

@@ -5,10 +5,14 @@ from __future__ import annotations
 import difflib
 import hashlib
 import os
-from pathlib import Path
+import stat
 import subprocess
 import tempfile
-from typing import Any
+import unicodedata
+from collections.abc import Iterator
+from contextlib import ExitStack
+from pathlib import Path
+from typing import Any, BinaryIO
 
 from .protocol import request_bytes
 
@@ -20,6 +24,21 @@ def digest(value: Any) -> str:
     return hashlib.sha256(request_bytes(value)).hexdigest()
 
 
+# Inherited pathspec modes would reinterpret the explicit pathspecs used below.
+_PATHSPEC_ENV = (
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+)
+
+
+def _git_env() -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if key not in _PATHSPEC_ENV}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
 def git(repo: Path, *args: str) -> str:
     # File-backed output avoids accumulating an unbounded Git response in RAM.
     with tempfile.TemporaryFile() as output:
@@ -29,7 +48,7 @@ def git(repo: Path, *args: str) -> str:
             stderr=subprocess.DEVNULL,
             timeout=5,
             check=False,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env=_git_env(),
         )
         output.seek(0)
         raw = output.read(131073)
@@ -43,11 +62,20 @@ def validate_paths(repo: Path, paths: list[str]) -> list[str]:
         raise ValueError("scope_requires_one_to_32_unique_files")
     for name in paths:
         path = Path(name)
+        parts = (
+            tuple(part.casefold() for part in path.parts)
+            if os.name == "nt"
+            else path.parts
+        )
         if (
             not name
             or path.is_absolute()
             or ".." in path.parts
-            or ".git" in path.parts
+            or ".git" in parts
+            or (
+                os.name == "nt"
+                and any(":" in part or part.endswith((" ", ".")) for part in path.parts)
+            )
             or name != path.as_posix()
             or any(ord(char) < 32 for char in name)
         ):
@@ -58,37 +86,365 @@ def validate_paths(repo: Path, paths: list[str]) -> list[str]:
     return sorted(paths)
 
 
+def _windows_identity(
+    info: os.stat_result,
+    *,
+    directory: bool = False,
+) -> tuple[int, int, int, int]:
+    attributes = getattr(info, "st_file_attributes", None)
+    if attributes is None:
+        raise ValueError("unsupported_capture_platform")
+    if stat.S_ISLNK(info.st_mode) or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        raise ValueError("scope_escapes_workspace")
+    if not (stat.S_ISDIR if directory else stat.S_ISREG)(info.st_mode):
+        raise ValueError("scope_requires_regular_files")
+    if not info.st_dev or not info.st_ino:
+        raise ValueError("capture_identity_unavailable")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def _windows_descriptor(target: Path, *, directory: bool = False) -> int:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    filename = os.path.abspath(target)
+    if not filename.startswith("\\\\?\\"):
+        filename = (
+            "\\\\?\\UNC\\" + filename[2:]
+            if filename.startswith("\\\\")
+            else "\\\\?\\" + filename
+        )
+    # Directories deny write/delete sharing to pin traversal; OPEN_REPARSE_POINT
+    # opens a raced-in link itself. BACKUP_SEMANTICS permits directory handles.
+    flags = 0x00200000 | (0x02000000 if directory else 0)
+    handle = create(
+        filename, 0x80000000, 0x1 if directory else 0x7, None, 3, flags, None
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+
+
+def _windows_open(target: Path) -> BinaryIO:
+    descriptor = _windows_descriptor(target)
+    try:
+        return os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _windows_final_path(descriptor: int) -> Path:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    final_path = kernel.GetFinalPathNameByHandleW
+    final_path.argtypes = (
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    )
+    final_path.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    # FILE_NAME_NORMALIZED | VOLUME_NAME_DOS keeps root and file names comparable.
+    length = final_path(msvcrt.get_osfhandle(descriptor), buffer, len(buffer), 0)
+    if not 0 < length < len(buffer):
+        raise ValueError("capture_path_unavailable")
+    return Path(buffer.value)
+
+
+def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
+    with ExitStack() as parents:
+        current = repo
+        canonical_repo = repo
+        for part in ("", *target.relative_to(repo).parts[:-1]):
+            current = current / part
+            try:
+                expected = _windows_identity(os.lstat(current), directory=True)[:2]
+            except FileNotFoundError:
+                if not part:
+                    raise ValueError("capture_path_unavailable") from None
+                return None
+            descriptor = _windows_descriptor(current, directory=True)
+            parents.callback(os.close, descriptor)
+            if _windows_identity(os.fstat(descriptor), directory=True)[:2] != expected:
+                raise ValueError("workspace_changed_during_capture")
+            canonical = _windows_final_path(descriptor)
+            if not part:
+                canonical_repo = canonical
+            # Validate the known ancestor plus the full suffix before accepting absence.
+            canonical = canonical / target.relative_to(current)
+            if not canonical.is_relative_to(canonical_repo):
+                raise ValueError("scope_escapes_workspace")
+            validate_paths(
+                canonical_repo, [canonical.relative_to(canonical_repo).as_posix()]
+            )
+        try:
+            observed = os.lstat(target)
+        except FileNotFoundError:
+            return None
+        expected_file = _windows_identity(observed)
+        with _windows_open(target) as stream:
+            if _windows_identity(os.fstat(stream.fileno())) != expected_file:
+                raise ValueError("workspace_changed_during_capture")
+            canonical = _windows_final_path(stream.fileno())
+            if not canonical.is_relative_to(canonical_repo):
+                raise ValueError("scope_escapes_workspace")
+            validate_paths(
+                canonical_repo, [canonical.relative_to(canonical_repo).as_posix()]
+            )
+            raw = stream.read(MAX_BYTES + 1)
+            opened = os.fstat(stream.fileno())
+            if (
+                _windows_identity(opened) != expected_file
+                or _windows_identity(os.lstat(target)) != expected_file
+            ):
+                raise ValueError("workspace_changed_during_capture")
+            return raw, opened.st_mode & 0o111
+
+
+def _caseless(text: str) -> str:
+    # Unicode caseless matching (full case folding), as case-insensitive volumes compare names.
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", text).casefold())
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _listed(target: Path, leaf: str) -> bool:
+    try:
+        return leaf in os.listdir(target.parent)
+    except OSError:
+        return False
+
+
+def _entry_leaves(target: Path) -> set[str] | None:
+    """Spell the directory entry that target opens; None when hard links hide which one."""
+    try:
+        names = os.listdir(target.parent)
+    except OSError:
+        return None
+    if target.name in names:
+        return {target.name}
+    same = [name for name in names if _same_file(target.parent / name, target)]
+    if len(same) > 1:
+        # Several entries share the file: only the caseless name tells them apart.
+        same = [name for name in same if _caseless(name) == _caseless(target.name)]
+        if len(same) != 1:
+            return None
+    return set(same)
+
+
+def _disk_parent(repo: Path, name: str) -> str:
+    """Spell the existing leading directories of name as their parents list them."""
+    parts = name.split("/")[:-1]
+    current, spelled = repo, []
+    for position, part in enumerate(parts):
+        try:
+            names = os.listdir(current)
+        except OSError:
+            return "/".join([*spelled, *parts[position:]])
+        if part not in names:
+            if not os.path.lexists(current / part):
+                return "/".join([*spelled, *parts[position:]])
+            # Prefer names that fold to the same key; a short-name alias has none.
+            folded = [
+                listed for listed in names if _caseless(listed) == _caseless(part)
+            ]
+            matches = [
+                listed
+                for listed in folded or names
+                if _same_file(current / listed, current / part)
+            ]
+            # An unresolved spelling stays as given; path validity is judged by capture.
+            if len(matches) == 1:
+                part = matches[0]
+        spelled.append(part)
+        current = current / part
+    return "/".join(spelled)
+
+
+def _index_records(repo: Path) -> Iterator[str]:
+    """Yield every index record from a file-backed read, without holding the listing."""
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(
+            [
+                "git",
+                "--no-optional-locks",
+                "-C",
+                str(repo),
+                "ls-files",
+                "--stage",
+                "-z",
+            ],
+            stdout=output,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+            env=_git_env(),
+        )
+        if result.returncode:
+            raise ValueError("git_evidence_unavailable")
+        output.seek(0)
+        pending = b""
+        while chunk := output.read(65536):
+            *complete, pending = (pending + chunk).split(b"\0")
+            for record in complete:
+                try:
+                    yield record.decode("utf-8")
+                except UnicodeDecodeError:
+                    # A path that is not UTF-8 cannot be any selected path;
+                    # it is outside the scope, so it must not fail the capture.
+                    continue
+
+
+def _index(repo: Path, paths: list[str]) -> str:
+    literal = git(
+        repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths
+    )
+    try:
+        icase = (
+            git(repo, "config", "--type=bool", "--get", "core.ignorecase").strip()
+            == "true"
+        )
+    except ValueError:  # unset: Git matches paths exactly
+        icase = False
+    records = {record for record in literal.split("\0") if record}
+    found = {record.split("\t", 1)[1] for record in records}
+    pending = [name for name in paths if name not in found]
+    if icase and pending:
+        # A case-insensitive workspace opens an alias such as RECORD.txt as the
+        # tracked record.txt, and Git's own case folding differs from the file
+        # system's. An existing file is matched to its index entry by identity:
+        # only entries in the same directory are compared. A missing file has no
+        # identity, so its entry is matched by caseless name; every entry that
+        # could be it is kept, so an index change is never reported as no_delta.
+        existing = [name for name in pending if os.path.lexists(repo / name)]
+        # A selected leaf listed under its own spelling is a separate directory
+        # entry, so only an index entry with that exact leaf is the same entry;
+        # sharing a file identity (a hard link) is not an alias. An unlisted leaf
+        # was resolved by the file system to another spelling: match it by identity.
+        aliased = {
+            name: not _listed(repo / name, name.rsplit("/", 1)[-1]) for name in existing
+        }
+        # An alias names one directory entry; another entry sharing its file is not it.
+        entries = {name: _entry_leaves(repo / name) for name in existing if aliased[name]}
+        if None in entries.values():
+            raise ValueError("capture_identity_unavailable")
+        missing: dict[str, list[str]] = {}
+        for name in pending:
+            if name in existing:
+                continue
+            parent = _disk_parent(repo, name)
+            leaf = name.rsplit("/", 1)[-1]
+            missing.setdefault(
+                _caseless(f"{parent}/{leaf}" if parent else leaf), []
+            ).append(name)
+        same_directory: dict[str, list[str]] = {}
+        for record in _index_records(repo):
+            path = record.split("\t", 1)[1]
+            if path in found:
+                continue
+            if _caseless(path) in missing:
+                records.add(record)
+                continue
+            if not existing:
+                continue
+            directory = path.rsplit("/", 1)[0] if "/" in path else ""
+            if directory not in same_directory:
+                folder = repo / directory if directory else repo
+                same_directory[directory] = [
+                    name
+                    for name in existing
+                    if _same_file(folder, (repo / name).parent)
+                ]
+            leaf = path.rsplit("/", 1)[-1]
+            if any(
+                leaf == name.rsplit("/", 1)[-1]
+                or (
+                    aliased[name]
+                    and _same_file(repo / path, repo / name)
+                    and (
+                        (opened := _entry_leaves(repo / path)) is None
+                        or opened & entries[name]
+                    )
+                )
+                for name in same_directory[directory]
+            ):
+                records.add(record)
+    elif not icase:
+        return literal
+    return "".join(
+        record + "\0"
+        for record in sorted(records, key=lambda item: (item.split("\t", 1)[1], item))
+    )
+
+
 def capture(repo: Path, paths: list[str]) -> dict[str, Any]:
-    if not hasattr(os, "O_NOFOLLOW"):
+    windows = os.name == "nt" and not hasattr(os, "O_NOFOLLOW")
+    if not windows and not hasattr(os, "O_NOFOLLOW"):
         raise ValueError("unsupported_capture_platform")
     repo = repo.resolve()
     paths = validate_paths(repo, paths)
     if Path(git(repo, "rev-parse", "--show-toplevel").strip()).resolve() != repo:
         raise ValueError("workspace_must_be_git_root")
     before = git(repo, "rev-parse", "HEAD").strip()
-    index = git(repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths)
+    index = _index(repo, paths)
     files: dict[str, Any] = {}
     size = 0
     for name in paths:
         target = repo / name
         if target.is_symlink() or not target.resolve().is_relative_to(repo):
             raise ValueError("scope_escapes_workspace")
-        if not target.exists():
-            files[name] = None
-            continue
-        if not target.is_file():
-            raise ValueError("scope_requires_regular_files")
-        # O_NOFOLLOW also rejects a final-component symlink introduced after check.
-        with os.fdopen(os.open(target, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
-            raw = stream.read(MAX_BYTES + 1)
-            mode = os.fstat(stream.fileno()).st_mode & 0o111
+        if windows:
+            captured = _windows_capture(repo, target)
+            if captured is None:
+                files[name] = None
+                continue
+            raw, mode = captured
+        else:
+            if not target.exists():
+                files[name] = None
+                continue
+            if not target.is_file():
+                raise ValueError("scope_requires_regular_files")
+            # O_NOFOLLOW also rejects a final-component symlink introduced after check.
+            with os.fdopen(
+                os.open(target, os.O_RDONLY | os.O_NOFOLLOW), "rb"
+            ) as stream:
+                raw = stream.read(MAX_BYTES + 1)
+                mode = os.fstat(stream.fileno()).st_mode & 0o111
         size += len(raw)
         if size > MAX_BYTES or b"\0" in raw:
             raise ValueError("oversized_or_binary_scope")
         files[name] = {"text": raw.decode("utf-8"), "executable": bool(mode)}
-    if before != git(repo, "rev-parse", "HEAD").strip() or index != git(
-        repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths
-    ):
+    if before != git(repo, "rev-parse", "HEAD").strip() or index != _index(repo, paths):
         raise ValueError("workspace_changed_during_capture")
     return {
         "head": before,

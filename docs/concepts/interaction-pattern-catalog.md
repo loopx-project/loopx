@@ -2202,9 +2202,7 @@ the stable schema.
 **Validation**
 
 - `docs/reference/protocols/protocol-action-packet-decision-v0.md`
-- `docs/product/runtimes/codex-cli/codex-cli-same-open-tui-continuation-observation.md`
 - `examples/interaction-pattern-catalog-smoke.py`
-- `examples/codex-cli-visible-attach-acceptance-smoke.py`
 
 #### IP-028 Connector Runtime Boundary
 

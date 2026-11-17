@@ -677,6 +677,26 @@ upgrades installed automations nor proves model adoption or token/latency gains.
 To roll back, install the prior revision and regenerate prompts; changing a
 transport flag does not restore the old exact Todo schema.
 
+## Experimental compaction working memory
+
+This experiment is retired. The kernel no longer prepares or restores its sparse
+memory view, and Workbench no longer offers its switch. Task effectiveness and
+complete-cost benefit remained unqualified; see the [retired RFC](../architecture/rfcs/sparse-compaction-working-memory-v0.md).
+
+Saved `compaction_memory_machine_defaults_v0` values remain strictly readable
+for settings compatibility, including a prior `enabled: true`. They have no
+runtime effect or editor. Other device settings and their transaction rollback
+remain available; reading does not rewrite the saved configuration. Existing
+immutable memory/source files and exact capture references retain their original
+lifetime and access rules. This change performs no source cleanup. Installing an
+older release that still implements the experiment can restore its behavior;
+remove its saved namespace before such a downgrade if that behavior is unwanted.
+
+中文：实验已撤回，内核不再生成或恢复实验记忆，工作台开关已移除。
+旧配置只用于兼容读取，即使曾保存开启也不生效；其他本机设置仍可编辑和事务回滚。
+已有记忆文件、原始来源与精确读取路径保留，不自动清理。降级到仍实现该实验的旧版
+可能恢复其行为；若不希望恢复，应在降级前移除旧命名空间。
+
 ## Opt-in native reuse
 
 The retained-input codec described first in this section serves explicit

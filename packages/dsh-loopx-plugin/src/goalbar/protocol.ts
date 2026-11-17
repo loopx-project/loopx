@@ -29,14 +29,41 @@ export const GOALBAR_CLIENT_FAULT_CODES = Object.freeze([
   'protocol_error',
 ] as const)
 
+/**
+ * Safe failure categories for the last automatic-continuation admission
+ * attempt. They summarize the typed CLI failure without command output,
+ * stderr, or any runtime path, so the GoalBar can pair each category with
+ * one bounded recovery hint.
+ */
+export const GOALBAR_ADMISSION_FAILURE_CATEGORIES = Object.freeze([
+  'cli_unavailable',
+  'cli_unreachable',
+  'admission_rejected',
+  'invalid_response',
+  'driver_error',
+] as const)
+
 export type GoalBarOpV1 = keyof typeof GOALBAR_ENDPOINTS
 export type GoalBarEndpointV1 = (typeof GOALBAR_ENDPOINTS)[GoalBarOpV1]
 export type GoalBarReadFaultCode = (typeof GOALBAR_READ_FAULT_CODES)[number]
 export type GoalBarActionRejectionCode =
   (typeof GOALBAR_ACTION_REJECTION_CODES)[number]
 export type GoalBarClientFaultCode = (typeof GOALBAR_CLIENT_FAULT_CODES)[number]
+export type GoalBarAdmissionFailureCategoryV1 =
+  (typeof GOALBAR_ADMISSION_FAILURE_CATEGORIES)[number]
 export type GoalBarActivationV1 = 'active' | 'stopped'
 export type GoalBarAgentStatusV1 = 'idle' | 'running'
+
+/** Latest driver admission outcome: clear, or failed with one safe category. */
+export type GoalBarContinuationAdmissionV1 =
+  | { readonly state: 'clear' }
+  | {
+      readonly state: 'failed'
+      readonly category: GoalBarAdmissionFailureCategoryV1
+    }
+
+export const GOALBAR_ADMISSION_CLEAR: GoalBarContinuationAdmissionV1 =
+  Object.freeze({ state: 'clear' })
 
 export interface GoalBarProgressV1 {
   readonly processed: number
@@ -51,6 +78,9 @@ export interface GoalBarSnapshotV1 {
   readonly goalActivation: GoalBarActivationV1
   readonly agentStatus: GoalBarAgentStatusV1
   readonly progress: GoalBarProgressV1
+  /** Present only after the bound Driver observes a Core recovery hold. */
+  readonly recoveryAttention?: true
+  readonly continuationAdmission: GoalBarContinuationAdmissionV1
 }
 
 export interface GoalBarExpectedBindingV1 {
@@ -330,6 +360,23 @@ export function decodeGoalBarRequestV1(
     : undefined
 }
 
+function decodeContinuationAdmission(
+  value: unknown,
+): GoalBarContinuationAdmissionV1 | undefined {
+  const input = record(value)
+  if (input?.state === 'clear') {
+    return exactRecord(value, ['state']) !== undefined
+      ? { state: 'clear' }
+      : undefined
+  }
+  if (input?.state !== 'failed') return undefined
+  const failed = exactRecord(value, ['state', 'category'])
+  return failed !== undefined
+    && isOneOf(failed.category, GOALBAR_ADMISSION_FAILURE_CATEGORIES)
+    ? { state: 'failed', category: failed.category }
+    : undefined
+}
+
 export function decodeGoalBarSnapshotV1(
   value: unknown,
   expected: {
@@ -337,6 +384,7 @@ export function decodeGoalBarSnapshotV1(
     readonly binding?: GoalBarExpectedBindingV1 | undefined
   } = {},
 ): GoalBarSnapshotV1 | undefined {
+  const recoveryAttention = record(value)?.recoveryAttention
   const input = exactRecord(value, [
     'sessionId',
     'goalId',
@@ -344,8 +392,11 @@ export function decodeGoalBarSnapshotV1(
     'goalActivation',
     'agentStatus',
     'progress',
+    ...(recoveryAttention === true ? ['recoveryAttention'] : []),
+    'continuationAdmission',
   ])
   const progress = exactRecord(input?.progress, ['processed', 'remaining', 'total'])
+  const admission = decodeContinuationAdmission(input?.continuationAdmission)
   if (!isGoalBarSessionId(input?.sessionId)
     || !isGoalBarGoalId(input.goalId)
     || !isGoalBarAgentId(input.loopxAgentId)
@@ -356,6 +407,7 @@ export function decodeGoalBarSnapshotV1(
     || !isSequence(progress.total)
     || !Number.isSafeInteger(progress.processed + progress.remaining)
     || progress.processed + progress.remaining !== progress.total
+    || admission === undefined
     || (expected.sessionId !== undefined && input.sessionId !== expected.sessionId)
     || (expected.binding !== undefined
       && (input.goalId !== expected.binding.goalId
@@ -368,11 +420,13 @@ export function decodeGoalBarSnapshotV1(
     loopxAgentId: input.loopxAgentId,
     goalActivation: input.goalActivation,
     agentStatus: input.agentStatus,
+    ...(recoveryAttention === true ? { recoveryAttention } : {}),
     progress: {
       processed: progress.processed,
       remaining: progress.remaining,
       total: progress.total,
     },
+    continuationAdmission: admission,
   }
 }
 

@@ -156,6 +156,14 @@ passes, PyPI; each stable promotion still needs one package version name. The
 version source is `loopx.__version__`, mirrored by `pyproject.toml`; the
 expected public tag is `vX.Y.Z` for that version.
 
+Exact-source qualification reads both version declarations from the selected
+checkout without executing its package. Missing, malformed or conflicting build
+metadata refuses qualification even when the commit is clean and all supplied
+receipts agree. Release artifact tooling loads the shared static reader without
+bootstrapping the candidate package, including when the tool and candidate use
+the same checkout. Invalid metadata retains the artifact CLI's normal error
+output; inspection does not execute package initialization.
+
 Before moving `stable`, maintainers should:
 
 - before freezing the candidate, fetch `stable` from the verified target
@@ -260,6 +268,18 @@ Trusted Publishing and the existing environment policy still apply.
 Reserve `qualification.json` for the workflow's attested runtime qualification.
 Use `RELEASE-QUALIFICATION.json` for a separately maintained release overview;
 GitHub Release asset names must also be unique when compared ignoring case.
+
+The main runtime publisher verifies its downloaded installation qualification
+against the source revision, channel, archive digest and byte count before any
+remote write. Every installation/recovery check must pass, and immutable metadata
+must match the candidate channel metadata. Missing, failed or mismatched evidence
+leaves the existing releases and channel untouched. This engineering qualification
+does not establish model outcomes, complete-cost benefit or C1 default adoption.
+
+main 运行时发布器在任何远端写入前，将下载的安装资格与源码提交、渠道、归档摘要及
+字节数逐项核对。安装和恢复检查必须全部通过，不可变元数据必须与候选渠道元数据一致。
+证据缺失、失败或不匹配时，保留已有发布及渠道。此工程资格不证明模型结果、完整成本收益
+或 C1 默认采用资格。
 
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
@@ -1219,6 +1239,15 @@ Build the list from the tag-to-tag Git range and merged pull-request metadata,
 not commit display names or an unreviewed generated changelog. Attribution is
 part of the release contract even when the same pull request is linked again
 under a product group.
+
+Match the complete Git range against GitHub's actual merge commit identifiers;
+PR numbers in commit titles are navigation, not a completeness check. Confirm
+that metadata coverage reaches the whole range, resolving unmatched integration
+commits through their associated merged PRs. Check an author's earlier merged
+PR history before calling a contribution first-time. Reconcile both language
+lists and their summary counts against that verified set; a formatting gate
+does not establish source completeness. Refresh this evidence when the final
+release range changes.
 
 Organize the remaining release note into the following stable groups. Omit an
 empty product group instead of inventing filler:

@@ -52,15 +52,23 @@ function failure(code: string, reason: string, detail: JsonObject = {}): Coordin
   };
 }
 
+/** Decode the creation owner's existing receipt without reading current state. */
+export function decodeCoordinationTodoCreateReceipt(original: JsonObject, todoId: string) {
+  const todo = canonicalAuthorityObject(original.todo, "created Todo receipt");
+  if (original.schema_version !== COORDINATION_TODO_CREATE_RECEIPT_SCHEMA ||
+      original.todo_id !== todoId || todo.todo_id !== todoId) {
+    throw new AuthorityStoreProtocolError("created Todo receipt identity mismatch");
+  }
+  return {fields: {todo_id: original.todo_id, todo, original_receipt: original}, changed: true};
+}
+
 function createReceipt(input: CoordinationTodoCreateInput, requestSha: string) {
   return new CoordinationCommandReceipt({result_schema: COORDINATION_TODO_CREATE_RESULT_SCHEMA,
     identity: {schema_version: COORDINATION_TODO_CREATE_RECEIPT_SCHEMA,
       operation_id: input.operation_id, goal_id: input.goal_id, todo_id: String(input.todo.todo_id),
       request_sha256: requestSha}, failure,
     decode(original) {
-      const todo = canonicalAuthorityObject(original.todo, "created Todo receipt");
-      if (todo.todo_id !== input.todo.todo_id) throw new AuthorityStoreProtocolError("created Todo receipt identity mismatch");
-      return {fields: {todo_id: original.todo_id, todo, original_receipt: original}, changed: true};
+      return decodeCoordinationTodoCreateReceipt(original, String(input.todo.todo_id));
     }});
 }
 

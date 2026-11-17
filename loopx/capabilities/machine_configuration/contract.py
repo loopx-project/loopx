@@ -90,9 +90,10 @@ class MachineConfigurationRegistry:
     def __init__(self) -> None:
         self._namespaces: dict[str, MachineConfigurationNamespace] = {}
         self._deferred: dict[str, Callable[[], MachineConfigurationNamespace]] = {}
+        self._retired: dict[str, Normalizer] = {}
 
     def _reserve(self, namespace: str) -> None:
-        if namespace in self._namespaces or namespace in self._deferred:
+        if namespace in self._namespaces or namespace in self._deferred or namespace in self._retired:
             raise ValueError(
                 "machine-configuration namespace is already registered: " + namespace
             )
@@ -142,6 +143,39 @@ class MachineConfigurationRegistry:
         del self._deferred[namespace]
         self._namespaces[namespace] = contract
         return contract
+
+    def register_retired(
+        self, namespace: str, normalize: Normalizer
+    ) -> MachineConfigurationRegistry:
+        """Decode saved settings without advertising or reviving their owner.
+
+        Retired values remain in the normalized storage document so revisions,
+        sibling updates and exact rollback retain their existing meaning.
+        They have no editor, public projection or namespace update operation.
+        """
+        if not _NAMESPACE_RE.fullmatch(namespace):
+            raise ValueError("machine-configuration namespace is invalid")
+        self._reserve(namespace)
+        self._retired[namespace] = normalize
+        return self
+
+    def normalize_namespace(self, namespace: str, candidate: dict[str, Any]) -> dict[str, Any]:
+        retired = self._retired.get(namespace)
+        if retired is not None:
+            return retired(candidate)
+        contract = self.resolve(namespace)
+        schema_version = str(candidate.get("schema_version") or "").strip()
+        if schema_version not in contract.schema_versions:
+            raise ValueError(
+                f"machine_configuration namespace {namespace} has unsupported "
+                f"schema_version: {schema_version or 'missing'}"
+            )
+        value = contract.normalize(candidate)
+        if value.get("schema_version") != schema_version:
+            raise ValueError(
+                f"machine-configuration normalizer changed {namespace} schema_version"
+            )
+        return value
 
     @property
     def namespace_ids(self) -> tuple[str, ...]:
@@ -248,22 +282,10 @@ def normalize_machine_configuration(
         selected.intersection_update(namespace_ids)
     normalized: dict[str, Any] = {}
     for namespace in sorted(selected):
-        contract = registry.resolve(namespace)
         candidate = _mapping(
             namespaces[namespace], f"machine_configuration.namespaces.{namespace}"
         )
-        schema_version = str(candidate.get("schema_version") or "").strip()
-        if schema_version not in contract.schema_versions:
-            raise ValueError(
-                f"machine_configuration namespace {namespace} has unsupported "
-                f"schema_version: {schema_version or 'missing'}"
-            )
-        value = contract.normalize(candidate)
-        if value.get("schema_version") != schema_version:
-            raise ValueError(
-                f"machine-configuration normalizer changed {namespace} schema_version"
-            )
-        normalized[namespace] = value
+        normalized[namespace] = registry.normalize_namespace(namespace, candidate)
     return {
         "schema_version": MACHINE_CONFIGURATION_SCHEMA,
         "namespaces": normalized,
@@ -283,6 +305,8 @@ def project_machine_configuration(
     normalized = normalize_machine_configuration(configuration, registry=registry)
     projected: dict[str, Any] = {}
     for namespace, value in normalized["namespaces"].items():
+        if namespace not in registry.namespace_ids:
+            continue
         contract = registry.resolve(namespace)
         public_value = contract.project_public(value)
         if public_value.get("schema_version") != value.get("schema_version"):

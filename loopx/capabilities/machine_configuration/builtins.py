@@ -75,7 +75,10 @@ def _owner(module: str, factory: str) -> Callable[[], MachineConfigurationNamesp
 
 
 def build_builtin_machine_configuration_registry() -> MachineConfigurationRegistry:
+    from .compaction_memory import normalize_compaction_memory
+
     registry = MachineConfigurationRegistry()
+    registry.register_retired("compaction_memory", normalize_compaction_memory)
     for namespace, module, factory in _BUILTIN_NAMESPACES:
         registry.register_deferred(namespace, _owner(module, factory))
     return registry

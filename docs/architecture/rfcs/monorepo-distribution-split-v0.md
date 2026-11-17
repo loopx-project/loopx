@@ -4,7 +4,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-09-26
-- **Last normative revision:** 2026-10-29
+- **Last normative revision:** 2026-11-17
 - **Implementation baseline:** packaging inventory `2f3d13ae9`; runtime composition audit `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **Related contracts:** [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md), [Extensions reference](../../reference/extensions.md), [Capability catalog](../../../loopx/capabilities/README.md), [Overall Roadmap v0](loopx-overall-roadmap-v0.md) (S2, S8, S12), [import-boundary tests](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **Tracking issue:** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -610,6 +610,100 @@ journey qualification slices in this same plan. R0 can ship before directory
 moves; it does not qualify the kernel. R3/R4 are optional and do not block a
 qualified CLI or managed task. No unused provider, field or framework is added
 ahead of its real caller. Report the applied/deferred adjacent refactor in each PR.
+
+<a id="subtraction-gate"></a>
+
+### Subtraction Gate & Anti-Context-Gravity Rules
+
+Empirical measurements at `main@f15ebdd16b` and on C1 PR `#8266` (`+26,672 / -4,561`
+across `289` files, net `+22,111` LOC) show that module splitting and execution
+unification fail to shrink the repository unless every delivery slice passes an
+explicit subtraction gate (paired with [the Controller RFC subtraction gate](controller-executor-unified-contract-v0.md#subtraction-gate)).
+
+#### 1. Why "unification" PRs grew net LOC (four measured drivers)
+
+In `#8266`, net code and documentation expanded across every layer:
+
+- **Append-only bilingual RFC and ledger logs (`+9,564` net lines in `docs/`):**
+  `+9,715 / -151` under `docs/`, including `+7,749` across `14` files in
+  `docs/architecture/rfcs/ledger/` and `+1,218 / -35` in RFC/annex diffs (`+5,874`
+  in `2026-10-30-c1-source-convergence.{md,zh-CN.md}` alone), turning chronological
+  logs into pseudo-proof.
+- **Combinatorial old × new mode matrix tests (`+9,976` net lines in `tests/`):**
+  `+12,074 / -2,098` across `142` test files multiplying full fixtures over
+  `loopx_turn_envelope_v0`, `--context-delivery off`, and the unified schema.
+- **Additive compatibility adapters in runtime/CLI (`+2,236` net lines in `loopx/`):**
+  `+4,224 / -1,988` across `92` files adding shims (`raw_quota_turn_view`,
+  `compose_turn_decision_with_raw_envelope`, `--context-delivery off` branches in
+  `loopx/cli_commands/quota.py`, `quota_presentation.py`, `quota_capture.py`, and
+  `quota_context_reader.py`) that reconstruct legacy `v0`/ordinary views instead of
+  retiring replaced producers.
+- **Cross-language Python ↔ TS wrapper duplication:** `loopx/cli_commands/`
+  (`+1,639 / -645`), `loopx/control_plane/*.py` (`+1,167 / -685`), and
+  `loopx/control_plane/*.ts` (`+1,080 / -532`) retaining Python orchestration
+  wrappers alongside TypeScript owners.
+
+Open unification PRs `#8484` (`+1,979 / -174`, `41` files) and `#7568`
+(`+6,230 / -349`, `56` files) exhibit the same additive-facade bias, in contrast
+to focused spec updates (`#8749`, `+538 / -2`, merged) and the structural/CI
+burden tracked under `#5072` and `#8787`.
+
+#### 2. Context gravity vs. scar-preserving subtraction
+
+At `main@f15ebdd16b`, tracked code/script files total `~1.79M` LOC (`1,785,239`
+lines across `loopx/`: `1,864` files / `~658k` LOC; `tests/`: `1,956` files /
+`~727k` LOC; `examples/`: `688` files / `~204k` LOC; plus `apps/`, `packages/`,
+`scripts/`, and `benchmark/`), alongside `152` files (`~11.5k` LOC) under
+`docs/architecture/rfcs/ledger/` and `~3,990` lines of historical Appendix A
+diaries in this RFC.
+
+- **Context gravity:** Placed inside a `1.79M`-LOC tree, frontier models treat
+  stale top-level files, historical flags, and transitional shims as fixed
+  infrastructure and wrap new facades around them rather than deleting old paths.
+- **Scar-preserving subtraction:** LoopX's durable moat is not line count or
+  wrapper breadth; it is **four irreplaceable kernel invariants** — (1) exclusive
+  leases and writer/generation fencing, (2) default-deny authority and ACL/scope
+  isolation, (3) once-only idempotent settlement receipts, and (4) same-origin
+  counterfactual checkpoints and evaluation ledgers — plus its
+  **failure-counterexample test corpus**. Small-kernel splits must preserve those
+  invariants and failure counterexamples while actively deleting dead pilots,
+  top-level wrappers, and unreferenced scripts.
+
+#### 3. Concrete retirement backlog and ratchet rules
+
+1. **Pre-Turn pilot CLI subcommands and top-level modules.** Retire the `15`
+   superseded pre-Turn `codex-cli-*` pilot/proof subcommands replaced by
+   `loopx turn` (`turn_driver/codex_cli.py`), `start-goal`, and `codex_app`
+   heartbeat (`14` with zero non-pilot callers plus `codex-cli-session-probe`
+   referenced only as a hint in `loopx/project_prompt.py`), along with the `4`
+   top-level `loopx/codex_cli_*.py` modules (`3,767` LOC) and `6`
+   `loopx/cli_commands/starter_*.py` wrappers (`859` LOC). Keep live
+   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py`.
+2. **Remaining top-level `chat_*` and `*_goal_mode` migrations with strict
+   downward ratchet.** Complete M1/M2 by migrating the remaining `20` top-level
+   `loopx/chat_*.py` modules (`20,562` LOC) into `loopx/chat/` and the `9`
+   `loopx/*_goal_mode/` directories (`59` files / `17,655` lines; `33` `.py` /
+   `7,062` LOC) into `loopx/hosts/`. Every PR deleting or moving top-level
+   modules must ratchet `max_top_level_modules` in
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   (currently `127`) strictly downward; keeping permanent top-level shim files
+   that freeze the count does not clear M1/M2.
+3. **Unreferenced `examples/` scripts and source-text-pinning smokes.** Prune
+   unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
+   `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on
+   `main@f15ebdd16b`) and retire the `14` `examples/cli-*-command-modularization-smoke.py`
+   files that pin internal Python import/helper text instead of shipped CLI
+   invariants per [good-smokes](../../development/good-smokes.md).
+4. **Bounded RFC and ledger discipline.** Retain Appendix A below as frozen
+   historical context only; new normative specifications and `ledger/` entries
+   must be compact boundary, invariant, retirement, and evidence tables rather than
+   multi-thousand-line chronological logs.
+5. **Exit-gated compatibility views and I3 shims.** Beyond I3's bounded one-minor
+   public-import window, any transitional `v0` projection (`loopx_turn_envelope_v0`,
+   `raw_quota_turn_view`), `legacy_fallback` path, or off-mode flag
+   (`--context-delivery off`) must name its active consumer and deletion
+   milestone. Distribution or mechanism convergence is incomplete until duplicate
+   producers and combinatorial flags are retired.
 
 ## 12. Open decisions
 

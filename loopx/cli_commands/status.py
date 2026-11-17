@@ -5,7 +5,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..contract import check_contract, render_contract_markdown
+from ..contract import (
+    check_contract,
+    display_report_value,
+    render_contract_markdown,
+)
+from ..paths import display_path_text
 from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..control_plane.runtime.status_projection_cache import (
     load_status_projection_cache,
@@ -167,17 +172,24 @@ def handle_check_command(
             allow_missing_registry=allow_missing_registry,
         )
     except Exception as exc:
+        scan_roots = args.scan_path or [args.scan_root]
         payload = {
             "ok": False,
-            "registry": str(registry_path),
-            "runtime_root": runtime_root_arg,
-            "scan_roots": args.scan_path or [args.scan_root],
+            "registry": display_path_text(registry_path),
+            "runtime_root": (
+                display_path_text(runtime_root_arg)
+                if runtime_root_arg is not None
+                else None
+            ),
+            "scan_roots": [display_path_text(path) for path in scan_roots],
             "summary": {"errors": 1, "warnings": 0, "checks": 0},
             "errors": [str(exc)],
             "warnings": [],
             "checks": [],
         }
-    print_payload(payload, args.format, render_contract_markdown)
+    print_payload(
+        display_report_value(payload), args.format, render_contract_markdown
+    )
     return 0 if payload.get("ok") else 1
 
 
@@ -288,7 +300,11 @@ def handle_status_command(
         if isinstance(exc, LocalCoordinationAuthorityUnavailable):
             payload["error_code"] = exc.code
             payload["authority_read"] = exc.payload
-    print_payload(payload, output_format(args), render_status_markdown)
+    print_payload(
+        display_report_value(payload),
+        output_format(args),
+        render_status_markdown,
+    )
     return 0 if payload.get("ok") else 1
 
 

@@ -4,7 +4,7 @@
 - **交付成熟度：** Proposal
 - **作者 / 负责人：** LoopX maintainers
 - **创建：** 2026-09-26
-- **最近规范性修订：** 2026-10-29
+- **最近规范性修订：** 2026-11-17
 - **实现基线：** 发行盘点 `2f3d13ae9`；运行时装配审计 `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **相关契约：** [TypeScript 控制面迁移 v0](typescript-control-plane-migration-v0.zh-CN.md)、[Extensions 参考](../../reference/extensions.md)、[Capability 目录](../../../loopx/capabilities/README.md)、[总体路线图 v0](loopx-overall-roadmap-v0.zh-CN.md)（S2、S8、S12）、[import 边界测试](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **跟踪 issue：** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -442,6 +442,73 @@ Live、性能和晋级证据分别记录。
 M0–M5 保留原发行里程碑；R0–R4 是同一计划中的运行时和旅程资格切片。
 R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，不阻塞已合格的 CLI 或 managed 任务。
 真实调用者出现前不增加闲置 provider、字段或框架。每个 PR 记录应用/推迟的相邻重构。
+
+<a id="subtraction-gate"></a>
+
+### 减法门禁与反上下文重力规则
+
+`main@f15ebdd16b` 与 C1 PR `#8266`（跨 `289` 个文件 `+26,672 / -4,561`，净增 `+22,111` 行）的
+实测显示：除非每次交付都通过显式的减法门禁，否则模块拆分与执行统一并不能缩小仓库体量
+（与 [Controller RFC 减法门禁](controller-executor-unified-contract-v0.zh-CN.md#subtraction-gate) 配套）。
+
+#### 1. “统一”PR 为何反而推高净代码量（四类实测驱动因素）
+
+在 `#8266` 中，代码与文档的净增分布在每一层：
+
+- **只增不减的双语 RFC 与台账日志（`docs/` 净增 `+9,564` 行）：** `docs/` 下 `+9,715 / -151`，
+  包含 `14` 个 `docs/architecture/rfcs/ledger/` 文件的 `+7,749` 行与 RFC/附录的 `+1,218 / -35` 行
+  （仅 `2026-10-30-c1-source-convergence.{md,zh-CN.md}` 即占 `+5,874` 行），把流水账当成收敛证据。
+- **旧 × 新模式组合矩阵测试（`tests/` 净增 `+9,976` 行）：** 跨 `142` 个测试文件 `+12,074 / -2,098`，
+  围绕 `loopx_turn_envelope_v0`、`--context-delivery off` 与统一 schema 乘积式扩写端到端 fixture。
+- **运行时与 CLI 增补兼容适配层（`loopx/` 净增 `+2,236` 行）：** 跨 `92` 个文件 `+4,224 / -1,988`，
+  在 `loopx/cli_commands/quota.py`、`quota_presentation.py`、`quota_capture.py` 与
+  `quota_context_reader.py` 增补重构旧 `v0`/普通视图的 shim（如 `raw_quota_turn_view`、
+  `compose_turn_decision_with_raw_envelope`、`--context-delivery off` 分支），而非退役旧 producer。
+- **跨语言 Python ↔ TS 包装重复：** `loopx/cli_commands/`（`+1,639 / -645`）、
+  `loopx/control_plane/*.py`（`+1,167 / -685`）与 `loopx/control_plane/*.ts`（`+1,080 / -532`）
+  在 TypeScript owner 旁保留 Python 编排包装。
+
+开放中的统一 PR `#8484`（`+1,979 / -174`，`41` 文件）与 `#7568`（`+6,230 / -349`，`56` 文件）
+同样体现该叠层模式；而聚焦规范收敛的 `#8749`（`+538 / -2`，已合入）及 `#5072`、`#8787` 则
+直面目录拆分与 CI 负载问题。
+
+#### 2. 上下文重力 vs. 保留伤疤的减法
+
+在 `main@f15ebdd16b` 上，仓库受跟踪代码/脚本总计约 `1.79M` 行（`1,785,239` 行，其中 `loopx/`
+`1,864` 文件 / 约 `658k` 行、`tests/` `1,956` 文件 / 约 `727k` 行、`examples/` `688` 文件 /
+约 `204k` 行，以及 `apps/`、`packages/`、`scripts/`、`benchmark/`），外加 `docs/architecture/rfcs/ledger/`
+的 `152` 个文件（约 `11.5k` 行）和本文附录 A 约 `3,990` 行的历史流水记录。
+
+- **上下文重力：** 模型置身于 `1.79M` 行体量的代码树时，倾向于假定既有顶层文件、历史开关和
+  过渡投影不可移除，从而在其外层包上兼容门面而不是化简。
+- **保留伤疤的减法：** LoopX 的核心护城河不是行数或包装厚度，而是**四项不可替代的内核不变量**——
+  （1）排他租约与写入/代际围栏、（2）默认拒绝的权限与 ACL/受众隔离、（3）一次性幂等结算回执、
+  （4）同源反事实检查点与评估台账——再加上**失败反例测试集**。小内核拆分必须在完整保护这些
+  不变量与失败反例的前提下，主动删除过时 pilot、顶层包装与无引用脚本。
+
+#### 3. 具名退役清单与棘轮规则
+
+1. **退役 Turn 前置 pilot CLI 子命令与顶层模块。** 删除已被 `loopx turn`（`turn_driver/codex_cli.py`）、
+   `start-goal` 与 `codex_app` heartbeat 替代的 `15` 个 `codex-cli-*` pilot/证明子命令（其中
+   `14` 个在非 pilot 生产调用方中为零引用，另有 `codex-cli-session-probe` 仅作为提示出现在
+   `loopx/project_prompt.py`），以及 `4` 个顶层 `loopx/codex_cli_*.py`（`3,767` 行）和 `6` 个
+   `loopx/cli_commands/starter_*.py` 包装（`859` 行）；保留现役 `codex-cli-bootstrap-message` 与
+   `turn_driver/codex_cli.py`。
+2. **迁完剩余顶层 `chat_*` 与 `*_goal_mode` 并严格单向下调棘轮。** 完成 M1/M2：将剩余 `20` 个顶层
+   `loopx/chat_*.py`（`20,562` 行）迁入 `loopx/chat/`，将 `9` 个 `loopx/*_goal_mode/` 目录
+   （`59` 文件 / `17,655` 行；其中 `33` 个 `.py` / `7,062` 行）迁入 `loopx/hosts/`。任何删除或迁出
+   顶层模块的 PR 都必须在同一 PR 内同步调低 [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   中的 `max_top_level_modules`（当前 `127`）；靠保留永久顶层 shim 维持计数不变不构成 M1/M2 完成。
+3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
+   实测 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
+   并依 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
+   CLI 不变量的 `examples/cli-*-command-modularization-smoke.py`。
+4. **约束 RFC 与台账体量。** 下方附录 A 仅作历史冻结保留；后续规范修订与 `ledger/` 条目须使用
+   紧凑的边界、不变量、退役与实证表，不再写入数千行按日流水账。
+5. **兼容视图与 I3 shim 强制设退出门禁。** 在 I3 约定的单个 minor 版本公开 import 窗口之外，
+   任何过渡性 `v0` 投影（`loopx_turn_envelope_v0`、`raw_quota_turn_view`）、`legacy_fallback`
+   路径或关闭模式开关（`--context-delivery off`）都必须具名活跃消费者与删除里程碑。在重复
+   producer 与组合开关删除前，拆包或机制收敛均未完成。
 
 ## 12. 未决决策
 

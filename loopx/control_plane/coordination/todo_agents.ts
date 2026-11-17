@@ -1,6 +1,23 @@
-import {AuthorityStoreProtocolError} from "./authority_store_codec.ts";
+import {AuthorityStoreProtocolError, optionalAuthorityString} from "./authority_store_codec.ts";
 import {compactPythonWhitespace} from "./python_whitespace.ts";
 export {compactPythonWhitespace, hasPythonNonWhitespaceText, stripPythonWhitespace} from "./python_whitespace.ts";
+
+export function optionalTodoAgent(value: unknown, label: string): string | null {
+  const candidate = optionalAuthorityString(value, label);
+  return candidate === null ? null : normalizeTodoAgent(candidate, label);
+}
+
+export function optionalRegisteredTodoAgent(
+  value: unknown,
+  label: string,
+  registeredAgents: readonly string[],
+): string | null {
+  const agent = optionalTodoAgent(value, label);
+  if (agent !== null && !registeredAgents.includes(agent)) {
+    throw new AuthorityStoreProtocolError(`${label} is not a registered agent`);
+  }
+  return agent;
+}
 
 export function normalizeTodoAgent(value: unknown, label: string): string {
   if (typeof value !== "string") {

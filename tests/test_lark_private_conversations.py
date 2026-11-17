@@ -7967,8 +7967,11 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
 
 
 @pytest.mark.parametrize("background_slots", [0, 2])
-@pytest.mark.parametrize("origin", ["lark", "web"])
-def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_path, monkeypatch, background_slots, origin):
+@pytest.mark.parametrize("origin", ["lark", "web", "card"])
+@pytest.mark.parametrize("backlog", ["failed_turn", "sent_card", "unknown_card_send"])
+def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(
+    tmp_path, monkeypatch, background_slots, origin, backlog,
+):
     from loopx.extensions.lark import goal_topic_runtime_service as worker
 
     release_old, release_rest = threading.Event(), threading.Event()
@@ -7986,8 +7989,15 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     transport._web_projection_paths = lambda: [web] if web.exists() else []
     fresh = web if origin == "web" else tmp_path / "z-current.json"
     for index in range(slots * 3):
-        (tmp_path / f"old-{index:02}.json").write_text(json.dumps({"status": "delivered",
-            "request_ref": str(index), "session_id": "original", "turn_id": "failed"}))
+        if backlog == "failed_turn":
+            row = {"status": "delivered", "request_ref": str(index),
+                   "session_id": "original", "turn_id": "failed"}
+        else:
+            stamp = {"send_started_at": "2026-01-01T00:00:00+00:00"}
+            if backlog == "sent_card":
+                stamp["message_id"] = f"om_{index:032x}"
+            row = {"status": "captured", "triage": stamp}
+        (tmp_path / f"old-{index:02}.json").write_text(json.dumps(row))
 
     def reconcile(path):
         with changed:
@@ -8019,7 +8029,10 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         with changed:
             assert len(started) == slots
         fresh.parent.mkdir(exist_ok=True)
-        fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
+        fresh_row = {"status": "pending" if origin == "web" else "accepted"}
+        if origin == "card":
+            fresh_row = {"status": "captured", "triage": {"action": {"operation": "menu"}}}
+        fresh.write_text(json.dumps(fresh_row))
         step()  # Retain the new discovery while every existing slot is held.
         release_old.set()
         with changed:
@@ -8049,10 +8062,63 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
 
 
-@pytest.mark.parametrize(("initial", "body_scan_fails"), [
-    ("accepted", False), ("accepted", True), ("delivered", False),
+def test_unreadable_recovery_hint_does_not_delay_new_private_reply(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+
+    old = tmp_path / "old-card.json"
+    new = tmp_path / "new-reply.json"
+    old_row = {"status": "captured", "triage": {"message_id": "om_already_sent"}}
+    old.write_text(json.dumps(old_row), encoding="utf-8")
+    new.write_text(json.dumps({"status": "accepted"}), encoding="utf-8")
+    new_delivered, old_recovered = threading.Event(), threading.Event()
+    attempts = []
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: False)
+
+    discover = transport.pending_body_paths
+
+    def discover_then_lose_old_hint():
+        paths = discover()
+        if not new_delivered.is_set():
+            assert set(paths) == {old, new}
+            old.write_bytes(b"\xff")
+        return paths
+
+    def reconcile(path):
+        attempts.append(path)
+        path.write_text(json.dumps({"status": "delivered"}), encoding="utf-8")
+        (new_delivered if path == new else old_recovered).set()
+        return 1
+
+    transport.pending_body_paths = discover_then_lose_old_hint
+    transport.reconcile_request = reconcile
+    service = worker.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport,
+    )
+
+    def drive(step, **_):
+        step()
+        assert new_delivered.wait(1), "the unreadable card held the new reply"
+        assert old.read_bytes() == b"\xff"
+        old.write_text(json.dumps(old_row), encoding="utf-8")
+        step()
+        assert old_recovered.wait(1)
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    service._reconcile_private()
+    assert attempts == [new, old]
+
+
+@pytest.mark.parametrize(("initial", "failure"), [
+    ("accepted", None), ("accepted", "body_scan"), ("delivered", None), ("delivered", "priority_read"),
 ])
-def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, body_scan_fails):
+def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, failure):
     from concurrent.futures import Future
     from loopx.chat_store import _atomic_write_json, _read_json
     from loopx.extensions.lark import goal_topic_runtime_service as worker
@@ -8081,6 +8147,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     # left no effect. A later full discovery finds eligibility, while the fast
     # body scan continues to exclude the now-delivered receipt.
     path = tmp_path / "original.json"
+    fresh = tmp_path / "new-reply.json"
     record = {"status": initial, "request_ref": "original", "session_id": "session",
               "turn_id": "turn", "event": {"message_id": "source"}, "profile": "fixture"}
     _atomic_write_json(path, record)
@@ -8098,6 +8165,10 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
         return attempts.count("recovery") < required_recoveries
 
     def reconcile(receipt):
+        if receipt == fresh:
+            attempts.append("fresh")
+            _atomic_write_json(receipt, {"status": "delivered"})
+            return 1
         assert receipt == path
         current = _read_json(receipt)
         if current["status"] == "accepted":
@@ -8121,7 +8192,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     pending_body_paths = transport.pending_body_paths
 
     def scan_bodies():
-        if body_scan_fails and clock[0] == 101:
+        if failure == "body_scan" and clock[0] == 101:
             raise OSError("temporary body scan failure")
         return pending_body_paths()
 
@@ -8132,14 +8203,27 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     def drive(step, **_):
         for tick in (100, 101, 102, 161, 162, 222, 223):
             clock[0] = float(tick)
+            if failure == "priority_read" and tick == 101:
+                # The full scan already found this original, and the next
+                # historical probe is backed off. Only its priority read fails.
+                assert transport._context_recovery_probe_at[path] == 160
+                path.write_bytes(b"\xff")
+                _atomic_write_json(fresh, {"status": "accepted"})
+            if failure == "priority_read" and tick == 102:
+                assert attempts == ["fresh"]
+                _atomic_write_json(path, record)
             step()
+            if failure == "priority_read" and tick == 102:
+                assert recovery_times == [102.0], "the ready historical request waited for a second discovery"
 
     monkeypatch.setattr(service._delivery_worker, "repeat", drive)
     service._reconcile_private()
     expected = ["body", "recovery"] if initial == "accepted" else ["recovery", "recovery"]
+    if failure == "priority_read":
+        expected.insert(0, "fresh")
     assert len(discoveries) >= 2
     assert attempts == expected, (attempts, discoveries)
-    if body_scan_fails:
+    if failure == "body_scan":
         assert recovery_times == [102.0]
     assert _read_json(path) == {**record, "status": "delivered"}
 
@@ -8456,7 +8540,8 @@ def test_original_reply_gets_free_worker_when_background_checks_are_due(ordinary
         runtime.close()
 
 
-def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path):
+@pytest.mark.parametrize("bodies_already_pending", [False, True])
+def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path, bodies_already_pending):
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
     scanning, release_scan, full, release_bodies = (threading.Event() for _ in range(4))
@@ -8482,15 +8567,22 @@ def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog
 
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
         runtime_controller=None, private_conversations=Pending())
-    service.start()
-    closer = None
-    try:
-        assert scanning.wait(5)
+
+    def queue_original_requests():
         for index in range(9):
             path = tmp_path / str(index)
             path.write_text("durable original request")
             bodies.append(path)
-        service._delivery_wakeup.set()
+
+    if bodies_already_pending:
+        queue_original_requests()
+    service.start()
+    closer = None
+    try:
+        assert scanning.wait(5), "Pending bodies starved discovery of new App replies"
+        if not bodies_already_pending:
+            queue_original_requests()
+            service._delivery_wakeup.set()
         assert full.wait(4)
         assert len(calls) == 3 and len(set(calls)) == 3  # One scan plus three replies, total four.
         closer = threading.Thread(target=service.close)
@@ -8505,3 +8597,120 @@ def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog
         service._delivery_thread.join(5)
     assert not service._delivery_thread.is_alive()
     assert len(calls) == 3  # The other six durable requests were never submitted to the executor.
+
+
+def test_completed_original_reply_uses_only_free_slot_before_due_discovery(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_store import _read_json
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    store, runtime, provider, transport = connect(ordinary)
+    held, release, scan, delivered = (threading.Event() for _ in range(4))
+    clock, active, scans = [0.0], [], []
+    lock = threading.Lock()
+    blockers = [transport.root.parent / f"held-{i}.json" for i in range(3)]
+    for path in blockers:
+        path.write_text("durable historical fixture")
+    body_paths, reconcile = transport.pending_body_paths, transport.reconcile_request
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(transport, "pending_body_paths", lambda: [*blockers, *body_paths()])
+    monkeypatch.setattr(transport, "is_recovery_path", lambda path: path in blockers)
+    monkeypatch.setattr(transport, "reconcile_app_feedback", None)
+    monkeypatch.setattr(transport.owner_attention, "has_enabled", lambda: False)
+    monkeypatch.setattr(transport.steward_reports, "pending", lambda: False)
+
+    def discover():
+        scans.append(clock[0])
+        if len(scans) > 1:
+            scan.set()
+            assert release.wait(12)
+        return []
+
+    def deliver(path):
+        if path in blockers:
+            with lock:
+                active.append(path)
+                if len(active) == 3:
+                    held.set()
+            assert release.wait(12)
+            return 0
+        result = reconcile(path)
+        if _read_json(path).get("deliveries", {}).get("terminal", {}).get("verified"):
+            delivered.set()
+        return result
+
+    monkeypatch.setattr(transport, "pending_delivery_paths", discover)
+    monkeypatch.setattr(transport, "reconcile_request", deliver)
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport,
+        profile_poller=lambda _profile, stop: stop.wait(12))
+    service.start()
+    try:
+        assert held.wait(4)
+        event = provider.event("notes-app", "only-free-slot", "Answer the original question")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        ref = identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"])
+        request = transport.core.read_request(ref)
+        turn = runtime.wait_for_turn(session_id=request["session_id"], turn_id=request["turn_id"], timeout_sec=5)
+        assert turn["status"] == "completed"
+        clock[0] = 10.0
+        service._delivery_wakeup.set()
+        assert delivered.wait(3), "Due discovery took the only free slot ahead of the completed original reply"
+        assert scan.wait(3), "Discovery did not progress after the original reply released its slot"
+        assert not release.is_set()
+        terminal = _read_json(transport.root / f"{ref}.json")["deliveries"]["terminal"]
+        assert terminal["verified"] and terminal["text"] == turn["response"]["message"]
+        assert provider.messages[terminal["attempt"]["message_ref"]]["chat_id"] == event["chat_id"]
+        assert len(store.list_sessions()) == 1
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)
+        runtime.close()
+
+
+def test_due_discovery_progresses_when_only_free_slot_keeps_retrying_a_body(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    held, release, discovered = (threading.Event() for _ in range(3))
+    clock, calls, scans = [0.0], [], []
+    lock = threading.Lock()
+    paths = [tmp_path / str(i) for i in range(4)]
+    for path in paths:
+        path.write_text("durable request")
+
+    class Pending:
+        def pending_body_paths(self):
+            return paths
+
+        def pending_delivery_paths(self):
+            scans.append(clock[0])
+            if len(scans) > 1:
+                discovered.set()
+                assert release.wait(12)
+            return []
+
+        def reconcile_request(self, path):
+            with lock:
+                calls.append(path)
+                if all(item in calls for item in paths):
+                    held.set()
+            if path != paths[-1]:
+                assert release.wait(12)
+            return 0  # The unsent fourth body remains durably pending.
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=Pending())
+    service.start()
+    try:
+        assert held.wait(4)
+        clock[0] = 10.0
+        service._delivery_wakeup.set()
+        assert discovered.wait(4), "Repeated unsent-body attempts starved due App reply discovery"
+        assert not release.is_set()
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)
