@@ -123,6 +123,26 @@ review/check results. The local owner can **Add a requirement** and read the
 canonical result. Refresh a stale view before rebasing; an unconfirmed write
 retains its operation for retry. No model starts and no check command runs.
 
+Use **Find requirements and evidence** to locate a requirement in the current
+readback, including outcomes outside the three-item preview. Search matches
+outcome titles, requirement IDs/text, Agent review notes and evidence references,
+ignoring case. Expand the matching outcome and requirement to read the original
+evidence. **Clear search** or Escape restores the collection and its open details;
+unsent drafts and unconfirmed writes remain available while filtering. The state
+totals still describe the full readback, not the matches, and a match is not
+verification. A failed source read retains its existing stale/read-only boundary.
+
+The example below locates one original evidence reference among 150 requirements
+from a disposable SQLite Goal. The Agent's uncertain review remains unverified.
+
+![Searching supporting requirements while retaining full state counts and original evidence](../assets/goal-requirement-search.png)
+
+中文：使用“查找要求与证据”搜索当前读回中的成果标题、要求 ID/正文、自查说明和
+证据引用，不区分大小写，也能找到默认三项预览之外的成果。展开命中的成果与要求
+即可读取原始证据。“清除搜索”或 Escape 恢复原列表及展开状态；未发送草稿和未确认
+写入不会被搜索隐藏。状态总数仍对应完整读回，匹配不表示核验通过。读源失败仍遵守
+已有的过期/只读边界。上图使用一次性 SQLite Goal 的 150 条合成要求，不代表真实验收。
+
 Outcome maintenance and evidence review are default, without a feature switch.
 Current storage/readback has no `enabled` switch. Every upgraded Goal uses the
 same feedback loop. An Agent review does

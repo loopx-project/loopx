@@ -245,6 +245,58 @@ try {
       await second.getByText("Unrelated met requirement", {exact: true}).waitFor();
       assert.equal(await outcomes.locator(".goal-outcome-criteria > li:visible").count(), 4,
         "Each selected outcome exposes every requirement without identity collisions");
+      // A retained collection can exceed the old per-outcome capacity. Search
+      // must reach beyond the preview without changing verification or drafts.
+      collision.outcomes.push(...[2, 3, 4].map(index => ({
+        id: `result-${index}`, owner_agent_id: "author", objective: `Retained result ${index}`, revision: 1,
+        requirements: Array.from({length: 40}, (_, i) => ({
+          ...requirement(`requirement-${i}`, `Retain source ${index}-${i} and its full explanation. 保留原始要求与证据。`, "unverified"),
+          ...(i === 39 ? {agent_review: {id: `review-${index}`, conclusion: "uncertain", basis_current: false,
+            independently_verified: false, note: `核验修订 ${index}`, evidence_refs: [`artifact:source-${index}`]}} : {}),
+        })), todo_ids: [], sources: [], work: [],
+      })));
+      await page.reload({waitUntil: "networkidle"});
+      await outcomes.waitFor();
+      const search = outcomes.getByRole("searchbox", {name: "Find requirements and evidence"});
+      const last = outcomes.locator(".goal-outcome").filter({has: page.getByRole("heading", {name: "Retained result 4", exact: true})});
+      const totalStates = await outcomes.locator(".goal-outcomes-counts").innerText();
+      assert.equal(await last.isVisible(), false, "The match starts outside the three-outcome preview");
+      await page.screenshot({path: resolve(imageDir, "requirements-default-desktop.png"), animations: "disabled"});
+      await search.fill("  ARTIFACT:SOURCE-4  ");
+      await outcomes.getByRole("status").filter({hasText: "1 of 124 requirements match"}).waitFor();
+      await last.locator(".goal-outcome-disclosure > summary").focus();
+      await page.keyboard.press("Enter");
+      assert.equal(await outcomes.locator(".goal-outcome-criteria > li:visible").count(), 1);
+      await last.locator(".goal-outcome-requirement:visible > summary").click();
+      await last.getByText("核验修订 4", {exact: false}).waitFor();
+      assert.equal(await outcomes.locator(".goal-outcomes-counts").innerText(), totalStates,
+        "Searching does not turn filtered counts into Goal acceptance or hide stale evidence");
+      await page.screenshot({path: resolve(imageDir, "requirements-search-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await search.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(imageDir, "requirements-search-narrow.png"), animations: "disabled"});
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.setViewportSize(viewport);
+      await search.fill("核验修订 3");
+      await outcomes.getByRole("status").filter({hasText: "1 of 124 requirements match"}).waitFor();
+      assert.equal(await last.isVisible(), false, "An earlier open match does not pollute the next search");
+      await search.fill("not present in any retained requirement");
+      await outcomes.getByRole("status").filter({hasText: "0 of 124 requirements match"}).waitFor();
+      await search.press("Escape");
+      assert.equal(await search.inputValue(), "");
+      assert.equal(await last.isVisible(), true, "Clearing restores previously opened outcomes");
+      assert.equal(await last.locator(".goal-outcome-criteria > li:visible").count(), 40);
+      assert.equal(await last.locator(".goal-outcome-requirement[open]").count(), 1,
+        "Filtering preserves the exact evidence disclosure");
+      await last.getByText("Add a requirement", {exact: true}).click();
+      const draft = last.getByRole("textbox");
+      await draft.fill("Keep this unsent correction");
+      await search.fill("no matching requirement");
+      assert.equal(await draft.isVisible(), true, "A search cannot conceal an unsent draft");
+      assert.equal(await draft.inputValue(), "Keep this unsent correction");
+      await outcomes.getByRole("button", {name: "Clear search", exact: true}).click();
+      assert.equal(await search.evaluate(element => element === document.activeElement), true);
+      assert.deepEqual(writes, [], "Finding requirements and evidence performs no effects");
       response = structuredClone(snapshot);
       payload.run_history.goals[0].acceptance_observation = acceptance;
       await page.reload({waitUntil: "networkidle"});
