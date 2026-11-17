@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs, {
+  appendFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -189,6 +190,298 @@ function startPythonReceiptWriter({
   });
   return { started, appended, done };
 }
+
+const PYTHON_UNRELATED_APPEND = [
+  "import sys",
+  "from pathlib import Path",
+  "from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path",
+  "runtime_root, goal_id = sys.argv[1:]",
+  "event = build_rollout_event(goal_id=goal_id, event_kind='todo_complete')",
+  "append_rollout_event(rollout_event_log_path(Path(runtime_root), goal_id), event)",
+  "print('appended', flush=True)",
+].join("\n");
+
+async function runPython(
+  t: CleanupContext,
+  script: string,
+  args: readonly string[],
+): Promise<string> {
+  const child = spawn(PYTHON, ["-c", script, ...args], {
+    cwd: REPOSITORY_ROOT,
+    env: { ...process.env, PYTHONPATH: REPOSITORY_ROOT },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => {
+    if (child.exitCode === null) child.kill();
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  await once(child, "close");
+  assert.equal(child.exitCode, 0, `Python writer failed: ${stderr}`);
+  return stdout;
+}
+
+/** One receipt row whose identity is intact and whose payload may be damaged. */
+function receiptRow(turnId: string, summary = `receipt ${turnId}`): string {
+  return JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    agent_id: scope.agent_id,
+    run_id: turnId,
+    summary,
+  });
+}
+
+function receiptLogPath(runtimeRoot: string): string {
+  return join(runtimeRoot, "goals", scope.goal_id, "rollout-event-log.jsonl");
+}
+
+test("a committed successor stays superseding after its early field is damaged", async (t) => {
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      const runtimeRoot = await tempRuntime(t);
+      await appendReceipt(runtimeRoot, "turn-followup-1");
+      const path = receiptLogPath(runtimeRoot);
+      // The successor's `details` value meets an undecodable byte, so its
+      // identity members come later in the serialized row than the damage.
+      await appendFile(path, Buffer.concat([
+        Buffer.from(
+          `{"agent_id":"${scope.agent_id}","details":{"command":"quota",` +
+          `"quota_command":"should-run","todo_id":"`,
+        ),
+        Buffer.from([0xff]),
+        Buffer.from(
+          `"},"event_id":"damaged","event_kind":"quota_should_run",` +
+          `"goal_id":"${scope.goal_id}","recorded_at":"2026-08-27T06:30:00Z",` +
+          `"run_id":"turn-followup-2","schema_version":"loopx_rollout_event_v0",` +
+          `"status":"normal_run","summary":"damaged successor"}\n`,
+        ),
+      ]));
+      const statePath = schedulerStatePath(runtimeRoot, {
+        goalId: scope.goal_id,
+        agentId: scope.agent_id,
+        surface: scope.surface,
+        stateKey: scope.state_key,
+      });
+      const before = await readFile(path);
+      const result = await evaluateSchedulerHeartbeatFollowup(
+        followupRequest(runtimeRoot, operation),
+      );
+      assert.equal(
+        result.error_code,
+        "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE",
+      );
+      assert.equal(result.scheduler_state_mutated, false);
+      assert.deepEqual(await readFile(path), before);
+      await assert.rejects(readFile(statePath, "utf8"));
+    });
+  }
+});
+
+test("only an ambiguous receipt of this scope fails closed", async (t) => {
+  const rows: readonly {
+    row: string;
+    damaged: boolean;
+    stale: boolean;
+    why: string;
+  }[] = [
+    {
+      // Two different Turn ids cannot both name what the row admitted.
+      row:
+        `{"agent_id":"${scope.agent_id}","event_kind":"quota_should_run",` +
+        `"goal_id":"${scope.goal_id}","run_id":"turn-followup-2",` +
+        `"schema_version":"loopx_rollout_event_v0","run_id":"turn-followup-3"}`,
+      damaged: false,
+      stale: true,
+      why: "same-scope receipt with two Turn ids",
+    },
+    {
+      // A readable Turn id beside an unreadable one is still ambiguous.
+      row:
+        `{"agent_id":"${scope.agent_id}","event_kind":"quota_should_run",` +
+        `"goal_id":"${scope.goal_id}","run_id":"turn-followup-2",` +
+        `"schema_version":"loopx_rollout_event_v0","run_id":"turn-`,
+      damaged: true,
+      stale: true,
+      why: "same-scope receipt with a damaged second Turn id",
+    },
+    {
+      // A duplicated Turn in another Agent's row proves nothing here.
+      row:
+        `{"agent_id":"other-agent","event_kind":"quota_should_run",` +
+        `"goal_id":"${scope.goal_id}","run_id":"turn-followup-2",` +
+        `"schema_version":"loopx_rollout_event_v0","run_id":"turn-followup-3"}`,
+      damaged: false,
+      stale: false,
+      why: "another Agent's duplicated Turn",
+    },
+    {
+      // A validation diagnostic is not a heartbeat receipt of this scope.
+      row:
+        `{"agent_id":"${scope.agent_id}","event_kind":"validation",` +
+        `"goal_id":"${scope.goal_id}","run_id":"turn-followup-2",` +
+        `"schema_version":"loopx_rollout_event_v0","run_id":"turn-followup-3"}`,
+      damaged: false,
+      stale: false,
+      why: "a validation row with a duplicated Turn",
+    },
+  ];
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      for (const { row, damaged, stale, why } of rows) {
+        const runtimeRoot = await tempRuntime(t);
+        await appendReceipt(runtimeRoot, "turn-followup-1");
+        const path = receiptLogPath(runtimeRoot);
+        await appendFile(path, Buffer.concat([
+          Buffer.from(row),
+          ...(damaged ? [Buffer.from([0xff])] : []),
+          Buffer.from('"}\n'),
+        ]));
+        const before = await readFile(path);
+        const statePath = schedulerStatePath(runtimeRoot, {
+          goalId: scope.goal_id,
+          agentId: scope.agent_id,
+          surface: scope.surface,
+          stateKey: scope.state_key,
+        });
+        const result = await evaluateSchedulerHeartbeatFollowup(
+          followupRequest(runtimeRoot, operation),
+        );
+        if (stale) {
+          assert.equal(
+            result.error_code,
+            "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE",
+            why,
+          );
+          assert.equal(result.scheduler_state_mutated, false, why);
+          assert.deepEqual(await readFile(path), before, why);
+          await assert.rejects(readFile(statePath, "utf8"), why);
+        } else {
+          assert.equal(result.ok, true, why);
+          assert.equal(result.scheduler_state_mutated, true, why);
+          assert.deepEqual(await readFile(path), before, why);
+          const persisted = JSON.parse(await readFile(statePath, "utf8"));
+          assert.equal(persisted.heartbeat_commit.operation, operation, why);
+        }
+      }
+    });
+  }
+});
+
+test("a damaged audit row keeps its nested diagnostic Turn out of scope", async (t) => {
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      const runtimeRoot = await tempRuntime(t);
+      await appendReceipt(runtimeRoot, "turn-followup-1");
+      const path = receiptLogPath(runtimeRoot);
+      // The audit row is a quota receipt without a top-level Turn.  A damaged
+      // display field before `details` must not let recovery read the nested
+      // diagnostic `run_id` as a committed successor.
+      await appendFile(path, Buffer.concat([
+        Buffer.from(
+          `{"agent_id":"${scope.agent_id}","note":"`,
+        ),
+        Buffer.from([0xff]),
+        Buffer.from(
+          `","details":{"run_id":"turn-diagnostic-nested"},` +
+          `"event_kind":"quota_should_run","goal_id":"${scope.goal_id}",` +
+          `"status":"normal_run","schema_version":"loopx_rollout_event_v0"}\n`,
+        ),
+      ]));
+      const before = await readFile(path);
+      const result = await evaluateSchedulerHeartbeatFollowup(
+        followupRequest(runtimeRoot, operation),
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.scheduler_state_mutated, true);
+      assert.deepEqual(await readFile(path), before);
+      const statePath = schedulerStatePath(runtimeRoot, {
+        goalId: scope.goal_id,
+        agentId: scope.agent_id,
+        surface: scope.surface,
+        stateKey: scope.state_key,
+      });
+      const persisted = JSON.parse(await readFile(statePath, "utf8"));
+      assert.equal(persisted.heartbeat_commit.operation, operation);
+    });
+  }
+});
+
+test("a torn successor stays uncommitted after its append is repaired", async (t) => {
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      const runtimeRoot = await tempRuntime(t);
+      await appendReceipt(runtimeRoot, "turn-followup-1");
+      const path = receiptLogPath(runtimeRoot);
+      // A writer that never finished the row leaves a torn prefix; the next
+      // append drops it before writing its own row.
+      await appendFile(path, Buffer.from(
+        `{"agent_id":"${scope.agent_id}","details":{"turn_instance_id":` +
+        `"turn-followup-2"},"event_kind":"quota_should_run",` +
+        `"goal_id":"${scope.goal_id}","run_id":"turn-followup-2",` +
+        `"schema_version":"loopx_rollout_event_v0"`,
+      ));
+      await runPython(t, PYTHON_UNRELATED_APPEND, [runtimeRoot, scope.goal_id]);
+      const repaired = await readFile(path);
+      assert.ok(!repaired.includes("turn-followup-2"), inspected(repaired));
+
+      const result = await evaluateSchedulerHeartbeatFollowup(
+        followupRequest(runtimeRoot, operation),
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.scheduler_state_mutated, true);
+      const statePath = schedulerStatePath(runtimeRoot, {
+        goalId: scope.goal_id,
+        agentId: scope.agent_id,
+        surface: scope.surface,
+        stateKey: scope.state_key,
+      });
+      const persisted = JSON.parse(await readFile(statePath, "utf8"));
+      assert.equal(persisted.heartbeat_commit.operation, operation);
+    });
+  }
+});
+
+function inspected(bytes: Buffer): string {
+  return bytes.toString("hex");
+}
+
+test("a completed row missing only its newline stays uncommitted after repair", async (t) => {
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      const runtimeRoot = await tempRuntime(t);
+      await appendReceipt(runtimeRoot, "turn-followup-1");
+      const path = receiptLogPath(runtimeRoot);
+      // The row's own bytes are complete JSON; only its terminating newline is
+      // missing, so the append owner drops the uncommitted prefix.
+      await appendFile(path, Buffer.from(receiptRow("turn-followup-2")));
+      await runPython(t, PYTHON_UNRELATED_APPEND, [runtimeRoot, scope.goal_id]);
+      const repaired = await readFile(path);
+      assert.ok(!repaired.includes("turn-followup-2"), inspected(repaired));
+
+      const result = await evaluateSchedulerHeartbeatFollowup(
+        followupRequest(runtimeRoot, operation),
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.scheduler_state_mutated, true);
+      const statePath = schedulerStatePath(runtimeRoot, {
+        goalId: scope.goal_id,
+        agentId: scope.agent_id,
+        surface: scope.surface,
+        stateKey: scope.state_key,
+      });
+      const persisted = JSON.parse(await readFile(statePath, "utf8"));
+      assert.equal(persisted.heartbeat_commit.operation, operation);
+    });
+  }
+});
 
 test("receipt append cannot split freshness from ACK or host-failure persistence", async (t) => {
   for (const operation of OPERATIONS) {

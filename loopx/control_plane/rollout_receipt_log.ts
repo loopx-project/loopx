@@ -11,7 +11,7 @@ import { relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { requireNonEmptyString } from "./runtime_decode.ts";
+import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
 import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
@@ -32,6 +32,15 @@ export interface GoalRolloutEventSnapshot {
   readonly runtimeRoot: string;
   readonly goalId: string;
   readonly events: readonly JsonObject[];
+  /** Physical line of each event, in `events` order. */
+  readonly eventLines: readonly number[];
+  /** Intact members of damaged lines, with their line numbers. */
+  readonly malformedLines: readonly Readonly<{
+    line: number;
+    members: readonly (readonly [string, unknown])[];
+    /** Identity members the damaged line contained but could not read. */
+    unreadable: readonly string[];
+  }>[];
   readonly firstStrictErrorLine: number | null;
 }
 
@@ -81,10 +90,14 @@ export async function readGoalRolloutEventSnapshot(
   goalId: string,
 ): Promise<GoalRolloutEventSnapshot | null> {
   const snapshot = await readReceiptLogSnapshot(
-    goalRolloutEventLogPath(runtimeRoot, goalId), ROLLOUT_EVENT_SCHEMA_VERSION,
+    goalRolloutEventLogPath(runtimeRoot, goalId),
+    ROLLOUT_EVENT_SCHEMA_VERSION,
+    ADMISSION_IDENTITY_MEMBERS,
   );
   return snapshot === null ? null : {
     runtimeRoot, goalId, events: snapshot.records,
+    eventLines: snapshot.recordLines,
+    malformedLines: snapshot.malformedLines,
     firstStrictErrorLine: snapshot.firstErrorLine,
   };
 }
@@ -154,44 +167,158 @@ export async function readGoalHeartbeatReceipts(
   );
 }
 
+/** A receipt without an exact Goal instance belongs to the legacy goal scope. */
+function receiptMatchesGoalRef(event: JsonObject, goalRef: JsonObject | null): boolean {
+  if (goalRef === null) return !Object.hasOwn(event, "goal_ref");
+  const eventGoalRef = jsonObject(event.goal_ref);
+  return eventGoalRef !== null &&
+    eventGoalRef.goal_id === goalRef.goal_id &&
+    eventGoalRef.goal_instance_id === goalRef.goal_instance_id;
+}
+
+/**
+ * One qualified receipt view for both originating and superseding reads.
+ *
+ * The originating Turn and every candidate successor must come from the same
+ * set: a heartbeat receipt with a real Turn identity in this Goal/Agent and
+ * this exact Goal instance scope. Diagnostic audit rows and rows from another
+ * Goal lifetime therefore cannot renew or retire this transaction.
+ */
+function scopedHeartbeatReceipts(
+  snapshot: GoalRolloutEventSnapshot,
+  goalId: string,
+  agentId: string,
+  goalRef: JsonObject | null,
+): JsonObject[] {
+  if (snapshot.goalId !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not belong to the requested goal",
+      "rollout_event_snapshot_scope_mismatch",
+    );
+  }
+  return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId).filter(
+    (event) => receiptMatchesGoalRef(event, goalRef),
+  );
+}
+
+const ADMISSION_IDENTITY_MEMBERS = [
+  "schema_version",
+  "event_kind",
+  "goal_id",
+  "agent_id",
+  "run_id",
+  "goal_ref",
+] as const;
+
+/**
+ * What a finished row still proves about the Turn that superseded this receipt.
+ *
+ * The row's commit fact is its own writer's newline: the log owner withdraws
+ * every member of a row a *later* append had to terminate, so a torn prefix
+ * cannot manufacture an admission.  What remains is whether the row still
+ * carries one identity.  A duplicated identity member proves nothing, so a
+ * stray write cannot invent a successor.  A row whose display field was
+ * corrupted still proves the Turn its writer committed, and a row that is
+ * demonstrably a receipt of this scope but whose Turn bytes are unreadable
+ * proves that *some* Turn was admitted: it is not evidence for the old receipt.
+ */
+type CommittedSuccessor =
+  | { readonly kind: "superseded"; readonly runId: string }
+  | { readonly kind: "unattributed" };
+
+function committedSuccessor(
+  damaged: Readonly<{
+    members: readonly (readonly [string, unknown])[];
+    unreadable: readonly string[];
+  }>,
+  goalId: string,
+  agentId: string,
+  goalRef: JsonObject | null,
+): CommittedSuccessor | null {
+  const fields = new Map<string, unknown>();
+  // Whether the row carries more than one Turn identity.  Its scope is checked
+  // first: an ambiguous Turn in somebody else's row must not retire this
+  // transaction, and neither must a diagnostic row that is not a receipt at all.
+  let ambiguousTurn = false;
+  for (const [key, value] of damaged.members) {
+    if (
+      fields.has(key) &&
+      (ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key)
+    ) {
+      if (key !== "run_id") return null;
+      if (fields.get(key) !== value) ambiguousTurn = true;
+    }
+    fields.set(key, value);
+  }
+  for (const key of damaged.unreadable) {
+    if (!(ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key)) continue;
+    // Only the Turn id may be unknown: without the receipt kind or its scope the
+    // row cannot be attributed to this transaction at all.
+    if (key !== "run_id") return null;
+    if (fields.has("run_id")) ambiguousTurn = true;
+  }
+  if (fields.get("schema_version") !== ROLLOUT_EVENT_SCHEMA_VERSION) return null;
+  if (fields.get("event_kind") !== HEARTBEAT_RECEIPT_EVENT_KIND) return null;
+  if (fields.get("goal_id") !== goalId) return null;
+  if (fields.get("agent_id") !== agentId) return null;
+  if (goalRef === null) {
+    if (fields.has("goal_ref")) return null;
+  } else {
+    const eventGoalRef = jsonObject(fields.get("goal_ref"));
+    if (
+      eventGoalRef === null ||
+      eventGoalRef.goal_id !== goalRef.goal_id ||
+      eventGoalRef.goal_instance_id !== goalRef.goal_instance_id
+    ) return null;
+  }
+  // The row now proves it is one of this scope's heartbeat receipts.  Only then
+  // does an unknown Turn mean "somebody else's turn superseded mine".
+  if (ambiguousTurn) return { kind: "unattributed" };
+  const runId = fields.get("run_id");
+  if (typeof runId === "string" && runId.trim().length > 0) {
+    return { kind: "superseded", runId };
+  }
+  return damaged.unreadable.includes("run_id") ? { kind: "unattributed" } : null;
+}
+
 export async function heartbeatReceiptStatus(params: {
   runtimeRoot: string;
   goalId: string;
   agentId: string;
   turnInstanceId: string;
+  goalRef?: JsonObject | null;
 }): Promise<HeartbeatReceiptStatus> {
+  const goalRef = params.goalRef ?? null;
   const snapshot = await readGoalRolloutEventSnapshot(
     params.runtimeRoot,
     params.goalId,
   );
-  const receipts = goalHeartbeatReceiptsFromSnapshot(
+  if (snapshot === null) return "missing";
+  const receipts = scopedHeartbeatReceipts(
     snapshot,
     params.goalId,
     params.agentId,
+    goalRef,
   );
-  if (snapshot === null || receipts === null) return "missing";
-  const firstReceipt = receipts.find(
-    (event) => event.run_id === params.turnInstanceId,
+  const receiptLines = snapshot.events
+    .map((event, index) => ({ event, line: snapshot.eventLines[index] }))
+    .filter(({ event }) => receipts.includes(event));
+  const firstIndex = receiptLines.findIndex(
+    ({ event }) => event.run_id === params.turnInstanceId,
   );
-  const firstMatch = firstReceipt === undefined
-    ? -1
-    : snapshot.events.indexOf(firstReceipt);
-  if (firstMatch < 0) return "missing";
-  return snapshot.events.slice(firstMatch + 1).some((event) => {
-    if (
-      event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
-      event.goal_id !== params.goalId ||
-      event.agent_id !== params.agentId
-    ) return false;
-    if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
-      return event.run_id !== params.turnInstanceId;
-    }
-    const details = event.details;
-    return event.status === "normal_run" &&
-      typeof details === "object" && details !== null && !Array.isArray(details) &&
-      (details as JsonObject).ok === true &&
-      (details as JsonObject).should_run === true;
-  })
-    ? "stale"
-    : "fresh";
+  if (firstIndex < 0) return "missing";
+  const originatingLine = receiptLines[firstIndex].line;
+  const laterReceipt = receiptLines.slice(firstIndex + 1).some(
+    ({ event }) => event.run_id !== params.turnInstanceId,
+  );
+  const laterAdmission = snapshot.malformedLines.some((damaged) => {
+    if (damaged.line <= originatingLine) return false;
+    const admitted = committedSuccessor(
+      damaged, params.goalId, params.agentId, goalRef,
+    );
+    if (admitted === null) return false;
+    return admitted.kind === "unattributed" ||
+      admitted.runId !== params.turnInstanceId;
+  });
+  return laterReceipt || laterAdmission ? "stale" : "fresh";
 }
