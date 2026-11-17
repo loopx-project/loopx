@@ -417,7 +417,9 @@ for (const native of [false, true]) {
     const commit = prepareCoordinationProjectionCommit({goal_id: head.goal_id,
       operation_id: "next-mutation", expected_provider_revision: initial.provider_revision,
       projection: reopened.head, mutations: [{kind: "todo_upsert", todo: changed}]});
-    assert.deepEqual(commit.next_projection.todo_read_model, coordinationTodoReadModel([changed], schema));
+    assert.deepEqual(commit.next_projection.todo_read_model, {
+      ...head.todo_read_model, records_sha256: canonicalAuthoritySha256([changed]),
+    }, "an ordinary edit must keep the exact persisted field declaration");
     assert.equal((await store.commitAuthority(commit)).status, "applied");
     const updated = await listLocalCoordinationTodos(request, {createStore});
     assert.equal(updated.status, "loaded");
@@ -489,6 +491,10 @@ for (const native of [false, true]) {
 // fixture and its registered additions, independently of today's field list.
 const preReceiptFields = [...previousReleaseFields];
 preReceiptFields.splice(preReceiptFields.indexOf("completion_turn_key") + 1, 0, "completion_result");
+const releasedBeforeScopedMonitors = [...preReceiptFields];
+releasedBeforeScopedMonitors.splice(
+  releasedBeforeScopedMonitors.indexOf("completion_recovery") + 1, 0, "completion_receipt_id",
+);
 for (const native of [false, true]) {
   test(`pre-receipt ${native ? "domain" : "canonical"} head remains readable and upgrades on commit`, () => {
     const fields = preReceiptFields.filter(field =>
@@ -513,6 +519,52 @@ for (const native of [false, true]) {
     validateCoordinationTodoReadModel(commit.next_projection, head.goal_id);
     assert.equal(((commit.next_projection.todo_read_model as JsonObject).contract_fields as string[])
       .includes("completion_receipt_id"), true);
+  });
+}
+
+for (const native of [false, true]) {
+  test(`released ${native ? "domain" : "canonical"} manifest changes only when the mutation uses a newer field`, () => {
+    const fields = releasedBeforeScopedMonitors.filter(field =>
+      !native || !historicalFields.projection_metadata_fields.includes(field));
+    const schema = native ? TODO_DOMAIN_READ_RECORD_SCHEMA : TODO_CANONICAL_READ_RECORD_SCHEMA;
+    const monitor: JsonObject = {
+      schema_version: native ? TODO_DOMAIN_ITEM_SCHEMA : "todo_item_v0",
+      todo_id: "todo_monitor", role: "agent", status: "open", done: false,
+      text: "Observe the assigned run", archive_state: "active",
+      task_class: "continuous_monitor",
+      ...(native ? {} : {source_section: "Agent Todo"}),
+    };
+    const head = {
+      goal_id: "monitor-goal", todos: [monitor], leases: [],
+      todo_read_model: {
+        schema_version: schema, contract_fields: fields, todo_count: 1,
+        records_sha256: canonicalAuthoritySha256([monitor]),
+      },
+    };
+    const noteEdit = {...monitor, note: "Keep the existing watch"};
+    const edited = reduceCoordinationProjection(head, head.goal_id, [{kind: "todo_upsert", todo: noteEdit}]);
+    assert.deepEqual(edited.todo_read_model, {
+      ...head.todo_read_model, records_sha256: canonicalAuthoritySha256([noteEdit]),
+    });
+
+    const observation = {
+      ...noteEdit, material_change_scope: "case-a/run-1",
+      material_change_scope_generations: {"case-a/run-1": 1},
+    };
+    const observed = reduceCoordinationProjection(edited, head.goal_id, [{kind: "todo_upsert", todo: observation}]);
+    const model = validateCoordinationTodoReadModel(observed, head.goal_id);
+    assert.deepEqual(observed.todos, [observation]);
+    assert.deepEqual(model.contract_fields, [
+      ...fields.slice(0, fields.indexOf("material_change_generation") + 1),
+      "material_change_scope", "material_change_scope_generations",
+      ...fields.slice(fields.indexOf("material_change_generation") + 1),
+    ]);
+    const cleared = reduceCoordinationProjection(observed, head.goal_id, [{
+      kind: "todo_upsert", todo: noteEdit,
+      clear_fields: ["material_change_scope", "material_change_scope_generations"],
+    }]);
+    assert.deepEqual(validateCoordinationTodoReadModel(cleared, head.goal_id).contract_fields, model.contract_fields,
+      "once committed, a newer field declaration does not downgrade implicitly");
   });
 }
 
