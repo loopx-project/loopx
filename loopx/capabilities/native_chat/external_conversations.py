@@ -1129,7 +1129,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         continuation = self._checked_metadata_review(session, turn, observe_native=True)
         if continuation is None:
             return None
-        from ...chat_agent import COLLABORATION_INPUTS_GUIDANCE
+        from ...chat import COLLABORATION_INPUTS_GUIDANCE
 
         return (
             "Core admitted ONE text-only FORMAT REVIEW of an already completed original result. "

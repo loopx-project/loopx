@@ -24,9 +24,10 @@ from ...chat import (
     CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG,
     VisibleResponseStreamFilter,
     _review_openings,
+    _turn_prompt,
     parse_agent_response,
 )
-from ...chat_agent import CodexChatAgentError, _turn_prompt
+from ...chat_agent import CodexChatAgentError
 from .antigravity_activity import AntigravityActivity
 from .manager_input import manager_input_matches
 
