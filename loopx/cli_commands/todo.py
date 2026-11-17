@@ -15,6 +15,16 @@ from ..control_plane.coordination.local_authority import (
     local_authority_is_promoted,
 )
 from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.quota.effect_program import SettlementBindingKind
+from ..control_plane.quota.settlement import (
+    SettlementFailureKind,
+    SettlementIdentity,
+    read_heartbeat_settlement,
+    settlement_result_payload,
+)
+from ..control_plane.quota.heartbeat_receipt import (
+    bind_replan_successor_heartbeat_receipt,
+)
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     capture_first_party_host_goal_ref,
@@ -23,11 +33,6 @@ from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..control_plane.goals.task_planning import (
     build_task_planning_packet,
     render_task_planning_packet,
-)
-from ..control_plane.quota.settlement import (
-    SettlementIdentity,
-    read_heartbeat_settlement,
-    settlement_result_payload,
 )
 from ..control_plane.todos.completion_result import read_completion_result
 from ..control_plane.todos.list_readback import list_goal_todos
@@ -274,35 +279,8 @@ def handle_todo_command(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
             )
-            successor_settlement = None
-            if replan_obligation_id and args.turn_instance_id:
-                runtime_root = resolve_runtime_root(
-                    load_registry(registry_path), runtime_root_arg
-                )
-                successor_settlement = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.claimed_by,
-                    todo_id=None,
-                    turn_instance_id=args.turn_instance_id,
-                    resolve_original_binding=True,
-                    registry_path=registry_path,
-                    goal_ref=goal_ref,
-                )
-                if successor_settlement is None or successor_settlement.identity.value is None:
-                    raise ValueError(
-                        "replan successor requires the original admitted Turn binding"
-                    )
-                if successor_settlement.identity.failure is not None:
-                    raise ValueError(successor_settlement.identity.failure.reason)
-                selected = (successor_settlement.semantic_replan_guard or {}).get(
-                    "selected_obligation_id"
-                )
-                if selected != replan_obligation_id:
-                    raise ValueError(
-                        "replan successor does not match the original Turn obligation"
-                    )
-            payload = add_goal_todo(
+            add_todo = partial(
+                add_goal_todo,
                 operation_id=args.operation_id,
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -350,8 +328,81 @@ def handle_todo_command(
                     if value is not None
                 },
                 **_todo_path_args(args),
-                dry_run=bool(args.dry_run),
             )
+            successor_settlement = None
+            runtime_root = None
+            if replan_obligation_id and args.turn_instance_id and not args.dry_run:
+                # A failed Todo validation must not leave an otherwise ordinary
+                # Turn receipt irreversibly bound to a successor that was never
+                # created. Preview through the same mutation owner first.
+                preview = add_todo(dry_run=True)
+                if preview.get("ok") is not True:
+                    raise ValueError(
+                        str(
+                            preview.get("error")
+                            or "replan successor could not be validated"
+                        )
+                    )
+                runtime_root = resolve_runtime_root(
+                    load_registry(registry_path), runtime_root_arg
+                )
+                successor_settlement = read_heartbeat_settlement(
+                    runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.claimed_by,
+                    todo_id=None,
+                    turn_instance_id=args.turn_instance_id,
+                    resolve_original_binding=True,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
+                )
+                if (
+                    successor_settlement is not None
+                    and successor_settlement.identity.value is None
+                    and successor_settlement.identity.failure is not None
+                    and successor_settlement.identity.failure.kind
+                    is SettlementFailureKind.RECEIPT_UNBOUND
+                ):
+                    bind_replan_successor_heartbeat_receipt(
+                        runtime_root,
+                        goal_id=args.goal_id,
+                        agent_id=args.claimed_by,
+                        turn_instance_id=args.turn_instance_id,
+                        replan_obligation_id=replan_obligation_id,
+                        goal_ref=goal_ref,
+                    )
+                    successor_settlement = read_heartbeat_settlement(
+                        runtime_root,
+                        goal_id=args.goal_id,
+                        agent_id=args.claimed_by,
+                        todo_id=None,
+                        turn_instance_id=args.turn_instance_id,
+                        resolve_original_binding=True,
+                        registry_path=registry_path,
+                        goal_ref=goal_ref,
+                    )
+                if successor_settlement is None or successor_settlement.identity.value is None:
+                    raise ValueError(
+                        "replan successor requires the original admitted Turn binding"
+                    )
+                if successor_settlement.identity.failure is not None:
+                    raise ValueError(successor_settlement.identity.failure.reason)
+                identity = successor_settlement.identity.value
+                if (
+                    identity.binding_kind is not SettlementBindingKind.AUTONOMOUS_REPLAN
+                    or identity.replan_obligation_id != replan_obligation_id
+                ):
+                    raise ValueError(
+                        "replan successor has a different settlement identity"
+                    )
+                selected = (successor_settlement.semantic_replan_guard or {}).get(
+                    "selected_obligation_id"
+                )
+                if selected != replan_obligation_id:
+                    raise ValueError(
+                        "replan successor does not match the original Turn obligation"
+                    )
+            payload = add_todo(dry_run=bool(args.dry_run))
             if replan_obligation_id and payload.get("ok"):
                 payload["replan_transition"] = {
                     "schema_version": "replan_successor_transition_v0",
@@ -365,6 +416,7 @@ def handle_todo_command(
                     if successor_settlement is None:
                         payload["host_action"] = "end_current_heartbeat"
                     else:
+                        assert runtime_root is not None
                         identity = successor_settlement.identity.value
                         assert identity is not None
                         payload["settlement_identity"] = identity.as_dict()

@@ -1913,7 +1913,60 @@ class ChatRuntimeController:
                         execution_context = execution_guidance(self.store.load_turn(session_id, turn_id)) + "\nFresh scoped evidence:\n" + json.dumps(context, ensure_ascii=False)
                     if execution_ended():
                         return
-                    response = adapter.goal_driver.run(native_command, event_sink, execution_context=execution_context)
+                    on_resume_activated = None
+                    loopx_request = current_turn.get("loopx_request")
+                    delegation_wake = (
+                        isinstance(loopx_request, Mapping)
+                        and loopx_request.get("operation") == "wake"
+                    )
+                    registry_path = self.registry_path
+                    if (
+                        native_command.operation == "resume"
+                        and not delegation_wake
+                        and registry_path is not None
+                    ):
+                        from .agent_registry import load_goal_from_registry
+                        from .control_plane.goals.activation_service import (
+                            GoalActivationState,
+                            goal_activation_state,
+                            set_goal_activation_state,
+                        )
+
+                        registered_goal = load_goal_from_registry(
+                            registry_path, session["goal_id"]
+                        )
+                        if (
+                            registered_goal is not None
+                            and goal_activation_state(registered_goal)
+                            is GoalActivationState.ACTIVE
+                        ):
+                            def record_owner_resume() -> None:
+                                activation = set_goal_activation_state(
+                                    registry_path=registry_path,
+                                    goal_id=session["goal_id"],
+                                    state="active",
+                                    reason="Explicit Codex Goal resume",
+                                    actor_kind="owner",
+                                    owner_resume_action=True,
+                                    execute=True,
+                                )
+                                if not activation.get("ok"):
+                                    raise CodexChatAgentError(
+                                        str(
+                                            activation.get("error")
+                                            or "LoopX owner resume epoch could not be recorded"
+                                        ),
+                                        error_code="goal_owner_resume_write_failed",
+                                        gate=None,
+                                    )
+
+                            on_resume_activated = record_owner_resume
+                    response = adapter.goal_driver.run(
+                        native_command,
+                        event_sink,
+                        execution_context=execution_context,
+                        on_resume_activated=on_resume_activated,
+                    )
                 finally:
                     if execution_lock is not None:
                         execution_lock.__exit__(None, None, None)
