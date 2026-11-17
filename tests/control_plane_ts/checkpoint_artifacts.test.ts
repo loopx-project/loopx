@@ -294,7 +294,8 @@ test("replan capture selection requires the original admitted identity and grant
   const quota = {ok: true, goal_id: "fixture-goal", effective_action: "autonomous_replan_required",
     replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "replan_required", obligation_id: id},
     heartbeat_receipt: {status: "committed", turn_instance_id: turn, settlement_identity: identity}};
-  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    allow_legacy_source: true};
   const selected = await checkpointArtifacts(request);
   assert.equal(selected.capture, true);
   assert.equal(selected.obligation_id, id);
@@ -329,7 +330,8 @@ test("receipt-owned replan settlement returns to its original writer without adm
       obligation_id: id, settlement_only: true},
     heartbeat_receipt: {status: "replayed", turn_instance_id: turn, semantic_replan_obligation_id: id,
       settlement_identity: identity}};
-  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    allow_legacy_source: true};
   for (const decision of ["settlement_pending", "successor_transition_recorded", "vision_outcome_checkpoint_required"]) {
     const before = structuredClone(quota);
     assert.deepEqual(await checkpointArtifacts({...request, quota: {...quota,
@@ -363,7 +365,8 @@ test("a bound selection with explicit closeout is released; binding alone preser
     replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "replan_required", obligation_id: id},
     heartbeat_receipt: {status: "upgraded", turn_instance_id: turn, event_id: "fixture-event",
       closeout_required: true, semantic_replan_obligation_id: id, settlement_identity: identity}};
-  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    allow_legacy_source: true};
   assert.deepEqual(await checkpointArtifacts(request), {
     capture: false, reason: "turn_closeout_pending", execution_authority_granted: false,
   });
@@ -392,7 +395,8 @@ test("committed semantic replan can capture before work selection without invent
     replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "replan_required", obligation_id: id},
     heartbeat_receipt: {status: "committed", turn_instance_id: turn, event_id: "fixture-event",
       semantic_replan_obligation_id: id, settlement_binding_owed: true}};
-  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn};
+  const request = {action: "select_replan", quota, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_instance_id: turn,
+    allow_legacy_source: true};
   const before = structuredClone(quota);
   assert.deepEqual(await checkpointArtifacts(request), {
     capture: true, obligation_id: id, execution_authority_granted: false,

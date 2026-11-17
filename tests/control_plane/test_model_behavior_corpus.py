@@ -160,6 +160,8 @@ def test_corpus_covers_matrix_retained_counterfactual_and_ablation() -> None:
 
     result = run_model_behavior_corpus(corpus, actor=_actor, repeats=3, seed=7)
 
+    for case in corpus["cases"]:
+        assert case["candidate_packet"]["schema_version"] == "loopx_turn_envelope_v0"
     assert result["case_count"] == len(STATE_MATRIX["cases"]) + 3
     assert result["all_cases_passed"] is True
     assert result["corpus_gate_passed"] is True
@@ -221,6 +223,16 @@ def test_retained_complete_capture_reaches_both_arms_without_reprojection(monkey
     assert result["corpus_gate_passed"] is True
     assert result["promotion_eligible"] is False
     assert json.dumps(packet, sort_keys=True) == before
+
+    calls = []
+    damaged = build_model_behavior_corpus(packet, candidate_ablations=[{
+        "case_id": "complete-delivery-ablation",
+        "path": "interaction_contract.agent_channel.delivery_allowed",
+    }])
+    rejected = run_model_behavior_corpus(damaged, actor=lambda request: calls.append(request), repeats=2)
+    assert rejected["all_cases_passed"] is True
+    assert all(run["status"] == "fail_closed" for run in rejected["cases"][0]["runs"])
+    assert calls == [] and json.dumps(packet, sort_keys=True) == before
 
 
 def test_raw_quota_corpus_retains_its_existing_historical_control() -> None:

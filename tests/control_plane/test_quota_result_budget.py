@@ -93,6 +93,7 @@ def test_result_capture_rejects_public_or_symlink_root(tmp_path, symlink):
 
 
 @pytest.mark.parametrize("value", ["reader.json", r"C:\private\result.reader.json"])
+@pytest.mark.skipif(os.name != "posix", reason="Simulates a missing POSIX identity provider")
 def test_reference_without_posix_identity_fails_structurally_before_open(monkeypatch, value):
     from loopx.control_plane.turn_driver import decision_capture
 
@@ -122,6 +123,7 @@ def test_failed_capture_omits_large_durable_event_and_preserves_receipt(tmp_path
     assert json.loads(Path(view["json_path"]).read_text(encoding="utf-8"))["quota_event"] == payload["quota_event"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Simulates a missing POSIX identity provider")
 def test_large_result_without_getuid_preserves_private_boundary(tmp_path, monkeypatch):
     from loopx.control_plane.turn_driver import decision_capture
 

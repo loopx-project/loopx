@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_source_fixture
+from canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
 from loopx.cli import main
 from loopx.control_plane.agents.identity import build_quota_agent_identity
 from loopx.control_plane.quota.error_codes import (
@@ -38,9 +38,12 @@ def _write_state(project: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("envelope_flag", [False, True])
 def test_selected_registry_missing_roster_returns_typed_public_recovery(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch, provider: str, envelope_flag: bool,
 ) -> None:
     project = tmp_path / "project"
     global_project = tmp_path / "global-project"
@@ -69,9 +72,9 @@ def test_selected_registry_missing_roster_returns_typed_public_recovery(
         registered_agents=[AGENT_ID],
     )
 
-    initialize_canonical_source_fixture(
-        runtime_root, GOAL_ID, state_path=project_state_path(project, GOAL_ID), provider="sqlite",
-    )
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID,
+        state_path=project_state_path(project, GOAL_ID), provider=provider)
 
     exit_code = main(
         [
@@ -83,6 +86,7 @@ def test_selected_registry_missing_roster_returns_typed_public_recovery(
             str(runtime_root),
             "quota",
             "should-run",
+            *(["--turn-envelope"] if envelope_flag else []),
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -104,6 +108,8 @@ def test_selected_registry_missing_roster_returns_typed_public_recovery(
     assert "selected registry" in payload["recommended_action"]
     assert "--agent-id" in payload["recommended_action"]
     assert "verbose_debug" not in payload
+    assert "contract_binding" not in payload and "interaction_contract" not in payload
+    assert "turn_envelope_skipped" not in payload
 
 
 @pytest.mark.parametrize(

@@ -512,14 +512,21 @@ def test_ambiguous_discovery_is_not_replacement_authority(tmp_path):
     assert "desired_prompt" not in entry
 
 
-def test_exact_legacy_host_loader_upgrades_to_v2_without_dropping_explicit_policy(tmp_path, monkeypatch):
+@pytest.mark.parametrize("captured", [False, True], ids=["ordinary", "captured"])
+def test_exact_legacy_host_loader_upgrades_to_v2_without_dropping_explicit_policy(tmp_path, monkeypatch, captured):
     from loopx.control_plane.heartbeat import installed_prompt_update as lifecycle
     from loopx.control_plane.heartbeat.bootstrap_prompt import host_bootstrap_binding
     home, path, database, registry, _ = fixture(tmp_path)
     # Independent historical fixture, including an explicitly bound policy.
     command = ["loopx", "--format", "json", "--registry", str(registry),
                "heartbeat-prompt", "--goal-id", "fixture-goal", "--agent-id", "agent-a",
-               "--permission-rule", "Read only", "--codex-app", "--thin"]
+               "--permission-rule", "Read only"]
+    if captured:
+        capture = tmp_path / "capture"
+        capture.mkdir(mode=0o700)
+        command += ["--decision-output-root", str(capture), "--codex-context-root", str(capture),
+                    "--context-delivery", "on", "--turn-envelope"]
+    command += ["--codex-app", "--thin"]
     import shlex
     legacy = ("LoopX managed host bootstrap v1\n"
               "每次进入或恢复本 Goal 时先加载当前规则；升级后重新加载，不创建新 Goal、不接管宿主调度：\n"
@@ -529,7 +536,12 @@ def test_exact_legacy_host_loader_upgrades_to_v2_without_dropping_explicit_polic
     entry = before["entries"][0]
     assert entry["status"] == "adoption_required" and entry["automatic_eligible"]
     assert entry["desired_prompt"].startswith("LoopX managed heartbeat bootstrap v2\n")
-    assert host_bootstrap_binding(entry["desired_prompt"])["permission_rule"] == "Read only"
+    binding = host_bootstrap_binding(entry["desired_prompt"])
+    assert binding["permission_rule"] == "Read only"
+    if captured:
+        assert binding["complete_turn"] is True and not binding["turn_envelope"]
+        assert binding["context_delivery"] == "on"
+        assert binding["decision_output_root"] == binding["codex_context_root"] == str(capture)
     monkeypatch.setattr(lifecycle, "require_closed_app", lambda: None)
     assert lifecycle.reconcile(before=before, registry=registry, home=home)["ok"]
     assert lifecycle.snapshot(registry=registry, home=home)["entries"][0]["status"] == "current"

@@ -185,6 +185,8 @@ def test_codex_ide_plugin_is_an_exact_host_type_with_visible_goal_activation() -
         ("opencode", "generic_cli"),
         ("traex-cli", "generic_cli"),
         ("pi", "generic_cli"),
+        ("manual", "generic_cli"),
+        ("other-agent", "generic_cli"),
     ),
 )
 def test_first_class_hosts_bind_one_runtime_profile(
@@ -414,7 +416,7 @@ def test_goal_hosts_enter_live_contract_without_a_mandatory_skill_detour(
 
 def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
     shared_rules = (
-        "use selection_command when required",
+        "use selection_command if required",
         "No learning queue unless asked.",
     )
     common = {
@@ -446,7 +448,7 @@ def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
         assert "No learning queue unless asked." in payload["task_body"]
         for obligation in (
             "do/verify authorized work",
-            "settlement_plan.ordered_steps, else next_cli_actions",
+            "settlement_plan.ordered_steps in order, else next_cli_actions",
             "preserve exact identities/effect ids",
         ):
             assert obligation in payload["task_body"]
@@ -682,7 +684,7 @@ def test_codex_app_thin_prompt_embeds_profile_only_in_quota_command() -> None:
     assert "host_surface" not in prompt["task_body"]
     assert "scheduler_owner" not in prompt["task_body"]
     assert (
-        "use selection_command when required"
+        "use selection_command if required"
     ) in prompt["task_body"]
     assert "compact_prompt_command" not in prompt
     assert "brief_prompt_command" not in prompt

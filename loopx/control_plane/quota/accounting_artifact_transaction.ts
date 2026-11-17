@@ -508,6 +508,42 @@ export function resolveQuotaAccountingEffect(
   return { kind: "absent" };
 }
 
+function fileInRunsDirectory(runsDir: string, file: string): boolean {
+  const member = relative(runsDir, file);
+  return member !== "" && member !== ".." && !member.startsWith(`..${sep}`) && !isAbsolute(member);
+}
+
+async function optionalRealpath(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return null;
+    throw error;
+  }
+}
+
+async function readRelocatedSpendReceipt(
+  contract: QuotaAccountingArtifactContract,
+  runsDir: string,
+  recordedPath: string,
+  run: JsonObject,
+  effectId: string,
+): Promise<QuotaAccountingArtifactReceipt> {
+  const journalPath = transactionPath(contract, runsDir, effectId);
+  const resolvedJournal = await optionalRealpath(journalPath);
+  const receipt = resolvedJournal === journalPath ? await readReceiptDocument(contract, journalPath) : null;
+  if (receipt?.status !== "committed" || receipt.effect_id !== effectId ||
+    receipt.json_path !== recordedPath || canonicalJson(receipt.index_record) !== canonicalJson(run)) {
+    throw new EffectRuntimeRequestError(
+      "relocated quota spend requires the matching local committed transaction receipt",
+      "malformed_transaction_receipt",
+    );
+  }
+  // Validate recorded paths as data. All file reads use the materialized runs directory.
+  validateReceiptPaths(contract, dirname(recordedPath), receipt);
+  return receipt;
+}
+
 function spendIdentityMismatch(index: JsonObject, retained: JsonObject): boolean {
   // The spend writers retain these bindings even before commit metadata was
   // introduced. Missing historical fields are unknown; explicit conflicts are
@@ -525,6 +561,7 @@ export async function readQuotaSpendEventFromRun(
   runsDir: string,
   run: JsonObject,
   goalId: string,
+  allowRelocatedReadback = false,
 ): Promise<JsonObject | null> {
   const contract = contractFor("spend");
   const indexCommit = run[contract.metadataField];
@@ -538,32 +575,32 @@ export async function readQuotaSpendEventFromRun(
     return inline;
   }
   if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
-  let targetPath: string;
-  try {
-    targetPath = await realpath(resolve(run.json_path.trim()));
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return null;
+  const originalPath = run.json_path.trim();
+  const recordedPath = resolve(originalPath);
+  const commit = jsonObject(indexCommit);
+  let physicalRunsDir: string | null = null;
+  let relocatedReceipt: QuotaAccountingArtifactReceipt | null = null;
+  let artifactPath = recordedPath;
+  if (allowRelocatedReadback && commit?.schema_version === contract.receiptSchema &&
+    isAbsolute(originalPath) && !fileInRunsDirectory(resolve(runsDir), recordedPath)) {
+    physicalRunsDir = await realpath(runsDir);
+    if (!fileInRunsDirectory(physicalRunsDir, recordedPath)) {
+      const effectId = requiredString(commit.effect_id, "quota spend commit effect_id");
+      relocatedReceipt = await readRelocatedSpendReceipt(contract, physicalRunsDir, recordedPath, run, effectId);
+      artifactPath = join(physicalRunsDir, basename(relocatedReceipt.json_path));
     }
-    throw error;
   }
-  const relativePath = relative(await realpath(runsDir), targetPath);
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${sep}`) ||
-    isAbsolute(relativePath)
-  ) {
+  const targetPath = await optionalRealpath(artifactPath);
+  if (targetPath !== null && (!fileInRunsDirectory(physicalRunsDir ?? await realpath(runsDir), targetPath) ||
+    (relocatedReceipt !== null && targetPath !== artifactPath))) {
     throw new EffectRuntimeRequestError(
       "quota spend json_path must stay inside the goal runs directory",
     );
   }
-  let content: string;
-  try {
-    content = await readFile(targetPath, "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-    throw error;
+  const content = targetPath === null ? null : await readOptionalText(targetPath);
+  if (content === null) {
+    if (relocatedReceipt === null) return null;
+    throw new EffectRuntimeRequestError("relocated quota spend JSON artifact is unavailable");
   }
   let value: unknown;
   try {
@@ -576,7 +613,7 @@ export async function readQuotaSpendEventFromRun(
   // The writer repeats its commit identity in the index and artifact. An
   // in-directory file can still describe a different debit for the same Goal.
   const commitMismatch = indexCommit !== undefined && (
-    jsonObject(indexCommit) === null || artifactCommit === null ||
+    commit === null || artifactCommit === null ||
     canonicalJson(indexCommit) !== canonicalJson(artifactCommit)
   );
   // A historical row without a commit reference can still have an explicit
@@ -589,7 +626,8 @@ export async function readQuotaSpendEventFromRun(
     record.classification !== contract.classification ||
     (record.goal_id !== undefined && record.goal_id !== goalId) ||
     commitMismatch || timestampMismatch || spendIdentityMismatch(run, record) ||
-    (event !== null && spendIdentityMismatch(run, event))
+    (event !== null && spendIdentityMismatch(run, event)) ||
+    (relocatedReceipt !== null && canonicalJson(record) !== canonicalJson(relocatedReceipt.record))
   ) {
     throw new EffectRuntimeRequestError(
       "quota spend JSON artifact identity does not match its index row",
@@ -796,10 +834,9 @@ async function rejectSymlinkPath(path: string, label: string): Promise<void> {
   }
 }
 
-async function readReceipt(
+async function readReceiptDocument(
   contract: QuotaAccountingArtifactContract,
   path: string,
-  runsDir: string,
 ): Promise<QuotaAccountingArtifactReceipt | null> {
   const content = await readOptionalText(path);
   if (content === null) return null;
@@ -812,7 +849,16 @@ async function readReceipt(
       "malformed_transaction_receipt",
     );
   }
-  const receipt = receiptObject(contract, value);
+  return receiptObject(contract, value);
+}
+
+async function readReceipt(
+  contract: QuotaAccountingArtifactContract,
+  path: string,
+  runsDir: string,
+): Promise<QuotaAccountingArtifactReceipt | null> {
+  const receipt = await readReceiptDocument(contract, path);
+  if (receipt === null) return null;
   validateReceiptPaths(contract, runsDir, receipt);
   await Promise.all([
     rejectSymlinkPath(receipt.json_path, `${contract.label} JSON artifact`),

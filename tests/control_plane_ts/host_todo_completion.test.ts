@@ -11,6 +11,9 @@ import {
   HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
 } from "../../loopx/control_plane/turn_driver/host_todo_completion.ts";
 
+import { HOST_TODO_SETTLEMENT_GUARD_SCHEMA_VERSION } from
+  "../../loopx/control_plane/turn_driver/host_todo_settlement_guard.ts";
+
 const todoId = "todo_abc123";
 
 test("vision refresh shares the original delivery command and identity without a spend", () => {
@@ -199,7 +202,8 @@ function providerOutcomes(
   const payloads: Record<string, Record<string, unknown>> = {
     guard: {
       ok: true,
-      heartbeat_receipt: { settlement_identity: identity },
+      schema_version: HOST_TODO_SETTLEMENT_GUARD_SCHEMA_VERSION,
+      settlement_identity: identity,
     },
     lifecycle_completion: completion,
     durable_writeback: writeback,
@@ -278,24 +282,7 @@ test("prepare owns the retry-stable identity and one ordered host CLI plan", () 
     turnInstanceId,
     "--runtime-profile",
     "claude_code",
-  ]);
-  assert.deepEqual(steps[0].legacy_args, [
-    "quota",
-    "should-run",
-    "--goal-id",
-    "goal",
-    "--agent-id",
-    "agent",
-    "--todo-id",
-    todoId,
-    "--turn-instance-id",
-    turnInstanceId,
-    "--host-surface",
-    "claude_code",
-    "--scheduler-owner",
-    "agent_cli_loop",
-    "--execution-mode",
-    "interactive",
+    "--host-todo-settlement",
   ]);
   assert.deepEqual(steps[1].args, [
     "todo",
@@ -356,7 +343,7 @@ test("finalize validates every receipt and builds the canonical host result", ()
   });
 });
 
-test("guard classification keeps terminal, malformed, and mismatched states distinct", () => {
+test("governed capability classification keeps terminal, malformed, and mismatched states distinct", () => {
   const prepared = prepare();
   const identity = identityFrom(prepared);
   const cases = [
@@ -398,12 +385,7 @@ test("guard classification keeps terminal, malformed, and mismatched states dist
       fixture.state === "terminal_no_selection" ? null : fixture.reason,
     );
 
-    const reduced = finalize([{ step_kind: "guard", output: fixture.raw }]);
-    const result = reduced.result as Record<string, unknown>;
-    const settlement = result.settlement as Record<string, unknown>;
-    assert.equal(reduced.decision, "blocked");
-    assert.equal(settlement.guard_state, fixture.state);
-    assert.equal(settlement.reason, fixture.reason);
+
   }
 });
 

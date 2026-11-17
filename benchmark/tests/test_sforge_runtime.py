@@ -331,13 +331,9 @@ def test_warm_receiver_owns_only_selected_research_before_preparation(
     assert restored == ["workspace"]
 
 
-@pytest.mark.parametrize("explicit,trigger,expected", [
-    (False, None, None),
-    (False, "fresh_replan", None),
-    (True, None, "explicit"),
-    (True, "fresh_replan", "explicit"),
-])
-def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkeypatch, explicit, trigger, expected):
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("trigger", [None, "fresh_replan"])
+def test_sforge_checkpoint_preserves_complete_contract(tmp_path, monkeypatch, explicit, trigger):
     from types import SimpleNamespace
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -354,12 +350,13 @@ def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkey
     backend = SimpleNamespace(copy_to_container=lambda *args: None,
         exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-        profile="heartbeat-resume", cwd="/task", turn_envelope=explicit,
+        profile="heartbeat-resume", cwd="/task", complete_turn=explicit,
         checkpoint_request=json.dumps(declaration).encode())
     worker.install_stop_hook(backend, None, tmp_path, None)
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
-    assert profile.get("turn_envelope_source") == expected
-    assert profile.get("turn_envelope") is (True if expected else None)
+    assert profile["complete_turn_source"] == ("explicit" if explicit else "default")
+    assert profile["complete_turn"] is True
+    assert "turn_envelope" not in profile
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -691,9 +688,9 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert profile["task_entry"] == entry
     assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
-@pytest.mark.parametrize('enabled,complete', [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize('complete', [False, True])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
-def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, complete, cadence):
+def test_complete_turn_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, complete, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
@@ -703,40 +700,35 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
         pass  # Transport only; the real renderer/guard test runs without a solver.
     monkeypatch.setattr(BenchmarkCodex, 'install', installed)
     worker = SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
-                          profile=profile, cwd='/task', turn_envelope=enabled, complete_turn=complete,
+                          profile=profile, cwd='/task', complete_turn=complete,
                           replan_after_turns=cadence)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd='/task')
-    assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
-    assert worker.runtime.execution.turn_envelope is enabled
+    assert 'LOOPX_TURN_ENVELOPE' not in env
     assert env['LOOPX_COMPLETE_TURN'] == ('1' if complete else '0')
     assert worker.runtime.execution.complete_turn is complete
     assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
-    assert receipt.get('complete_turn') is (True if complete else None)
-    assert receipt.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
-        assert 'turn_envelope' not in receipt
+    assert receipt['complete_turn'] is True
+    assert receipt['complete_turn_source'] == ('explicit' if complete else 'default')
+    assert 'turn_envelope' not in receipt
     from types import SimpleNamespace
     context = SimpleNamespace()
     worker.runtime._populate_context(context)
-    assert context.metadata.get('complete_turn') is (True if complete else None)
-    assert context.metadata.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
-        assert 'turn_envelope' not in context.metadata
-    # The opt-in only changes context transport, not resume or model settings.
+    assert context.metadata['complete_turn'] is True
+    assert 'turn_envelope' not in context.metadata
     assert env['LOOPX_ITERATION_CONTEXT'] == 'resume'
     assert env['REASONING_EFFORT'] == 'xhigh'
 
 
 @pytest.mark.parametrize('profile', ['official', 'single', 'native-goal'])
-def test_envelope_rejects_incompatible_sforge_worker(profile):
+def test_sforge_worker_rejects_short_view_outside_heartbeat(profile):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker
-    with pytest.raises(ValueError, match='turn_envelope'):
+    with pytest.raises(ValueError, match='turn_envelope requires heartbeat'):
         SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
                      profile=profile, cwd='/task', turn_envelope=True)
 
@@ -744,8 +736,9 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
 @pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
 @pytest.mark.parametrize("delivery", ["off", "on"])
 @pytest.mark.parametrize("checkpoint_preflight", [False, True])
-def test_complete_worker_reaches_original_ready_guard_without_a_model(
-        tmp_path, monkeypatch, profile, delivery, checkpoint_preflight):
+@pytest.mark.parametrize(("provider", "short_view"), [("sqlite", False), ("file", True), ("sqlite", True)])
+def test_heartbeat_worker_reaches_original_ready_guard_without_a_model(
+        tmp_path, monkeypatch, profile, delivery, checkpoint_preflight, provider, short_view):
     """Actual adapter → worker → renderer → CLI → typed source; no model/API call."""
     import os
     import shlex
@@ -759,8 +752,9 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
     from benchmark.runtime.worker import heartbeat_body
     from loopx.control_plane.turn_driver import codex_context
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.test_heartbeat_envelope_transport import assert_original_contract_view
     from tests.control_plane.test_quota_settlement_cli import (
-        _write_fixture, _initialize_fixture_authority, _run_cli, _heartbeat_receipt_count,
+        _write_fixture, _initialize_fixture_authority, _run_cli, _heartbeat_receipt_count, _spend_run_count,
         GOAL_ID, AGENT_ID, TODO_ID,
     )
 
@@ -768,7 +762,7 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     requested = "Continue useful authorized work for at least 120 seconds while feasible."
     state.write_text(state.read_text().replace("Settle one standard Codex App delivery.", requested))
-    _initialize_fixture_authority(project, runtime, provider="sqlite", handoff_mode="hard_lease")
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
     assert _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)[0] == 0
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/unread-fixture-credential")
@@ -776,10 +770,16 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         pass  # No provider login, install, native session or model is requested.
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
     agent = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-        profile=profile, cwd=str(project), complete_turn=True, context_delivery=delivery)
+        profile=profile, cwd=str(project), complete_turn=not short_view, turn_envelope=short_view,
+        context_delivery=delivery)
     agent.install_stop_hook(None, None, tmp_path, None)
     env = agent.runtime._worker_env(cwd=str(project))
-    assert env["LOOPX_COMPLETE_TURN"] == "1" and env["LOOPX_CONTEXT_DELIVERY"] == delivery
+    assert env["LOOPX_COMPLETE_TURN"] == ("0" if short_view else "1")
+    assert env.get("LOOPX_TURN_ENVELOPE") == ("1" if short_view else None)
+    assert env["LOOPX_CONTEXT_DELIVERY"] == delivery
+    profile_receipt = json.loads((tmp_path / "worker-profile.json").read_text())
+    assert profile_receipt.get("turn_envelope_source") == ("explicit" if short_view else None)
+    assert profile_receipt.get("complete_turn_source") == (None if short_view else "explicit")
     source = Path(__file__).resolve().parents[2]
     turn = "original-complete-turn"
     wake = tmp_path / "wakes" / turn
@@ -797,7 +797,8 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         CODEX_THREAD_ID=event["session_id"], LOOPX_PHASE_DEADLINE_EPOCH="9876543210.125")
     body = heartbeat_body(env, turn, native_goal=False)
     block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
-    assert block.count("--complete-turn") == 1 and "--turn-envelope" not in block
+    assert block.count("--complete-turn") == int(not short_view)
+    assert block.count("--turn-envelope") == int(short_view)
     if checkpoint_preflight:
         from benchmark.runtime.checkpoint import capture_before_replan
 
@@ -834,13 +835,24 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
     assert complete["schema_version"] == "loopx_turn_envelope_v1"
     cli = complete["interaction_contract"]["cli_channel"]
     assert cli["execution_preparation"]["state"] == "ready"
-    assert cli["settlement_plan"]["identity"] == complete["heartbeat_receipt"]["settlement_identity"]
-    assert cli["settlement_plan"]["identity"]["turn_instance_id"] == turn
-    assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
-    assert len(cli["next_cli_actions"]) == 1 and "--settle-turn --settlement-receipt" in cli["next_cli_actions"][0]
+    plan = cli["settlement_plan"]
+    assert plan["identity"] == complete["heartbeat_receipt"]["settlement_identity"]
+    assert plan["identity"]["turn_instance_id"] == turn
+    if not short_view:
+        assert plan["schema_version"] == "quota_settlement_plan_v2"
+        assert len(cli["next_cli_actions"]) == 1 and "--settle-turn --settlement-receipt" in cli["next_cli_actions"][0]
     assert requested in saved.decode() and "9876543210.125" not in body + saved.decode()
     if delivery == "off":
-        assert packet == complete
+        if short_view:
+            assert packet["schema_version"] == "loopx_turn_envelope_v0"
+            assert "detail_ref.full_decision" in body
+            assert_original_contract_view(packet, complete)
+            detail = packet["detail_ref"]
+            recovery = detail["captured_decision"]
+            assert Path(recovery["path"]) == original
+            assert subprocess.check_output(shlex.split(detail["full_decision"]), cwd=project, env=env) == saved
+        else:
+            assert packet == complete
     else:
         page = packet if checkpoint_preflight else json.loads(subprocess.run(
             shlex.split(packet["recovery"]["command"]), cwd=project, env=env,
@@ -868,10 +880,27 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         assert codex_context._state(journal)["candidate"]["basis"] == "native_hook_assumption"
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert original.read_bytes() == saved
+    if short_view:
+        assert _spend_run_count(runtime) == 0
+        steps = {step["kind"]: step for step in plan["ordered_steps"]}
+        assert steps["quota_spend"]["owner"] == "agent"
+        substitutions = {"<validated_progress>": "checked_benchmark_capture", "<scale>": "single_surface",
+                         "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}
+        writeback = [substitutions.get(word, word)
+                     for word in shlex.split(steps["durable_writeback"]["command_template"])]
+        written = json.loads(subprocess.run([*writeback, "--no-global-sync", "--suppress-external-sinks"],
+            cwd=project, env=env, capture_output=True, text=True, check=True).stdout)
+        for appended in (True, False):
+            spent = json.loads(subprocess.run(shlex.split(written["settlement_owed"]["command"]),
+                cwd=project, env=env, capture_output=True, text=True, check=True).stdout)
+            assert spent["appended"] is appended
+            assert spent["settlement_identity"] == plan["identity"]
+        assert _heartbeat_receipt_count(runtime, turn) == _spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("profile,options", [
     ("native-goal", ["--turn-envelope"]),
+    ("heartbeat-resume", ["--turn-envelope", "--complete-turn"]),
     ("native-goal", ["--context-delivery"]),
     ("official", ["--replan-after-turns", "3"]),
     ("single", ["--replan-after-todos", "3"]),
@@ -888,7 +917,7 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
     ("heartbeat-explore", ["--checkpoint-export-root", "/unused-export"]),
     ("heartbeat-explore", ["--no-checkpoint-retention", "--checkpoint-retention-policy", "policy.json"]),
 ])
-def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
+def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, capsys, profile, options):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from benchmark.edgebench.run import main
@@ -897,6 +926,9 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
               '--run-id', 'invalid', '--worker', profile, '--model', 'fixture',
               '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
+    if "--turn-envelope" in options:
+        diagnostic = "not allowed with argument" if "--complete-turn" in options else "turn_envelope requires heartbeat"
+        assert diagnostic in capsys.readouterr().err
     assert not (tmp_path / 'runs').exists()
 
 
@@ -1045,7 +1077,7 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
     (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
 ])
-@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("explicit", [False, True])
 @pytest.mark.parametrize("entry", [None, "seeded-todo"])
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 0),
@@ -1053,7 +1085,7 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     ("lean_analysis_proofs", [], 43200, 0),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
-def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
+def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, explicit, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -1098,7 +1130,7 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     if entry:
         args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
-        run.main(args + timeout_args + cadence_args + (["--turn-envelope"] if enabled else []))
+        run.main(args + timeout_args + cadence_args + (["--complete-turn"] if explicit else []))
     receipt = json.loads((tmp_path / f"runs/receipt/{task}/runtime-receipt.json").read_text())
     assert receipt["task_entry"] == (entry or "loopx-planned")
     assert receipt["timeout_seconds"] == expected
@@ -1110,9 +1142,9 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
-    assert ("turn_envelope" in receipt) is enabled
-    if enabled:
-        assert receipt["turn_envelope"] is True
+    assert "turn_envelope" not in receipt
+    assert receipt["complete_turn"] is True
+    assert receipt["complete_turn_source"] == ("explicit" if explicit else "default")
     assert receipt["status"] == "runner_failed"
 
 
@@ -1494,13 +1526,14 @@ def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, mon
     assert not (tmp_path / 'runs').exists()
 
 
-@pytest.mark.parametrize('custom,profile,provider_request_admission', [
-    (False, 'official', False), (True, 'official', False),
-    (True, 'heartbeat-resume', False), (True, 'heartbeat-resume', True),
+@pytest.mark.parametrize('custom,profile,provider_request_admission,short_view', [
+    (False, 'official', False, False), (True, 'official', False, False),
+    (True, 'heartbeat-resume', False, False), (True, 'heartbeat-resume', True, False),
+    (True, 'heartbeat-resume', False, True),
 ])
 @pytest.mark.parametrize('bridge', [False, True], ids=['docker-default', 'docker-bridge'])
 def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
-        tmp_path, monkeypatch, custom, profile, bridge, provider_request_admission):
+        tmp_path, monkeypatch, custom, profile, bridge, provider_request_admission, short_view):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from types import SimpleNamespace
@@ -1546,6 +1579,7 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
         assert config.runner_source_revision == 'a' * 40
         assert config.work_cpu_limit == 4
         assert kwargs['agent'].provider_request_admission is provider_request_admission
+        assert kwargs['agent'].execution.turn_envelope is short_view
         raise RuntimeError('synthetic launch boundary')
     monkeypatch.setattr(run, 'run_agent', stop_before_solver)
     args = ['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
@@ -1555,6 +1589,8 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
         args += ['--provider-request-admission']
     if bridge:
         args += ['--docker-host-bridge']
+    if short_view:
+        args += ['--turn-envelope', '--context-delivery', 'off']
     with pytest.raises(RuntimeError, match='synthetic launch boundary'):
         run.main(args)
     receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
@@ -1562,6 +1598,7 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
     assert json.loads(receipt)['local_docker_images'] == images
     assert json.loads(receipt).get('provider_request_admission') == ('on' if provider_request_admission else None)
     assert json.loads(receipt).get('docker_host_bridge', False) is bridge
+    assert json.loads(receipt).get('turn_envelope_source') == ('explicit' if short_view else None)
 
 
 @pytest.mark.parametrize("capture", [False, True])

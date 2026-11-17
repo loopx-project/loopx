@@ -242,8 +242,13 @@ def test_export_interruption_preserves_requirements_and_original_settlement(
             version = plan["schema_version"]
             assert version in (LOOPX_TURN_PLAN_SCHEMA_VERSION, COMPLETE_TURN_PLAN_SCHEMA_VERSION)
             source = plan if version == COMPLETE_TURN_PLAN_SCHEMA_VERSION else plan["turn_envelope"]
-            capture_path = Path(source["detail_ref"]["captured_decision"]["path"])
+            capture_ref = source["detail_ref"]["captured_decision"]
+            assert capture_ref["turn_key"] == before["turn_key"]
+            if version == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+                assert capture_ref["turn_instance_id"] == plan["transaction"]["settlement_plan"]["identity"]["turn_instance_id"]
+            capture_path = Path(capture_ref["path"])
             capture = capture_path.read_bytes()
+            assert json.loads(capture) == plan["work_contract"]
             assert REQUIREMENT in capture.decode()
             running.kill()
             running.wait(timeout=10)

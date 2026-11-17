@@ -532,10 +532,10 @@ def _turn_scoped_cli_settlement_context(
         agent_identity,
         available_capabilities=available_capabilities,
     )
+    scheduler = resolve_scheduler_execution_context(scheduler_execution_context)
     plan = build_accountable_work_item_settlement_plan(
-        runtime_profile=scheduler_runtime_profile_for_execution_context(
-            scheduler_execution_context
-        ),
+        runtime_profile=scheduler_runtime_profile_for_execution_context(scheduler)
+        or scheduler.default_settlement_profile,
         goal_id=goal_id,
         agent_id=agent_id,
         command_prefix=selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path),
@@ -618,6 +618,21 @@ def _terminal_cli_actions(
             "no quota spend for blocker-push/gate-notification",
         ]
     return ["no quota spend without validated transition/blocker writeback"]
+
+
+def bind_cli_turn_selection_action(
+    payload: dict[str, Any], *, previous: str, command: str,
+) -> None:
+    """Replace one CLI selection command and its matching decision mirrors."""
+    interaction = payload["interaction_contract"]
+    interaction["cli_channel"]["next_cli_actions"] = [command]
+    for carrier, field in (
+        (payload, "recommended_action"),
+        (interaction.get("agent_channel"), "primary_action"),
+        (payload.get("work_lane_contract"), "action"),
+    ):
+        if isinstance(carrier, dict) and carrier.get(field) == previous:
+            carrier[field] = command
 
 
 def _selection_recovery_command(

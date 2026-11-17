@@ -942,8 +942,14 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
         "\ndef fake_report_model(params):\n"
         "    import json\n"
         "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
-        "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
-        "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        "    marker = 'Turn request:' if 'Turn request:' in prompt else 'Turn authority JSON:'\n"
+        "    authority = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1].lstrip())[0]\n"
+        "    if marker == 'Turn request:':\n"
+        "        detail = authority.get('detail_ref') or {}\n"
+        "        replan_packet = detail.get('replan_action_packet') or authority['task_context'].get('replan_action_packet')\n"
+        "    else:\n"
+        "        replan_packet = authority.get('replan_action_packet')\n"
+        "    if replan_packet:\n"
         "        return " + repr(json.dumps(replan)) + "\n"
         "    return report_only(params)\n")
     calls, writes = capture.read_bytes(), list(bot.writes)
@@ -977,6 +983,10 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
     assert len(replans) == (0 if replan_outcome == "retained_probe" else 1)
     if replan_outcome not in {"settled", "already_admitted", "retained_probe"}:
         assert replans[0].get("status") != "committed"
+        # An oracle parser/transport failure must not stand in for the intended
+        # wait or rejected semantic candidate.
+        assert replans[0]["result_kind"] == ("wait" if replan_outcome == "wait" else "validation_failed")
+        assert replans[0]["effects"]["host_invoked"] is True
         assert replans[0]["effects"]["state_written"] is False and replans[0]["effects"]["quota_spent"] is False
         assert not (attempt_directory(reports.root, second_window) / "private-generation.json").exists()
         assert bot.writes == writes and transport.steward_reports.reconcile() == 0

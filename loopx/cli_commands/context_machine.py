@@ -6,10 +6,10 @@ with the existing TypeScript transport. This layer performs native path IO.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
-import stat
-import tempfile
+from shutil import rmtree
 from typing import Any
 
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
@@ -32,14 +32,16 @@ def _private_transport_root(runtime_root: Path) -> str:
     """Create only our leaf; never repair permissions or follow a replaced leaf."""
     if os.name != "posix":
         raise ValueError("native context continuity is unavailable on this platform")
-    runtime_root = runtime_root.expanduser().resolve()
-    runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    root = runtime_root / "context-delivery"
-    root.mkdir(mode=0o700, exist_ok=True)
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("machine context transport requires a private physical directory owned by this user")
-    return str(root)
+    return str(_context_transport_root(runtime_root))
+
+
+def _context_transport_root(runtime_root: Path) -> Path:
+    from ..control_plane.turn_driver.decision_capture import private_capture_root
+
+    try:
+        return private_capture_root(runtime_root)
+    except OSError as exc:
+        raise ValueError("machine context transport requires a private physical directory owned by this user") from exc
 
 
 def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
@@ -51,30 +53,13 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
     unchanged; retry that same operation after repairing its private transport.
     """
     from ..control_plane.turn_driver.decision_capture import (
-        capture_context_projection, context_capture_read_command,
+        capture_context_projection, context_capture_read_command, private_capture_subdirectory,
     )
 
+    directory: Path | None = None
     try:
-        from ..control_plane.runtime.private_permissions import protect_private_path, require_private_path
-
-        # This is a write-once recovery file, not native continuity. Reuse the
-        # cross-platform private IO owner without enabling a native baseline.
-        runtime_root = runtime_root.expanduser().resolve()
-        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        root = runtime_root / "context-delivery"
-        try:
-            root.mkdir(mode=0o700)
-        except FileExistsError:
-            try:
-                require_private_path(root, directory=True)  # Never repair an existing leaf.
-            except OSError as error:
-                raise ValueError("machine context transport requires a private physical directory owned by this user") from error
-        else:
-            protect_private_path(root, directory=True)
-        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=root))
-        protect_private_path(directory, directory=True)
+        directory = private_capture_subdirectory(_context_transport_root(runtime_root), "recovery-")
         reference = capture_context_projection(value, directory=directory, filename="required-context.json")
-        protect_private_path(Path(reference["path"]))
         if not index_and_select:
             return {key: reference[key] for key in ("path", "sha256", "command")}
         path, digest = Path(reference["path"]), reference["sha256"]
@@ -82,6 +67,12 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
             "index_command": context_capture_read_command(path, digest, list_fields=True, list_depth=2),
             "select_command": context_capture_read_command(path, digest, select=["<pointer>"])}
     except (OSError, ValueError) as error:
+        if directory is not None:
+            try:
+                rmtree(directory)
+            except OSError:
+                # Preserve the original publication refusal for the caller.
+                logging.getLogger(__name__).exception("Could not discard an unpublished context recovery directory")
         return {"available": False, "error_kind": type(error).__name__,
             "instruction": "Repair the private context transport, then retry the original unchanged operation "
                 "to obtain its current recovery reference. Do not rerun admission, substitute an old capture, "
@@ -160,7 +151,7 @@ def apply_context_machine_options(
             raise ValueError("native Codex context delivery needs JSON and a capture destination")
     if explicit is None:
         args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
-    if command == "should-run" and args.format == "json":
+    if command == "should-run":
         args._progressive_context_runtime = str(runtime_root.expanduser().resolve())
     if command != "context-read" and not enabled:
         return  # Stateless presentation needs neither a journal nor native setup.

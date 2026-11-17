@@ -69,7 +69,6 @@ def test_heartbeat_semantic_errors_keep_recovery_and_exit_status(tmp_path):
         ["--agent-id=unregistered"],
         ["--goal-id=missing"],
         ["--context-delivery=on", "--trae_app"],
-        ["--turn-envelope"],
         ["--decision-handoff-socket=missing"],
     )]
     full = run_cli_batch("loopx.cli", cases)

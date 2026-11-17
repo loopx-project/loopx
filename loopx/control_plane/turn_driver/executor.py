@@ -21,7 +21,9 @@ from ..effect_program import (
 )
 from ..goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
+    FirstPartyHostLaunchRejected,
     FirstPartyHostRuntimeRejected,
+    HostLaunchGuard,
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
@@ -40,7 +42,6 @@ from .command_validation import (
 )
 from ..quota.turn_envelope import (
     COMPLETE_TURN_HOST_REQUEST_SCHEMA,
-    captured_turn_host_input,
     turn_plan_host_source,
 )
 from .driver import (
@@ -176,20 +177,20 @@ def _assemble_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     if route.get("would_invoke_host") is not True:
         raise ValueError(str(plan.get("error") or "LoopX Turn route is not host executable"))
+    current = plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
     request = {
         "schema_version": LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
         "turn_key": turn_key,
         "route": route.get("kind"),
         "session": plan.get("session"),
-        "turn_envelope": plan.get("turn_envelope"),
+        **({} if current else {"turn_envelope": plan.get("turn_envelope")}),
         "result_contract": {
             "schema_version": LOOPX_TURN_RESULT_SCHEMA_VERSION,
             "completed_phases": list(TRANSACTION_PHASES[:2]),
             "stdout": "one public-safe JSON object",
         },
     }
-    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
-        request.pop("turn_envelope")
+    if current:
         request.update(turn_plan_host_source(plan))
     if "work_contract" in plan:
         # Presence selects the current reader, including malformed values.
@@ -222,11 +223,9 @@ def _build_staged_dispatch_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     if (plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
             and request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA
             and "work_contract" in request and "turn_envelope" not in request):
-        # All assembly guards and projections still run on the staged aliases.
-        # This carrier's existing conversion only copies the top-level mapping;
-        # host_context returns no facts used by it. The caller checks this exact
-        # source with host_dispatch_context before admission or publication.
-        return captured_turn_host_input(request)
+        # Current assembly already supplies the complete wire. The caller
+        # checks it with host_dispatch_context before admission or publication.
+        return request
     return _complete_loopx_turn_host_request(request)
 
 
@@ -883,14 +882,10 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
-    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    launch_guard: HostLaunchGuard | None = None,
 ) -> dict[str, Any]:
-    # Dispatch has checked the source and its internal effect adapter before
-    # journal/cadence admission. External stdin gets the same single complete
-    # input as native model prompts, not another executable authority carrier.
-    from ..quota.turn_envelope import captured_turn_host_input
-
-    host_input = captured_turn_host_input(request) if "work_contract" in request else request
+    # Dispatch has already validated the input and resolved any recorded
+    # compatibility carrier. Serialize the same request as the in-process Host.
     stdout: list[str] = []
     stderr_chars = 0
 
@@ -902,7 +897,7 @@ def _run_host(
         observed = run_host_process(
             argv,
             project=project,
-            input_text=json.dumps(host_input, ensure_ascii=False, separators=(",", ":")),
+            input_text=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
             timeout_seconds=timeout_seconds,
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
@@ -975,6 +970,7 @@ def _run_host_runner(
             ),
         }
     except FirstPartyHostRuntimeRejected:
+        # A refusal during or after dispatch still needs reconciliation.
         raise
     except Exception as exc:  # noqa: BLE001 - host adapters fail closed at boundary
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
@@ -1021,7 +1017,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: HostLaunchGuard | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -1044,7 +1040,7 @@ def _host_result_stage(
             confirm_start()
         from ...usage_goal import observe_goal_execution
 
-        rejected_launch = None
+        rejected_launch: str | None = None
         try:
             with observe_goal_execution(
                 usage_runtime_root or project,
@@ -1062,13 +1058,14 @@ def _host_result_stage(
                         launch_guard=host_launch_guard,
                     )
                 )
-        except FirstPartyHostRuntimeRejected as exc:
-            # Stdio checks the Goal only before spawn. A native Host can reject
-            # after dispatch too, so retain reconciliation for other failures.
-            if host_runner is not None and exc.code != "current_turn_work_changed":
-                raise
+        except FirstPartyHostLaunchRejected as exc:
             rejected_launch = exc.code
-            host_observation = {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected"}
+            host_observation = {
+                "ok": False,
+                "reason": str(exc),
+                "failure_kind": "contract_rejected",
+                "recovery_kind": "resume_session" if exc.session_prepared else None,
+            }
         effects["host_invoked"] = rejected_launch is None
         if not host_observation.get("ok"):
             failure = _host_failure(
@@ -1092,15 +1089,22 @@ def _host_result_stage(
             recovery_kind = host_observation.get("recovery_kind")
             if recovery_kind is not None:
                 journal["host_recovery"] = build_host_recovery_record(recovery_kind)
-            else:
+            elif rejected_launch is None:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
-            terminal = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+            terminal = execution_payload(
+                plan,
+                journal,
+                execute=True,
+                replayed=False,
+                effects=effects,
+            )
             if rejected_launch is not None:
                 terminal["error_code"] = rejected_launch
             return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
+    journal.pop("host_recovery", None)
 
     recorded_plan = journal.get("plan")
     validation = validate_loopx_turn_host_result(
@@ -1589,7 +1593,7 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: HostLaunchGuard | None = None,
 ) -> dict[str, Any]:
     argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (
@@ -1803,7 +1807,8 @@ def run_loopx_turn_once(
                 journal.pop("validation_stage", None)
             journal.pop("reason", None)
             journal.pop("receipt", None)
-            journal.pop("host_recovery", None)
+            # Keep the original session recovery requirement until the next
+            # Host observation. A guard refusal can leave the session intact.
             journal.pop("host_failure", None)
             journal["status"] = "in_progress"
             persist_journal(journal)

@@ -8,11 +8,10 @@ import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
-from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
+from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission, HostLaunchGuard
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
 )
@@ -824,7 +823,7 @@ def _run_codex_exec(
     timeout_seconds: float | None,
     on_stdout: Callable[[str], None],
     on_stderr: Callable[[str], None],
-    launch_guard: Callable[[], AbstractContextManager[None]],
+    launch_guard: HostLaunchGuard,
     check_running: Callable[[], None] | None,
 ) -> dict[str, Any]:
     try:

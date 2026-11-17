@@ -8,6 +8,7 @@ import importlib.util
 import hashlib
 import shlex
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -102,6 +103,87 @@ def _turn_plan_control_observation(value: Any, *, goal_state: dict[str, str] | N
                 for key, child in controls.items()}}
 
 
+def _quota_control_observation(value: Any) -> dict[str, Any] | None:
+    """Observe the same current controls in the two declared quota carriers.
+
+    This is a frozen fixture oracle, not full-source parity or an authority
+    decoder. Compare original values, including read/settlement prose; the
+    complete-source and real recovery suites retain their separate coverage.
+    """
+    if not isinstance(value, dict) or value.get("mode") != "should-run":
+        return None
+    version = value.get("schema_version")
+    if version not in {None, "loopx_turn_envelope_v0", "loopx_turn_envelope_v1"}:
+        return None
+    legacy = version == "loopx_turn_envelope_v0"
+    channel = value["action"] if legacy else value["interaction_contract"]["agent_channel"]
+    cli = value["writeback"] if legacy else value["interaction_contract"]["cli_channel"]
+    capsule = value["contract_capsule"] if legacy else value
+    boundary = value["boundary"] if legacy else value["goal_boundary"]
+    selected = channel.get("selected_todo") if legacy else value.get("selected_todo")
+    selection = None
+    if isinstance(selected, dict):
+        selection = {key: selected.get(key) for key in (
+            "todo_id", "priority", "status", "task_class", "action_kind", "claimed_by",
+        )}
+        # The historical codec's exact, local text reference is not a new
+        # selection. Unknown references must not be silently treated as text.
+        if legacy and "text_ref" in selected:
+            assert selected["text_ref"] == "action.recommended_action"
+            selection["text"] = channel["recommended_action"]
+        else:
+            selection["text"] = selected.get("text")
+    user = value["user"] if legacy else value["interaction_contract"]["user_channel"]
+    controls = {
+        "goal_id": value["goal_id"],
+        "agent_id": value["agent_id"] if legacy else value["agent_identity"]["agent_id"],
+        "decision": value["decision"], "should_run": value["should_run"],
+        "effective_action": value["effective_action"], "selected_todo": selection,
+        "execution": {key: channel[key] for key in ("must_attempt", "delivery_allowed", "quiet_noop_allowed")},
+        "boundary": {key: boundary[key] for key in ("write_scope", "stop_condition", "rule")},
+        "required_reads": value["required_reads"] if legacy else channel["required_reads"],
+        "next_cli_actions": cli["next_cli_actions"],
+        "spend": {key: cli[key] for key in ("spend_allowed_now", "spend_after_validation", "spend_policy")},
+        "work_lane_contract": capsule["work_lane_contract"],
+        "execution_obligation": capsule["execution_obligation"],
+        "execution_profile": capsule["execution_profile"], "task_scope": capsule["task_scope"],
+        "replan_action_packet": value.get("replan_action_packet"),
+        "notify": user["notify"], "user_action_required": user["action_required"],
+        "scheduler_action": value["scheduler"]["action"] if legacy else value["scheduler_hint"]["action"],
+    }
+    def digest(child):
+        return hashlib.sha256(json.dumps(child, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {"source_schema": version, "controls_sha256": digest(controls),
+            "field_sha256": {key: digest(child) for key, child in controls.items()}}
+
+
+def _quota_markdown_field_observations(text: str) -> dict[str, str]:
+    """Read the five scalar controls printed by the historical fixture renderer.
+
+    Legacy narrative is not a complete source. Its paired JSON supplies the
+    remaining fixture controls only after these actually printed values match.
+    These observations never classify a live request or operator's authority.
+    """
+    values: dict[str, Any] = {}
+    for field in ("goal_id", "decision", "should_run", "effective_action"):
+        matches = re.findall(rf"^- {field}: `([^`\n]*)`$", text, re.MULTILINE)
+        if len(matches) != 1:
+            return {}
+        values[field] = matches[0]
+    if values["should_run"] not in {"True", "False"}:
+        return {}
+    values["should_run"] = values["should_run"] == "True"
+    actors = re.findall(r"^- agent_id: `([^`\n]*)`$", text, re.MULTILINE)
+    actors += re.findall(r"^- agent_identity: agent_id=(\S+) agent_model=\S+$", text, re.MULTILINE)
+    if len(actors) != 1:
+        return {}
+    values["agent_id"] = actors[0]
+    return {key: hashlib.sha256(json.dumps(child, ensure_ascii=False,
+        sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        for key, child in values.items()}
+
+
 
 def _receipt_row(
     *,
@@ -165,6 +247,10 @@ def _receipt_row(
         "markdown_headings": semantics.markdown_headings(text),
         "markdown_anchor": markdown_anchor,
         "turn_plan_controls": _turn_plan_control_observation(plan, goal_state=material),
+        **({"quota_controls": _quota_control_observation(payload)}
+           if surface_id == "quota_should_run" and isinstance(payload, dict) else {}),
+        **({"quota_markdown_fields": _quota_markdown_field_observations(text)}
+           if surface_id == "quota_should_run" and output_format == "markdown" and payload is None else {}),
         **({"inspection_source_read": detail_cost} if detail_cost is not None else {}),
         "action_signature_sha256": (
             semantics.action_signature_semantic_sha256(payload)
@@ -239,6 +325,12 @@ def _link_turn_warning_basis(rows: list[dict]) -> list[dict]:
             paired = by_id.get(row["row_id"].removesuffix("markdown") + "json")
             if paired is not None:
                 row["turn_envelope_cost_basis"] = paired["continuation_instructions"]
+                visible = row.get("quota_markdown_fields")
+                controls = paired.get("quota_controls")
+                if visible and controls:
+                    assert all(controls["field_sha256"].get(key) == digest
+                               for key, digest in visible.items()), "Markdown quota controls differ from paired JSON"
+                    row["quota_controls"] = controls
     return rows
 
 
@@ -249,8 +341,17 @@ def _assert_output_contract(
     measurement: dict,
     semantic_json_keys: tuple[str, ...],
     markdown_anchor: str | None,
+    output_contract_version: str | None = None,
 ) -> None:
     """Validate shape while allowing a red base to remain measurable."""
+    from loopx.control_plane.testing import cli_output_budget
+
+    check = getattr(cli_output_budget, "assert_cli_output_semantics", None)
+    if check is not None:
+        check("probe", output_format=output_format, text=text, measurement=measurement,
+            semantic_json_keys=semantic_json_keys, markdown_anchor=markdown_anchor,
+            output_contract_version=output_contract_version)
+        return
 
     if output_format == "markdown":
         if markdown_anchor and markdown_anchor not in text:
@@ -303,6 +404,9 @@ def _default_rows(
                         surface_id, {}
                     )[output_format] = measurement
                     surface = probe.CLI_OUTPUT_BUDGET_BY_ID[surface_id]
+                    output_version = getattr(surface, "output_contract_version", None)
+                    if output_format == "markdown" and output_version != "loopx_turn_envelope_v1":
+                        output_version = None
                     if enforce_budget:
                         if (surface_id, scenario.name, output_format) == (
                             "loopx_turn_plan", "crowded", "json"
@@ -324,6 +428,7 @@ def _default_rows(
                             measurement=measurement,
                             semantic_json_keys=surface.semantic_json_keys,
                             markdown_anchor=surface.markdown_anchor,
+                            output_contract_version=output_version,
                         )
                     rows.append(
                         _receipt_row(
@@ -337,11 +442,7 @@ def _default_rows(
                             markdown_anchor=surface.markdown_anchor,
                             measurement=measurement,
                             text=text,
-                            output_contract_version=(
-                                getattr(surface, "output_contract_version", None)
-                                if output_format == "json"
-                                else None
-                            ),
+                            output_contract_version=output_version,
                         ),
                     )
     if enforce_budget:
@@ -396,6 +497,7 @@ def _variant_rows(
                     measurement=measurement,
                     semantic_json_keys=variant.semantic_json_keys,
                     markdown_anchor=variant.markdown_anchor,
+                    output_contract_version=getattr(variant, "output_contract_version", None),
                 )
             rows.append(
                 _receipt_row(
@@ -465,6 +567,7 @@ def _blocking_gate_rows(
             measurement=measurement,
             semantic_json_keys=variant.semantic_json_keys,
             markdown_anchor=variant.markdown_anchor,
+            output_contract_version=getattr(variant, "output_contract_version", None),
         )
     return [
         _receipt_row(
@@ -482,6 +585,7 @@ def _blocking_gate_rows(
             markdown_anchor=variant.markdown_anchor,
             measurement=measurement,
             text=output,
+            output_contract_version=getattr(variant, "output_contract_version", None),
         )
     ]
 
@@ -518,6 +622,7 @@ def _multi_subagent_rows(probe, semantics, fixture_root, *, enforce_budget=True)
             output_format="json", text=output, measurement=measurement,
             semantic_json_keys=variant.semantic_json_keys,
             markdown_anchor=variant.markdown_anchor,
+            output_contract_version=getattr(variant, "output_contract_version", None),
         )
     return [_receipt_row(
         semantics=semantics,
@@ -527,6 +632,7 @@ def _multi_subagent_rows(probe, semantics, fixture_root, *, enforce_budget=True)
         output_format="json", qualification_policy="explicit_opt_in_cold_path",
         semantic_json_keys=variant.semantic_json_keys, markdown_anchor=variant.markdown_anchor,
         measurement=measurement, text=output,
+        output_contract_version=getattr(variant, "output_contract_version", None),
     )]
 
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity, referenceQuotaSummaryLanes} from "../../loopx/control_plane/quota/diagnostic_projection.ts";
+import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity, referenceQuotaSummaryLanes,
+  resolveQuotaSummaryLanes} from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 
 test("smaller scalar record replacements avoid repeated removal paths and keep sparse edits", () => {
   const source = {summary: {claim_scope: {rows: [{todo_id: "t", text: "Full constraint.", note: "Evidence.",
@@ -77,6 +78,51 @@ test("already shared numeric summary arrays reuse their original identity withou
     [["agent_todo_summary", "first_executable_items", 0, "measurement"], "1.0"],
   ]);
   assert.deepEqual(referenceQuotaSummaryLanes(source, key), source);
+});
+
+test("inline summary sharing preserves exact prefixes and keeps changed rows literal", () => {
+  const first = {schema_version: "todo_item_v0", todo_id: "first",
+    text: "Preserve the complete scope. ".repeat(12), future: {observation: 1}};
+  const second = {...first, todo_id: "second"};
+  const prefix = [{...first, future: {...first.future}}];
+  const source = {agent_todo_summary: {schema_version: "todo_summary_v0",
+    first_executable_items: [first, second], backlog_items: prefix,
+    claimed_open_items: [{...first, future: {observation: 2}}]}};
+  const root = ["agent_todo_summary"];
+  const identity = contextSourceIdentity(source, [
+    [[...root, "first_executable_items", 0, "future", "observation"], "1.0"],
+    [[...root, "backlog_items", 0, "future", "observation"], "1.0"],
+  ]);
+  const projected = referenceQuotaSummaryLanes(source, identity, true);
+  const summary = projected.agent_todo_summary as typeof source.agent_todo_summary & {backlog_items_ref?: string};
+  assert.equal(summary.backlog_items_ref, "first_executable_items[0:1]");
+  assert.deepEqual(summary.claimed_open_items, source.agent_todo_summary.claimed_open_items);
+  assert.deepEqual(resolveQuotaSummaryLanes(projected), source);
+  assert.deepEqual(referenceQuotaSummaryLanes(source, identity), source);
+
+  for (const invalid of ["first_executable_items[0:0]", "first_executable_items[0:2]",
+    "first_executable_items[1:2]", "$.user_todo_summary.first_executable_items[0:1]"]) {
+    assert.throws(() => resolveQuotaSummaryLanes({agent_todo_summary: {...summary, backlog_items_ref: invalid}}),
+      /requires one literal array/);
+  }
+  assert.throws(() => resolveQuotaSummaryLanes({agent_todo_summary: {...summary, backlog_items: prefix}}),
+    /requires one literal array/);
+  assert.throws(() => resolveQuotaSummaryLanes({agent_todo_summary: {...summary,
+    first_executable_items_ref: "$.agent_todo_summary.claimed_open_items"}}), /requires one literal array/);
+});
+
+test("claim scope only shares numeric rows with the same original value and spelling", () => {
+  const lane = () => [{todo_id: "task", text: "Original peer constraint. ".repeat(20), measurement: 1}];
+  const source = {agent_todo_summary: {schema_version: "todo_summary_v0", claimed_by_others_items: lane(),
+    claim_scope: {schema_version: "agent_claim_scope_v0", other_agent_claimed_items: lane(),
+      blocked_claimed_items: lane()}}};
+  const key = contextSourceIdentity(source, [
+    [["agent_todo_summary", "claim_scope", "other_agent_claimed_items", 0, "measurement"], "1.0"],
+  ]);
+  assert.deepEqual(referenceQuotaSummaryLanes(source, key), {agent_todo_summary: {
+    ...source.agent_todo_summary, claim_scope: {schema_version: "agent_claim_scope_v0",
+      other_agent_claimed_items: lane(), blocked_claimed_items_ref: "$.agent_todo_summary.claimed_by_others_items"},
+  }});
 });
 
 test("projected source identity tracks retained and moved values without removed tokens", () => {

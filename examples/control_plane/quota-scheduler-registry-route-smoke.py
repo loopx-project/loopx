@@ -17,6 +17,7 @@ AGENT_ID = "codex-scheduler-route-smoke"
 GOAL_ID = "scheduler-route-smoke"
 sys.path.insert(0, str(REPO_ROOT))
 from examples.control_plane.quota_plan_fixtures import write_codex_heartbeat_fixture  # noqa: E402
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision  # noqa: E402
 from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture  # noqa: E402
 
 
@@ -112,10 +113,10 @@ def main() -> None:
             "external_write",
             "--codex-app-current-rrule",
             "FREQ=MINUTELY;INTERVAL=3",
-            "--turn-envelope",
             cwd=project,
         )
-        ack_cli_args = decision["scheduler"]["codex_app"]["ack_cli_args"]
+        assert_complete_turn_decision(decision)
+        ack_cli_args = decision["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
         assert ack_cli_args[:4] == [
             "--registry",
             str(global_registry.resolve()),
@@ -146,9 +147,11 @@ def main() -> None:
             "--agent-id",
             AGENT_ID,
             "--codex-app",
+            "--complete-turn",
             cwd=project,
         )
-        stateful = follow_up["scheduler_hint"]["codex_app"]["stateful_backoff"]
+        assert_complete_turn_decision(follow_up)
+        stateful = follow_up["scheduler_hint"]["app_automation"]["stateful_backoff"]
         assert stateful["state_status"] == "same_identity", follow_up
 
     print("quota scheduler registry route smoke passed")
