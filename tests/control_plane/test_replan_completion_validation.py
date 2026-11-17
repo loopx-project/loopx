@@ -108,14 +108,22 @@ def test_qualified_path_replan_settles_without_completing_validation_todo(
         turn_id,
     )
     assert guard_rc == 0, guard
-    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID
 
-    refresh_rc, refresh = _run_cli(
-        registry,
-        runtime,
-        "refresh-state",
+    binding = (
         "--goal-id",
         GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+    writeback = (
+        "refresh-state",
+        *binding,
         "--classification",
         "evidence_linked_path_replan",
         "--delivery-batch-scale",
@@ -124,21 +132,29 @@ def test_qualified_path_replan_settles_without_completing_validation_todo(
         "outcome_progress",
         "--delivery-boundary",
         DELIVERY_BOUNDARY_SEMANTIC_CLOSEOUT,
-        "--agent-id",
-        AGENT_ID,
-        "--todo-id",
-        TODO_ID,
-        "--turn-instance-id",
-        turn_id,
-        "--autonomous-replan-recorded",
-        "--repair-delta-kind",
-        "goal_vision_patch",
-        "--agent-vision-json",
-        str(_vision_path(tmp_path / "vision.json")),
         "--no-global-sync",
         "--suppress-external-sinks",
     )
-    assert refresh_rc == 0, refresh
+    rc, retained = _run_cli(
+        registry, runtime, *writeback,
+        "--delivery-read-context", guard["delivery_result_context"]["read_context_id"],
+        "--autonomous-replan-recorded",
+        cwd=project,
+    )
+    assert rc == 0 and retained["settlement_identity"] == identity, json.dumps(retained)
+    assert retained["vision_checkpoint"]["satisfied"] is False
+    assert _spend_run_count(runtime) == 0
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", *binding, "--purpose", "supplement_checkpoint")
+    assert rc == 0 and context["settlement_identity"] == identity, json.dumps(context)
+    assert context["basis"]["todo"]["status"] == "open"
+
+    refresh_rc, refresh = _run_cli(
+        registry, runtime, *writeback,
+        "--checkpoint-read-context", context["read_context_id"],
+        "--agent-vision-json", str(_vision_path(tmp_path / "vision.json")),
+        cwd=project,
+    )
+    assert refresh_rc == 0, json.dumps(refresh)
     assert refresh["settlement_result"]["ok"] is True
     persisted = json.loads(
         Path(refresh["json_path"]).read_text(encoding="utf-8")

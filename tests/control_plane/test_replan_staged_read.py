@@ -294,18 +294,29 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert source["heartbeat_receipt"] == view["heartbeat_receipt"]
         assert json.dumps(source["quota"], sort_keys=True) == json.dumps(view["quota"], sort_keys=True)
-        assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
         selection = view["interaction_contract"]["cli_channel"].get("selection_command")
         if selection:
             assert "--decision-output-root" in selection["command_args_template"]
-        selector = checkpoint.effect_runtime_result("runtime.checkpoint_artifacts", {
+        select_request = {
             "action": "select_replan", "quota": source, "goal_id": GOAL, "agent_id": AGENT,
-            "turn_instance_id": TURN}, large_local_snapshot=True)
-        assert selector["capture"] is replan
+            "turn_instance_id": TURN,
+        }
+        checkpoint_result = receipt["checkpoint"]
         if not replan:
+            assert checkpoint_result["reason"] == "synthetic_no_native_capture", json.dumps(checkpoint_result)
+            selector = checkpoint.effect_runtime_result("runtime.checkpoint_artifacts", select_request,
+                large_local_snapshot=True)
+            assert selector["capture"] is False
             assert "result_writeback_read" not in explore_source(view)["content"]["graph"]
             assert "replan_action_packet" not in view
             return
+        # The original preflight observes the replan and projects selection.
+        # Its unbound guard cannot authorize a checkpoint for the chosen work.
+        assert source["heartbeat_receipt"]["settlement_binding_owed"] is True
+        assert checkpoint_result["captured"] is False
+        assert "current admitted identity" in checkpoint_result["error"]
+        with pytest.raises(EffectRuntimeRejected, match="current admitted identity"):
+            checkpoint.effect_runtime_result("runtime.checkpoint_artifacts", select_request, large_local_snapshot=True)
         assert source["autonomous_replan_obligation"]["replan_context"]["context_id"]
         assert "replan_context" not in view["autonomous_replan_obligation"]
         packet = view["replan_action_packet"]
@@ -317,7 +328,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             result = run(shlex.split(packet[stage]), cwd=fixture["project"], env=env,
                 capture_output=True, text=True, timeout=60, check=True)
             read = json.loads(result.stdout)
-            assert read["obligation_id"] == selector["obligation_id"]
+            assert read["obligation_id"] == packet["obligation_id"]
             assert read["stage"] == stage
             if stage == "writeback":
                 assert_explore_entry_and_writer(source, view, read)
@@ -330,8 +341,12 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             result = run(selected, cwd=fixture["project"], env=env, capture_output=True, text=True, timeout=60)
             assert result.returncode == 0, result.stdout
             [next_capture] = set(captured_dir.parent.glob("*/decision.json")) - {capture}
-            identity = json.loads(next_capture.read_bytes())["heartbeat_receipt"]["settlement_identity"]
+            selected_source = json.loads(next_capture.read_bytes())
+            identity = selected_source["heartbeat_receipt"]["settlement_identity"]
             assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
+            selector = checkpoint.effect_runtime_result("runtime.checkpoint_artifacts",
+                {**select_request, "quota": selected_source}, large_local_snapshot=True)
+            assert selector["capture"] is True and selector["settlement_effect_id"] == identity["effect_id"]
             assert capture.read_bytes() == source_path.read_bytes()
     finally:
         restart_effect_runtime(wait_for_exit=True)
@@ -516,8 +531,31 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             rejected = read("review", expected_code=1)
             assert "source hash" in rejected["reason"]
         (capture / "decision.json").write_bytes(saved)
-        # A valid next operation still reaches the existing writer and semantic gate.
-        result = call_progress_cli(fixture, *fixture["refresh"])
+        # Work is retained before the first direction judgment on this Turn.
+        refresh_args = fixture["refresh"]
+        assert refresh_args[-2] == "--vision-unchanged-reason"
+        refresh_args = refresh_args[:-2]
+        retained = call_progress_cli(fixture, *refresh_args, "--delivery-read-context",
+            source["delivery_result_context"]["read_context_id"])
+        assert retained["vision_checkpoint"]["satisfied"] is False
+        context = call_progress_cli(fixture, "checkpoint-context", "--purpose", "supplement_checkpoint",
+            "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN)
+        assert context["settlement_identity"] == source["heartbeat_receipt"]["settlement_identity"]
+        vision = tmp_path / "current-direction.json"
+        vision.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "active",
+            "vision_patch": {"acceptance_summary": "Validate the original artifact before completing the Todo."},
+            "path_delta": {
+                "outcome": "continue",
+                "prior_assumption": "An independent probe can resolve the previous result.",
+                "observed_reality": "The retained probe records new progress toward validation.",
+                "retained": ["The original artifact validation."],
+                "evidence_refs": ["evidence-current"],
+            },
+        }), encoding="utf-8")
+        result = call_progress_cli(fixture, *refresh_args, "--agent-vision-json", str(vision),
+            "--checkpoint-read-context", context["read_context_id"])
         assert result["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
     finally:
         restart_effect_runtime(wait_for_exit=True)

@@ -20,20 +20,7 @@ def populated_replan_source(root, *, acceptance=False, explore_context=None):
     source = _quota_payload(stride_strategy="evidence_conditioned_v1")
     source["replan_read_path"] = "/synthetic/decision.json"
     obligation = deepcopy(source["autonomous_replan_obligation"])
-    _, decision, work = _rows()
-
-    def scoped(value):
-        if isinstance(value, dict):
-            return {key: scoped(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [scoped(item) for item in value]
-        if value == "evidence-goal":
-            return GOAL_ID
-        if value == "agent-a":
-            return AGENT_ID
-        return value
-
-    work, decision = scoped(work), scoped(decision)
+    _, decision, work = _rows(goal_id=GOAL_ID, agent_id=AGENT_ID)
     decision["agent_vision"]["todo_delta"] = ["retain:todo-a"]
     decision["agent_vision"]["stride_decision"] = deepcopy(source["replan_action_packet"]["stride_control"]["minimal_example"])
     decision["agent_vision"]["path_delta"].update(
@@ -59,7 +46,9 @@ def populated_replan_source(root, *, acceptance=False, explore_context=None):
             row["delivery_outcome"] = "outcome_progress" if result == "advanced" else "outcome_gap"
         row["generated_at"] = (start + timedelta(minutes=index)).isoformat()
         row["turn_instance_id"] = f"turn-synthetic-{index}"
-        row["settlement_identity"]["turn_instance_id"] = row["turn_instance_id"]
+        identity = row["settlement_identity"]
+        identity["turn_instance_id"] = row["turn_instance_id"]
+        identity["effect_id"] = f"{GOAL_ID}:{AGENT_ID}:{identity['todo_id']}:{row['turn_instance_id']}"
         rows.append(row)
     contract = None
     if acceptance:
