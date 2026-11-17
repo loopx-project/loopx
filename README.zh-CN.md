@@ -50,7 +50,7 @@ LoopX 会按需把它变成可见的任务、决策门和证据。Claude Code �
      not news. Keep both languages aligned, newest first, using verified publication
      dates (UTC). -->
 
-- **2026-11-01 · 📘 [面向 7×24 Agent 的渐进式上下文交付](https://loopx-project.github.io/loopx/blog/zh/context-delivery/)** — 受 Compaction 周期约束的结构化差分与按需视图在 213 次模型唤醒中将单层渐进载荷降至原文 `32.5%`，112 次同周期续跑的叠加首读入口降至 `3.0%` 正文 / `5.0%` 含封装，同时保留压缩失配时原子回切完整基线的能力（延伸阅读：[47 天保鲜事故复盘](https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/)）。
+- **2026-11-01 · 📘 [面向 7×24 Agent 的渐进式上下文交付](https://loopx-project.github.io/loopx/blog/zh/context-delivery/)** — 受 Compaction 周期约束的结构化差分与按需视图在 213 次模型唤醒中将单层渐进载荷降至原文 `32.5%`，112 次同周期续跑的叠加首读入口降至 `3.0%` 正文 / `5.0%` 含封装，同时保留压缩失配时原子回切完整基线的能力。
 - **2026-10-25 · 🤝 [长程 Agent 研究：欢迎学术与企业合作者](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)** — 探索**等预算下的长期效果突破**：围绕 EdgeBench 和真实长程任务，研究反馈、重规划与可复现评测，同时核对效果与完整成本。欢迎学术与企业团队合作。[交流合作](https://github.com/loopx-project/loopx/discussions)。
 - **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共享 TypeScript 控制面与长程研究工作台。[迁移指南](docs/product/releases/v2.0.0.md#中文指南) · [重构历程](https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/)。
 - **2026-10-14 · 🤖 [Agentic Software](https://loopx-project.github.io/loopx/blog/zh/semantic-software-development/)** — 连接目标、证据、人的反馈与工程交付。
@@ -140,7 +140,7 @@ LoopX 把这套**开源、Harness 中立**的控制面直接做成可运行基�
 | --- | --- | --- |
 | **Event Inbox（事件收件箱）** | Single-flight **Goal / Todo / Hard Lease** 队列、异步对话收件箱，以及飞书 / GitHub 事件监听 | 多 Worker 并发踩踏同一份仓库状态；运行中途用户消息丢失 |
 | **Timers（定时与唤醒）** | **Guarded Heartbeat** 与安全周期预设（`daily-triage`、`changelog-draft`、`pr-watch`，可用 `loopx preset list` 只读查看） | 盲目 cron 在零增量或人门尚未批准时反复唤醒模型白烧 Token |
-| **Memory（记忆与压缩恢复）** | [`Decision Context`](loopx/capabilities/decision_context/README.md) 来源追踪、受 Compaction 周期约束的 **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/zh/context-delivery/)（213 次唤醒中单层渐进降至原文 `32.5%`，112 次同周期续跑首读降至原文 `3.0% / 5.0%`），以及可选 [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | 数据源过期却一路亮绿灯（[47 天 / 253 轮中的 5 次保鲜事故](https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/)）；上下文压缩后全量重放或差分悬空 |
+| **Memory（记忆与压缩恢复）** | [`Decision Context`](loopx/capabilities/decision_context/README.md) 来源追踪、受 Compaction 周期约束的 **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/zh/context-delivery/)（213 次唤醒中单层渐进降至原文 `32.5%`，112 次同周期续跑首读降至原文 `3.0% / 5.0%`），以及可选 [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | 数据源过期却一路亮绿灯；上下文压缩后全量重放或差分悬空 |
 | **Permissions（权限与延后批准）** | 显式 **Owner / 安全 / 公开发布 / 私有数据 Gate**、隔离 Worktree 与可评审交付交接 | 定时任务在无人确认时私自对外发布、强行合并或越界读写 |
 | **Outbox（低噪成果回传）** | 本地工作区与飞书共享同一份 Goal / 决策 / 证据视图，仅在真正完成、阻塞或待决时打扰人类 | 碎片化终端日志与各端高频无效推送，避免人肉盯盘 |
 
