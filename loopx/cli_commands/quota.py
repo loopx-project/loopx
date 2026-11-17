@@ -171,6 +171,7 @@ def _quota_goal_ref(
         return exact_goal_ref(goal_id, goal_instance_id)
     if args.quota_command not in {
         "should-run",
+        "receipt",
         "monitor-poll",
         "scheduler-ack",
         "scheduler-ack-current",
@@ -655,6 +656,15 @@ def handle_quota_command(
     capture_directory: Path | None = None,
     retained_action_selection_todo_id: str | None = None,
 ) -> int:
+    if args.quota_command == "receipt":
+        from .quota_receipt import read_quota_receipt, render_quota_receipt
+
+        payload = read_quota_receipt(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            goal_ref_resolver=lambda: _quota_goal_ref(args, registry_path=registry_path),
+        )
+        print_payload(payload, args.format, render_quota_receipt)
+        return 0 if payload["ok"] else 1
     native_result = handle_native_context_command(args, print_payload=print_payload,
         registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     if native_result is not None:

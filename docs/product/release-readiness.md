@@ -48,10 +48,18 @@ names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
 snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Use `loopx update plan --ref main` and `loopx update apply
---ref main` only for maintainer/dev archive qualification. Re-running the curl
-installer remains a repair path when an archive wrapper is too broken to run
-its own updater.
+snapshot rollback. Before replacing the launcher, `loopx update --rollback
+previous` checks that the selected release can read the current authoritative
+Todos for registered local File and SQLite Goals. If it cannot verify the read,
+the running version and Goal state stay in place. Both the registry's configured
+runtime and an explicit runtime override participate in this check. Rollback
+holds the installer's existing promotion lock through Todo checks, activation,
+Doctor and recovery. Recovery restores only the launcher installed by that
+operation, preserving a later replacement. Use a release with a matching state
+backup if older code cannot read the current data. Use `loopx update plan
+--ref main` and `loopx update apply --ref main` only for maintainer/dev archive
+qualification. Re-running the curl installer remains a repair path when an
+archive wrapper is too broken to run its own updater.
 
 For contributors, keep the clone-plus-canary path:
 
@@ -1211,6 +1219,15 @@ Build the list from the tag-to-tag Git range and merged pull-request metadata,
 not commit display names or an unreviewed generated changelog. Attribution is
 part of the release contract even when the same pull request is linked again
 under a product group.
+
+Match the complete Git range against GitHub's actual merge commit identifiers;
+PR numbers in commit titles are navigation, not a completeness check. Confirm
+that metadata coverage reaches the whole range, resolving unmatched integration
+commits through their associated merged PRs. Check an author's earlier merged
+PR history before calling a contribution first-time. Reconcile both language
+lists and their summary counts against that verified set; a formatting gate
+does not establish source completeness. Refresh this evidence when the final
+release range changes.
 
 Organize the remaining release note into the following stable groups. Omit an
 empty product group instead of inventing filler:

@@ -133,6 +133,9 @@ def explore_turn_context(
             # applied. New unrelated findings must not hide an older refutation.
             events, goal_id=goal_id, finding_limit=len(events),
             mermaid_node_limit=3,
+            # Yardstick's typed owner needs the canonical append ordinal for
+            # execution feedback. Presentation callers keep their v0 wire.
+            include_internal_finding_order=yardstick,
         )
     if gate["enabled"] or graph and (todo_id is not None or page_tasks or yardstick):
         todos = list_goal_todos(

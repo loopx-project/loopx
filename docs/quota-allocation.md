@@ -1455,6 +1455,14 @@ markdown output and highlights `next_automatic_turn` when a goal is eligible.
 If that value is `none`, the automation should skip delivery compute and follow
 the displayed gate, evidence, or health reason.
 
+`quota receipt --goal-id <goal-id> --agent-id <agent-id> --turn-instance-id <turn-id>`
+reads the committed guard for that exact Turn. `heartbeat_receipt` is null when
+the scoped receipt is missing. A guard that admitted an explicit work choice
+before it was made carries `selection_required` and `settlement_binding_owed`.
+After selection, the same lookup returns the committed settlement identity.
+Hosts use this read-only lookup to reconcile a finished attempt with its
+original guard, including when the current queue has changed.
+
 `quota should-run` is the per-goal guard for heartbeat jobs. It returns a small
 JSON or Markdown decision:
 

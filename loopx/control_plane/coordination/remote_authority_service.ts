@@ -6,7 +6,7 @@ import {PostgreSqlAuthorityService} from "./postgresql_authority_service.ts";
 import type {PostgreSqlAuthorityDatabase} from "./postgresql_authority_store.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "./todo_update.ts";
-import {executeCoordinationTodoCreate, COORDINATION_TODO_CREATE_RECEIPT_SCHEMA} from "./todo_create.ts";
+import {decodeCoordinationTodoCreateReceipt, executeCoordinationTodoCreate, COORDINATION_TODO_CREATE_RECEIPT_SCHEMA} from "./todo_create.ts";
 import {executeCoordinationTodoTerminalLifecycle, type CoordinationTodoTerminalLifecycleInput} from "./todo_terminal_lifecycle.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "./task_lease_lifecycle.ts";
 import {leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
@@ -243,11 +243,17 @@ export class RemoteAuthorityService {
             recorded.actor_id !== request.actor_id || recorded.request_sha256 !== binding.request_sha256) {
           return reply({status: "rejected", reason_code: "remote_authority_operation_mismatch"});
         }
-        if (mode === "recover") return reply({status: "found", operation_id: operationId,
-          provider_revision: previous.provider_revision, cursor: previous.cursor,
-          receipt_sha256: canonicalAuthoritySha256(original), historical_only: true,
-          result: commandResult(original.result && typeof original.result === "object"
-            ? original.result as JsonObject : original)});
+        if (mode === "recover") {
+          // Creation receipts store the original Todo, not command flags. Use
+          // their owner's decoder while retaining the original receipt digest.
+          const creation = request.operation === "todo_add" && original.schema_version === COORDINATION_TODO_CREATE_RECEIPT_SCHEMA
+            ? decodeCoordinationTodoCreateReceipt(original, request.todo_id) : null;
+          const historical = creation ? {...original, ...creation.fields, changed: creation.changed}
+            : original.result && typeof original.result === "object" ? original.result as JsonObject : original;
+          return reply({status: "found", operation_id: operationId,
+            provider_revision: previous.provider_revision, cursor: previous.cursor,
+            receipt_sha256: canonicalAuthoritySha256(original), historical_only: true, result: commandResult(historical)});
+        }
       } else if (previous && previous.status !== "missing") {
         return reply({status: previous.reason_code === "remote_authority_operation_mismatch" ? "rejected" : "unavailable",
           reason_code: previous.reason_code});

@@ -60,6 +60,8 @@ def without_resume_observation_time(value):
 
 
 def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection: dict, *, state_path: Path, provider: str = "file") -> dict:
+    if provider not in ("file", "sqlite"):
+        raise ValueError("Canonical local fixtures support File/SQLite only; PostgreSQL requires its service-owned fixture")
     package = Path(loopx.__file__).resolve().parent
     module = package / "control_plane/coordination/file_authority_store.ts"
     fence_module = package / "control_plane/coordination/legacy_writer_fence.ts"

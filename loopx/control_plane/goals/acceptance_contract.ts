@@ -692,3 +692,123 @@ export function validateAcceptanceCompletion(head: JsonObject, goalId: string, t
   acceptanceRequire(results.every(item => item.passed), "acceptance completion criteria failed");
   return {...receipt, results};
 }
+
+export function acceptanceSourceBinding(
+  input: {readonly goal_id: string; readonly todo_id: string; readonly operation_id: string},
+  requirements: AcceptanceCompletionRequirements,
+  providerRevision: string,
+): JsonObject {
+  return {goal_id: input.goal_id, todo_id: input.todo_id, operation_id: input.operation_id,
+    provider_revision: providerRevision, contract_revision: requirements.contract_revision,
+    contract_digest: requirements.contract_digest, todo_semantic_digest: requirements.todo_semantic_digest};
+}
+
+/** Only the trusted execution adapter supplies these fresh, structured runner
+ * receipts. Save the public-safe criterion results, never command output. */
+export function acceptanceCompletionEvidence(
+  head: JsonObject,
+  input: {
+    readonly goal_id: string;
+    readonly todo_id: string;
+    readonly goal_acceptance_source_binding?: JsonObject | null;
+    readonly goal_acceptance_validation_receipts?: unknown;
+  },
+  requirements: AcceptanceCompletionRequirements,
+  binding: JsonObject,
+): JsonObject {
+  acceptanceRequire(input.goal_acceptance_source_binding != null &&
+    canonicalAuthoritySha256(input.goal_acceptance_source_binding) === canonicalAuthoritySha256(binding),
+    "Acceptance completion source changed; run the configured criteria again against the current work.");
+  const receipts = input.goal_acceptance_validation_receipts;
+  acceptanceRequire(Array.isArray(receipts), "Acceptance completion requires fresh validation receipts.");
+  const results: JsonObject[] = [];
+  const validationReceipts: JsonObject[] = [];
+  for (const value of receipts) {
+    const row = canonicalAuthorityObject(value, "acceptance validation receipt");
+    const receipt = canonicalAuthorityObject(row.receipt, "acceptance criterion runner receipt");
+    acceptanceRequire(receipt.schema_version === "issue_fix_validation_command_v0" &&
+      typeof row.criterion_id === "string" && receipt.command_label === row.criterion_id &&
+      receipt.stdout_captured === false && receipt.stderr_captured === false && receipt.local_path_captured === false,
+      "Acceptance completion requires the configured criterion's public-safe runner receipt.");
+    results.push({criterion_id: row.criterion_id, passed: receipt.passed, exit_code: receipt.exit_code});
+    validationReceipts.push({criterion_id: row.criterion_id, receipt: Object.fromEntries([
+      "schema_version", "command_label", "passed", "exit_code", "status", "summary",
+      "stdout_captured", "stderr_captured", "local_path_captured",
+    ].flatMap(key => receipt[key] === undefined ? [] : [[key, receipt[key]]]))});
+  }
+  const evidence = validateAcceptanceCompletion(head, input.goal_id, input.todo_id, {
+    contract_revision: requirements.contract_revision, contract_digest: requirements.contract_digest,
+    todo_id: input.todo_id, todo_semantic_digest: requirements.todo_semantic_digest, results,
+  });
+  acceptanceRequire(evidence !== null, "Acceptance completion requirements disappeared.");
+  return {source_binding: binding, ...evidence, validation_receipts: validationReceipts};
+}
+
+export function acceptedCompletionResult(
+  input: {
+    readonly command: string;
+    readonly completion_result?: JsonObject | null;
+    readonly actor_agent_id: string | null;
+    readonly todo_id: string;
+    readonly operation_id: string;
+  },
+  todo: JsonObject,
+  acceptanceEvidence: JsonObject | null,
+): JsonObject | null {
+  if (input.completion_result == null) return null;
+  const row = canonicalAuthorityObject(input.completion_result, "completion result");
+  acceptanceRequire(input.command === "complete" && todo.role === "agent" &&
+    acceptanceEvidence !== null && input.actor_agent_id === todo.claimed_by,
+    "A result requires an independently accepted Agent Todo owned by its producer.");
+  const fields = ["content_type", "provider", "sha256", "size_bytes"];
+  acceptanceRequire(Object.keys(row).length === fields.length && fields.every(field => Object.hasOwn(row, field)) &&
+    row.provider === "local_runtime_v0" &&
+    ["application/json", "text/markdown", "text/plain"].includes(String(row.content_type)) &&
+    typeof row.sha256 === "string" && BARE_SHA256_PATTERN.test(row.sha256) &&
+    Number.isSafeInteger(row.size_bytes) && Number(row.size_bytes) > 0 && Number(row.size_bytes) <= 128000,
+    "Completion result must be a bounded local content-addressed object.");
+  return {...row, schema_version: "loopx_completion_result_v0",
+    producer_agent_id: input.actor_agent_id, todo_id: input.todo_id,
+    completion_operation_id: input.operation_id,
+    acceptance_contract_digest: acceptanceEvidence.contract_digest,
+    acceptance_contract_revision: acceptanceEvidence.contract_revision};
+}
+
+const ACCEPTANCE_FAILURE_NEXT_ACTIONS: Record<string, string> = {
+  workspace_dirty: "Preserve unrelated Git-visible files in ignored private storage or outside the worktree, then retry completion from that clean worktree with the same Turn identity.",
+  workspace_unverified: "Re-enter a verifiable independent delivery worktree and retry with the same Turn identity.",
+  workspace_receipt_unavailable: "Recover the recorded delivery workspace receipt before retrying completion.",
+  workspace_receipt_invalid: "Inspect the recorded delivery workspace receipt before retrying completion.",
+  workspace_receipt_mismatch: "Re-enter the recorded delivery worktree before retrying completion.",
+  workspace_repository_mismatch: "Re-enter the recorded delivery repository and revision before retrying completion.",
+  workspace_unavailable: "Restore the declared validation workspace before retrying completion.",
+  validation_basis_changed: "Inspect the changed verifier files and ask the contract owner to review the acceptance basis.",
+  timeout: "Inspect the validator runtime and retry the same criterion without changing the acceptance binding.",
+  command_not_run: "Restore the configured validation executable and retry completion.",
+  command_malformed: "Ask the contract owner to repair the configured validation command.",
+  command_failed: "Inspect the configured criterion's evidence and validator, then retry completion without rebinding acceptance.",
+};
+
+/** Keep the runner's typed failure at the public boundary without exposing its
+ * command, output, workspace path, or caller-controlled summary. */
+export function acceptanceCriterionFailure(receipts: unknown): JsonObject | null {
+  if (!Array.isArray(receipts)) return null;
+  for (const value of receipts) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    const row = value as Record<string, unknown>;
+    const receipt = row.receipt;
+    if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) continue;
+    const result = receipt as Record<string, unknown>;
+    if (result.passed !== false || typeof row.criterion_id !== "string") continue;
+    const status = typeof result.status === "string" ? result.status : "command_failed";
+    const validationStatus = Object.hasOwn(ACCEPTANCE_FAILURE_NEXT_ACTIONS, status) ? status : "unknown_failure";
+    const exitCode = typeof result.exit_code === "number" && Number.isInteger(result.exit_code)
+      ? result.exit_code : null;
+    return {schema_version: "goal_acceptance_validation_failure_v0",
+      criterion_id: row.criterion_id, validation_status: validationStatus,
+      exit_code: exitCode,
+      next_action: ACCEPTANCE_FAILURE_NEXT_ACTIONS[validationStatus] ??
+        "Inspect the privacy-safe runner receipt and configured criterion before retrying completion."};
+  }
+  return null;
+}

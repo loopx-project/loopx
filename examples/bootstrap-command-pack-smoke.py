@@ -43,6 +43,7 @@ def assert_packet_summary_refs(
     *,
     packet_kind: str,
     compact_projection_default: bool = False,
+    legacy_fields_retained: bool | None = None,
 ) -> dict[str, object]:
     summary = payload["packet_summary"]
     assert isinstance(summary, dict)
@@ -50,8 +51,10 @@ def assert_packet_summary_refs(
     assert summary["packet_kind"] == packet_kind
     compatibility = summary["compatibility"]
     assert isinstance(compatibility, dict)
+    if legacy_fields_retained is None:
+        legacy_fields_retained = not compact_projection_default
     assert compatibility == {
-        "legacy_fields_retained": not compact_projection_default,
+        "legacy_fields_retained": legacy_fields_retained,
         "compact_projection_default": compact_projection_default,
         "removal_gate": "explicit_host_shadow_parity",
     }
@@ -357,6 +360,8 @@ def test_start_goal_guided_previews_transaction_without_mutation() -> None:
         selection_summary = assert_packet_summary_refs(
             selection,
             packet_kind="guided_start_host_surface_selection",
+            compact_projection_default=True,
+            legacy_fields_retained=True,
         )
         assert selection_summary["next_step_kind"] == "select_host_surface"
         assert selection["guided_transaction"]["blocked_by"] == "host_surface_selection"

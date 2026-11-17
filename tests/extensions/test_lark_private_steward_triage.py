@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,15 +21,43 @@ from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntim
 from loopx.file_lock import try_exclusive_file_lock
 
 
-def fixture_card_provider(provider, transport, monkeypatch):
-    """Model a Bot send UUID and exact provider message readback at the CLI seam."""
+def fixture_card_provider(provider, transport, monkeypatch, *, opaque_callback_values=False):
+    """Model a Bot send UUID and Lark's legacy user_card_content projection."""
     deliveries = {}
     sends = []
     lost = [False]
 
     def run(args, cwd=None, timeout=None):
         if "+messages-send" not in args or "--msg-type" not in args:
-            return provider(args, cwd, timeout)
+            result = provider(args, cwd, timeout)
+            if "GET" not in args or "--params" not in args:
+                return result
+            params = json.loads(args[args.index("--params") + 1])
+            if params.get("card_msg_content_type") != "user_card_content":
+                return result
+            payload = json.loads(result["stdout"])
+            for message in payload["data"]["items"]:
+                card = json.loads(message["body"]["content"])
+                card["header"]["title"]["i18n"] = {}
+                card["config"].pop("wide_screen_mode", None)
+                if card["config"].get("enable_forward") is False:
+                    del card["config"]["enable_forward"]
+                for row in card["elements"]:
+                    if row["tag"] == "div" and row["text"]["tag"] == "plain_text":
+                        row["text"]["tag"] = "lark_md"
+                    if row["tag"] == "action" and opaque_callback_values:
+                        for index, button in enumerate(row["actions"]):
+                            del button["value"]
+                            button["text"]["i18n"] = {}
+                            button["custom_action_id"] = f"opaque-callback-{index}"
+                            button["behaviors"] = [{"type": "callback"}]
+                # Preserve observed update metadata; it does not attest which
+                # parameters the provider omitted from this read projection.
+                if opaque_callback_values:
+                    message["updated"] = True
+                    message["update_time"] = str(int(message["create_time"]) + 10000)
+                message["body"] = {"content": json.dumps(card, ensure_ascii=False)}
+            return {**result, "stdout": json.dumps(payload, ensure_ascii=False)}
         key = args[args.index("--idempotency-key") + 1]
         card = json.loads(args[args.index("--content") + 1])
         chat = args[args.index("--chat-id") + 1]
@@ -43,12 +72,16 @@ def fixture_card_provider(provider, transport, monkeypatch):
                 "sender": {"id": provider.profile_apps[profile], "sender_type": "app"},
                 "body": {"content": json.dumps(card, ensure_ascii=False)},
                 "create_time": str(int(time.time() * 1000)),
+                "deleted": False, "updated": False,
             }
+            provider.messages[message_id]["update_time"] = provider.messages[message_id]["create_time"]
             if lost[0]:
                 lost[0] = False
                 # The child ran and the result was lost after committing the write.
                 import subprocess
                 raise subprocess.TimeoutExpired(args, timeout)
+        else:
+            assert card == json.loads(provider.messages[deliveries[key]]["body"]["content"])
         return {"returncode": 0, "stdout": json.dumps({"ok": True, "data": {"message_id": deliveries[key]}})}
 
     monkeypatch.setattr(transport, "runner", run)
@@ -67,13 +100,14 @@ def event_for(message_id, action, *, suffix="1", **changes):
             "timestamp": str(int(time.time() * 1000)), "action_value": action, **changes}
 
 
-def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch):
+@pytest.mark.parametrize("opaque_callback_values", [False, True])
+def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch, opaque_callback_values):
     store, runtime, provider, transport, binding, capture, _ = steward
     registry = json.loads(runtime.registry_path.read_text())
     registry["goals"] = [{"id": "demo-a"}, {"id": "demo-b"}]
     runtime.registry_path.write_text(json.dumps(registry))
     profile = "steward-app"
-    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=lambda: True)
     event = provider.event(profile, "before-menu", "Ordinary text still goes to the original agent.")
     assert transport.admit(profile, event)["status"] == "durably_accepted"
     original = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
@@ -81,7 +115,7 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     assert transport.reconcile() == 1
     before = capture.read_bytes(), store.messages(original["session_id"])
     native_refs = set(transport.core.root.glob("*.json"))
-    writes, lost = fixture_card_provider(provider, transport, monkeypatch)
+    writes, lost = fixture_card_provider(provider, transport, monkeypatch, opaque_callback_values=opaque_callback_values)
     reads = []
     unavailable = {"demo-a", "demo-b"}
 
@@ -176,6 +210,24 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     ]:
         with pytest.raises(ValueError):
             service._handle_private_steward_callback(profile, bad, bad["action_value"])
+    original_card = provider.messages[picker_id]["body"]["content"]
+    altered = json.loads(original_card)
+    altered["elements"][0]["actions"][0]["value"]["goal"] = "unapproved"
+    forwarding = json.loads(original_card)
+    forwarding["config"]["enable_forward"] = True
+    for drifted in (altered, forwarding):
+        provider.messages[picker_id]["body"]["content"] = json.dumps(drifted)
+        if opaque_callback_values and drifted is altered:
+            # Parameters are absent from this read view. The actual click
+            # supplies the changed value, which the outbound record denies.
+            changed_action = drifted["elements"][0]["actions"][0]["value"]
+            changed_event = {**current, "action_value": changed_action}
+            with pytest.raises(ValueError, match="callback does not match the original Steward card"):
+                service._handle_private_steward_callback(profile, changed_event, changed_action)
+        else:
+            with pytest.raises(ValueError, match="original Steward card could not be verified"):
+                service._handle_private_steward_callback(profile, current, action)
+    provider.messages[picker_id]["body"]["content"] = original_card
     assert transport.reconcile() == 0
     assert writes == sends_before_denials
 
@@ -193,7 +245,9 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
 def test_visible_steward_card_can_be_clicked_during_sender_readback(steward, monkeypatch):
     store, runtime, provider, transport, _, capture, _ = steward
     profile = "steward-app"
-    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
+    receiving = threading.Event()
+    receiving.set()
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=receiving.is_set)
     writes, lost = fixture_card_provider(provider, transport, monkeypatch)
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {"private_profiles": transport.profiles()},
         runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport)
@@ -226,10 +280,12 @@ def test_visible_steward_card_can_be_clicked_during_sender_readback(steward, mon
 
         # Retry recovers the same provider id. The sender's separate verification
         # temporarily fails, but the user can already see and click the card.
+        receiving.clear()
         assert transport.reconcile_request(path) == 0
         assert failed_once
         original = json.loads(path.read_text())
         assert original["status"] == "captured" and original["triage"]["message_id"] == message_id
+        receiving.set()
 
         other_id = "om_fixture_copied_menu"
         provider.messages[other_id] = {**provider.messages[message_id], "message_id": other_id}
@@ -358,7 +414,7 @@ def test_triage_reads_declared_source_before_shared_runtime(steward, monkeypatch
 
     writes, _ = fixture_card_provider(provider, transport, monkeypatch)
     profile = "steward-app"
-    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=lambda: True)
     service = LarkGoalTopicRuntimeService(
         snapshot_provider=lambda: {"private_profiles": transport.profiles()},
         runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport,
@@ -511,8 +567,11 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
             threading.Event().wait(0.01)
 
     def available():
-        probe = transport.steward_callback_readiness.get(ready_key)
-        return probe is not None and probe()
+        stream = transport.steward_callback_streams.get(ready_key)
+        return stream is not None and stream.ready()
+
+    def callback_error():
+        return service.health_snapshot()[profile].get("callback_error_code")
 
     def request(name, command):
         previous = len(writes)
@@ -540,8 +599,17 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
     try:
         messages.ready()
         assert failed_spawn.wait(5)
+        eventually(lambda: callback_error() == "lark_review_callback_source_start_failed")
+        rejected = callbacks.get(timeout=5)
+        rejected.emit({"ok": False, "error": {
+            "type": "validation", "subtype": "failed_precondition", "message": "private provider diagnostic",
+        }})
+        rejected.terminate()
+        eventually(lambda: callback_error() == "lark_review_callback_source_precondition_failed")
+        assert "private provider diagnostic" not in json.dumps(service.health_snapshot())
         first = callbacks.get(timeout=5)
-        menu, _ = request("before-callback-ready", "/triage")
+        first.lines.put("[event] ready event_key=im.message.receive_v1\n")
+        menu, old_menu_id = request("before-callback-ready", "/triage")
         assert not buttons(menu)
         assert all(cmd in json.dumps(menu) for cmd in ("/gates", "/todos", "/triage all"))
         first.ready()
@@ -579,6 +647,9 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
         second.ready()
         eventually(available)
         menu, menu_id = request("recovered-menu", "/triage")
+        old_menu = json.loads(provider.messages[old_menu_id]["body"]["content"])
+        assert not buttons(old_menu)
+        assert "回调恢复后，发送 /triage 获取新卡片" in json.dumps(old_menu, ensure_ascii=False)
         action = buttons(menu)["总览"]
         callback = event_for(menu_id, action, suffix="recovered")
         index_path.touch()
@@ -600,14 +671,14 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
         assert "Decide whether to accept the prepared report" in json.dumps(partial, ensure_ascii=False)
         assert "近期进展暂未读全" in json.dumps(partial, ensure_ascii=False)
         assert partial["header"]["template"] == "orange"
-        assert children == [messages, first, second]
+        assert children == [messages, rejected, first, second]
         assert messages.poll() is None
         health = service.health_snapshot()[profile]
         assert health["status"] == "listening" and health["restart_count"] == 0
         eventually(lambda: service.health_snapshot()[profile].get("callback_error_code") is None)
     finally:
         service.close()
-    assert not transport.steward_callback_readiness
+    assert not transport.steward_callback_streams
     assert all(child.poll() is not None for child in children)
     with try_exclusive_file_lock(lock_path, operation="next_listener") as lease:
         assert lease is not None

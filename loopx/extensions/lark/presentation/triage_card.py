@@ -40,11 +40,12 @@ def build_steward_triage_menu(value: ButtonValue) -> dict[str, Any]:
 def steward_triage_without_buttons(
     card: Mapping[str, Any], *, query_result: bool = False,
 ) -> dict[str, Any]:
+    recovery = "回调恢复后，发送 /triage 获取新卡片。"
     if query_result:
-        guidance = [_text("按钮暂不可用。可重发查询命令，或发送 /triage 查看其他命令。")]
+        guidance = [_text("发卡时按钮暂不可用。可重发原查询命令。" + recovery)]
     else:
         guidance = [
-            _text("按钮暂不可用，可以发送文字命令。"),
+            _text("发卡时按钮暂不可用。可使用下方的文字命令。" + recovery),
             *(_text(f"{command} · {label}") for command, label in (
                 ("/gates", FOCUS_TITLES["gates"]), ("/todos", FOCUS_TITLES["todos"]),
                 ("/triage all", FOCUS_TITLES["all"]),

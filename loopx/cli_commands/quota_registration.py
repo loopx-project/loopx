@@ -49,6 +49,7 @@ def register_quota_command(
             "status",
             "plan",
             "should-run",
+            "receipt",
             "context-read",
             "context-project",
             "context-hook",
@@ -62,7 +63,7 @@ def register_quota_command(
             "void-slot",
         ],
         default="status",
-        help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
+        help="Use status for all groups, plan for next-turn groups, should-run for one goal, receipt to read one exact committed guard without admission, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument("--decision-file", help="Original captured decision for read-only replan-view.")
     quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view.")
@@ -303,7 +304,7 @@ def register_quota_command(
     quota_parser.add_argument(
         "--turn-instance-id",
         help=(
-            "Stable heartbeat settlement id for `quota should-run`, "
+            "Stable heartbeat settlement id for `quota should-run`, `quota receipt`, "
             "`quota monitor-poll`, scheduler ACK/failure follow-ups, and "
             "`quota spend-slot`. The guard persists one idempotent receipt; "
             "reuse the same id through monitor writeback, scheduler handoff, "

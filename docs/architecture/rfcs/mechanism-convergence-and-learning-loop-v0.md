@@ -2,16 +2,16 @@
 
 - **RFC status:** Accepted (effective upon merge; a discussion proposal before merge)
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal; this document delivers a source audit and target architecture, with no runtime change.
+- **Delivery maturity:** Partial upon merge: ordinary-execution linkage in the existing source reader; method benefit and the remaining target architecture are unqualified.
 - **Authors / owners:** LoopX maintainers; source facts have code references, while the target architecture and trade-offs are AI-assisted proposals pending maintainer review and confirmation.
-- **Created / last normative revision:** 2026-11-14
+- **Created / last normative revision:** 2026-11-14 / 2026-11-15
 - **Implementation baseline:** `8d7d234c6f55fa45fa5db0ad5a156dcaaf726d32`; references to `main` in section 4 mean this revision.
 - **Semantic mirror:** [中文版](mechanism-convergence-and-learning-loop-v0.zh-CN.md)
 - **Related:** [roadmap](loopx-overall-roadmap-v0.md), [small kernel](monorepo-distribution-split-v0.md), [Controller/unified contract](controller-executor-unified-contract-v0.md), [Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.md), [research exploration](research-exploration-control-plane-v0.md), [memory utility](post-outcome-memory-utility-attribution-v0.md), [Goal contract evolution](goal-contract-evolution-v0.md).
 
 ## Document map and maintenance contract
 
-Section 4 describes the pinned implementation; 4.3 separates unmerged work. Sections 5–11 propose the converged structure, calls, migration and composition acceptance, not shipped behavior. This RFC owns cross-mechanism composition; individual schemas, authority, defaults and promotion gates remain in their owning specifications. Amend those specifications together when changing them rather than overriding them here. Implementation evidence stays in existing RFCs/tasks and ledgers, without a parallel roadmap or execution queue. Maintainers must verify and confirm consequential design choices; this document assumes neither a human contribution ratio nor ownership of unconfirmed ideas.
+Section 4 describes the pinned implementation; 4.3 separates unmerged work. Sections 5–11 propose the converged structure, calls, migration and composition acceptance; only the explicit implementation checkpoint qualifies source behavior. This RFC owns cross-mechanism composition; individual schemas, authority, defaults and promotion gates remain in their owning specifications. Amend those specifications together when changing them rather than overriding them here. Implementation evidence stays in existing RFCs/tasks and ledgers, without a parallel roadmap or execution queue. Maintainers must verify and confirm consequential design choices; this document assumes neither a human contribution ratio nor ownership of unconfirmed ideas.
 
 ## 1. Decision summary
 
@@ -172,6 +172,8 @@ Old context-applied receipts still describe context artifacts only. Missing orig
 
 Reshape internal APIs for this target and migrate real callers together rather than indefinitely adding adapters to preserve old code. Independently evolving rules keep separate owners. Temporary coexistence must name callers, exit conditions and recovery purposes; a common rule has one owner at completion. Respect #8516's review/merge boundary for its in-flight primitives rather than copying an implementation or prebuilding a mechanism-composer.
 
+**Subtraction Gate compliance.** Mechanism convergence obeys the normative [Subtraction Gate & Anti-Context-Gravity Rules](controller-executor-unified-contract-v0.md#subtraction-gate) (and its [small-kernel companion](monorepo-distribution-split-v0.md#subtraction-gate)): convergence is incomplete while a unified facade coexists with unretired normal producers, `raw_quota_turn_view`-style `v0` compatibility adapters, or permanent off-mode switches (`--context-delivery off`), or while verification inflates through combinatorial old × new mode matrix tests and multi-thousand-line append-only ledgers (as measured on `main@f15ebdd16b` and PR `#8266`). Every transitional adapter or `legacy_fallback` path must name its active consumer and deletion milestone, and every refactoring slice must preserve LoopX's kernel invariants (exclusive leases/fencing, default-deny authority/ACL isolation, once-only idempotent settlement receipts, and same-origin counterfactual checkpoints) and failure-counterexample test corpus while deleting superseded producers and Python/TS wrappers.
+
 ### 5.6 Complete example: budget changes should change the method
 
 The following times are **synthetic design assumptions**, not measured costs. A valid incumbent exists; a new candidate improves the proxy but not authoritative results. Ninety minutes remain, final confirmation is expected to take 25 minutes, and another 20 minutes is reserved for reading/control/recovery.
@@ -248,6 +250,90 @@ Effect evaluation reuses the [existing pilot and decision-episode acceptance](lo
 | Matched outcomes and forecast calibration | Original research experiments first compare complete-budget outcomes under the existing pilot; qualifying prior forecasts separately test duration/results and other subpredictions. | Frozen conditions, missingness handling and holdout boundaries. Without benefit evidence, improve the design rather than labeling more accurate forecasts better allocation. |
 | Evidence-supported cross-task improvement | Reward Memory carries conditional experience; the original policy owner decides whether to use calibrated/learned values; Skills qualify separately. | Real choices, execution and outcomes in new tasks, including mismatch/counterexamples/revocation and complete cost. Extend application only for callers missing the needed relation. |
 | Execution convergence | C1/C4/C9 and #8266/#8484 migrate entries, results and recovery. | Original single-session semantic/outcome/cost/recovery controls; remove duplicate normal paths and qualify dual roles separately. |
+
+**Source checkpoint: ordinary execution linkage (2026-11-15).** The existing
+[`work Yardstick reader`](../../../loopx/control_plane/work_items/yardstick_decision.ts)
+consumes confirmed ordinary execution findings without requiring a repeated
+decision. It reuses canonical history ordering and the existing measurement
+work-window rule, retains the original choice and links prior execution after
+the next choice. The existing Explore adapter supplies missing source ordinals
+only to the opted-in work reader; public history and disabled behavior retain
+their wire. [File/SQLite CLI regression](../../../tests/control_plane/test_work_yardstick_cli.py)
+covers the original omission failure, independent candidate readback, a later
+choice, replay and disable; typed checks reject foreign, tentative, stale and
+late-visible attribution. This qualifies source transport and record linkage,
+not current-model adoption, prediction calibration, cross-task benefit or
+matched-budget gains. Those requirements and C1/C4/C9 integration remain open;
+there is no new decision owner, execution entry, schema or default activation.
+
+The ordinary [`Turn consumer`](../../../loopx/cli_commands/turn_run_once.py)
+also retains the existing inline `explore_result` in its decoded Vision packet
+and delegates parsing and delivery to the original Explore owner. File/SQLite
+[public Turn checks](../../../tests/control_plane/test_explore_settlement_attachment.py)
+cover independently validated artifacts, off/omitted and rejected inputs,
+committed replay, and interrupted delivery recovered from the original Run.
+Recovery preserves that Run, invokes the Host once, and debits once only after
+the requested delivery finishes. Terminal and successor completion are covered;
+the original attachment preflight runs before completing a Todo. Inputs rejected
+by that preflight leave it open without primary writeback or debit. These checks qualify the caller boundary;
+native model adoption, complete-budget benefit, other backend qualification
+and integration of the in-flight execution proposals remain open.
+
+The same source checkpoint also rejects public quota CLI spending while a
+requested attachment is pending. Both ordinary Turn and `refresh-state` receipt
+writers finish attachment delivery first; ordinary and combined refresh recovery
+deliver the verified original Run before repairing its receipt. File/SQLite
+failure controls cover progress, completion, terminal and successor Runs, plus
+interrupted first CLI delivery. Failure leaves no writeback receipt or debit;
+recovery preserves the original Run, invokes the Host once and debits once.
+Receipt repair retains committed replay semantics after Yardstick is disabled;
+the original delivery and settlement finish before the next Turn starts.
+The opted-in reader honors the verified successor history prefix during a
+wall-clock rollback while retaining the original work window and strict fallback
+for captures without a prefix. File/SQLite regressions cover both rejected early
+spend and retained candidate/finding readback; these are correctness boundaries,
+not evidence of model adoption or benefit.
+
+The existing [released-feedback consumer](../../../tests/control_plane/test_material_feedback_checkpoint.py)
+now follows the ordinary selection route's captured review, Explore evidence
+and writeback readers instead of expecting raw guard fields. The same
+File/SQLite checks cover Stride off/enabled, soft claims/hard leases and
+historical feedback as context. They retain the independently checked cost-two
+route, use released evidence for a prospective comparison, execute a cost-one
+route and reject terminal closeout without the original completion validation.
+Readers preserve the original settlement identity and perform no debit. The
+unchanged runtime at the pinned base and author/composition sources supports
+this path; the obsolete test consumer failed before its reader migration.
+This is scripted local execution and caller qualification. Actual model
+adoption, calibration, matched-budget and cross-task benefit remain unproven.
+
+Direct `run-once` recovery now carries that committed replay through both the
+ordinary writeback callback and its resolver. A verified original receipt repair
+can finish after Yardstick is disabled; a new typed capture remains refused.
+The focused File/SQLite regression preserves the original Run and Host, writes
+one finding and receipt, spends once, and checks effect-free replay plus rejected
+new capture. This repairs the existing recovery contract without a new owner or
+activation; installed Hosts, other backends and benefit retain their own gates.
+
+The replay and new-capture assertions execute inside the recovery fixture.
+An earlier test update put that block in the no-evidence test: the recovery
+cases skipped those assertions, while ordinary settlement failed on undefined
+fixture names. Moving the existing block to its owning scope restores both
+checks without changing runtime logic. File/SQLite recovery, effect-free replay,
+new disabled capture refusal and ordinary no-evidence settlement now run through
+the public CLI; earlier results retain their original narrower coverage.
+
+Backend names also need actual provider evidence. The shared
+[local authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
+now rejects unsupported providers before storage or writer-fence effects;
+[CLI controls](../../../tests/control_plane/test_canonical_authority_fixture.py)
+verify actual File/SQLite readback and preserve state on rejection. Previously,
+a PostgreSQL label silently initialized File authority. The existing
+[PostgreSQL remote task candidate](../../reference/remote-authority-task-service-v0.md)
+is separately qualified through real TLS, restricted roles, task lifecycle and
+read-only quota observation. It admits no ordinary host Turn. These service
+checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
+adding another execution profile to this slice.
 
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
