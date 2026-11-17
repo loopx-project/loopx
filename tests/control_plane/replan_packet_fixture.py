@@ -12,6 +12,7 @@ import json
 
 from loopx.control_plane.work_items.progress_observation import build_replan_action_packet
 from loopx.control_plane.work_items.replan_context_codec import project_replan_context
+from test_replan_context_evidence import _settled_pair
 from test_replan_context_order import _rows
 from test_replan_host_context_projection import AGENT_ID, GOAL_ID, _quota_payload
 
@@ -20,20 +21,7 @@ def populated_replan_source(root, *, acceptance=False, explore_context=None):
     source = _quota_payload(stride_strategy="evidence_conditioned_v1")
     source["replan_read_path"] = "/synthetic/decision.json"
     obligation = deepcopy(source["autonomous_replan_obligation"])
-    _, decision, work = _rows()
-
-    def scoped(value):
-        if isinstance(value, dict):
-            return {key: scoped(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [scoped(item) for item in value]
-        if value == "evidence-goal":
-            return GOAL_ID
-        if value == "agent-a":
-            return AGENT_ID
-        return value
-
-    work, decision = scoped(work), scoped(decision)
+    _, decision, work = _rows(goal_id=GOAL_ID, agent_id=AGENT_ID)
     decision["agent_vision"]["todo_delta"] = ["retain:todo-a"]
     decision["agent_vision"]["stride_decision"] = deepcopy(source["replan_action_packet"]["stride_control"]["minimal_example"])
     decision["agent_vision"]["path_delta"].update(
@@ -58,8 +46,12 @@ def populated_replan_source(root, *, acceptance=False, explore_context=None):
                 probe_kind=f"probe-{index % 5}", evidence_ids=[f"evidence:synthetic-{index}"])
             row["delivery_outcome"] = "outcome_progress" if result == "advanced" else "outcome_gap"
         row["generated_at"] = (start + timedelta(minutes=index)).isoformat()
-        row["turn_instance_id"] = f"turn-synthetic-{index}"
-        row["settlement_identity"]["turn_instance_id"] = row["turn_instance_id"]
+        turn_id = f"turn-synthetic-{index}"
+        row["turn_instance_id"] = turn_id
+        bound_work, _ = _settled_pair(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=row["todo_id"], turn_instance_id=turn_id,
+        )
+        row["settlement_identity"] = bound_work["settlement_identity"]
         rows.append(row)
     contract = None
     if acceptance:
