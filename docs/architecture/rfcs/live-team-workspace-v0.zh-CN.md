@@ -111,6 +111,8 @@ capability 或 provider。内置本地 Chat host 承载观测传输，可选 mod
 provider 保留各自 adapter。金融指标留在 finance/research capability，作为有
 受众边界的 artifact/claim 投影输入，不能变成 kernel 规则。
 
+[共享权威的跨人访问](shared-goal-authority-state-provider-v0.zh-CN.md#cross-person-shared-access)约束权限、证据版本及回传。团队工作区沿用 L1/L2 观察人如何阅读结论、不确定性、质疑或修订、来源与版本、独立核查、接收方实际采用和待决事项。工作区展示资源 owner 按受众过滤的证据与结果。领域 capability 负责研究判断。
+
 ```mermaid
 flowchart LR
   W[既有 work / Turn / peer / acceptance owner] --> P[Typed 受众范围展示投影]

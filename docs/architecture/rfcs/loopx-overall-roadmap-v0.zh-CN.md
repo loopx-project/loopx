@@ -950,8 +950,11 @@ owner、旧 writer/effect-drain 资格、M4 恢复、M5 产品验收继续在 #5
 promotion 独立验收。本检查点不激活 identity，也不要求所有 R1–R4 改动等待完整
 lifecycle。
 
+<a id="r6-localcloud-convergence"></a>
+
 ### R6：本地与云端汇合
 
+- **跨人产品路径** 参见[共享权威的 R6 跨人验收](shared-goal-authority-state-provider-v0.zh-CN.md#cross-person-delivery-under-r6)。M1 验证资源级默认拒绝及共享阅读，M2 验证可回传的跨设备工作及团队工作区 L1/L2。M3 保留下方完整 G3/R6 退出条件。
 - **Owner：** shared-authority provider/service、session host adapter、collaboration；基础是已有 PostgreSQL admission/identity-rotation seam，不重写 store。
 - **交付：** 真正的认证传输、tenant/Goal/actor 权限、host identity 和 capability admission；跨主机 request/receipt/wake 只通过各 owner。处理断网、租约过期、旧 worker 回归、service restart/restore incarnation、ambiguous commit。
 - **退出：** 至少两个真实 host（含一个云端 worker）在隔离 tenant 上协作；错 tenant/actor、撤销与 split-brain 负例通过；共享预算与 admission 有明确 owner，不能声称本地 quota 就是分布式资源预留。
