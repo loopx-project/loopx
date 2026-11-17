@@ -177,7 +177,7 @@ test('formatted Mermaid labels survive the lazy SVG clone', async t => {
     const markup = enlargeMermaidDiagram(svg);
     const container = document.createElement('div');
     container.innerHTML = markup;
-    return { svg: !!container.querySelector('svg'), labels: container.querySelectorAll('.nodeLabel').length, text: container.querySelector('.nodeLabel')?.textContent, error: !!container.querySelector('parsererror') }; 
+    return { svg: !!container.querySelector('svg'), labels: container.querySelectorAll('.nodeLabel').length, text: container.querySelector('.nodeLabel')?.textContent, error: !!container.querySelector('parsererror') };
   });
   assert.deepEqual(result, { svg: true, labels: 2, text: 'one & twonext line', error: false });
 });
