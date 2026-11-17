@@ -112,7 +112,7 @@
       "lines": 691
     },
     "loopx/control_plane/work_items/interaction_contract.py": {
-      "any_count": 85,
+      "any_count": 0,
       "dict_any_count": 0
     },
     "loopx/domain_packs/issue_fix.py": {
@@ -138,7 +138,7 @@
       "dict_any_count": 0
     },
     "loopx/heartbeat_prompt.py": {
-      "any_count": 17,
+      "any_count": 0,
       "dict_any_count": 0,
       "lines": 1199
     },
@@ -179,7 +179,7 @@
       "lines": 1999
     },
     "loopx/todos.py": {
-      "any_count": 48,
+      "any_count": 0,
       "dict_any_count": 0
     },
     "loopx/upgrade.py": {
