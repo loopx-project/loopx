@@ -148,10 +148,12 @@ if [ "$SERVICE" = 1 ]; then
     say "A $NAME service already runs $(service_dir); it was not changed."
   elif [ "$UPDATE" = 1 ] && service_installed; then
     step "Restarting the service once no thread is running"
-    run "$APP_DIR/scripts/restart.sh" --no-build && STARTED=1
+    run "$APP_DIR/scripts/restart.sh" --no-build
+    STARTED=1
   else
     step "Running LooChat as a service"
-    run "$APP_DIR/scripts/install-service.sh" "$ENV_FILE" && STARTED=1
+    run "$APP_DIR/scripts/install-service.sh" "$ENV_FILE"
+    STARTED=1
   fi
 fi
 

@@ -6,6 +6,7 @@ UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/loochat.service"
 echo "$*" >> "$S/systemctl.log"
 [ ! -e "$S/no-systemd" ] || exit 1
 case " $* " in
+  *" restart "*) [ ! -e "$S/restart-fails" ] ;;
   *" cat "*) [ -f "$UNIT" ] ;;
   *" show -p WorkingDirectory "*) [ ! -f "$UNIT" ] || sed -n 's/^WorkingDirectory=//p' "$UNIT" ;;
   *" show -p MainPID "*) echo 0 ;;

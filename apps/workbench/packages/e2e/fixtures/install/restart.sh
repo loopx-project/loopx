@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
-# Stands in for scripts/restart.sh in the repository install.sh tests clone: logs and succeeds.
+# Logs restart attempts; restart-fails simulates a service restart error.
 echo "restart.sh $*" >> "$LOOCHAT_FAKE_STATE/restart.log"
+[ ! -e "$LOOCHAT_FAKE_STATE/restart-fails" ]

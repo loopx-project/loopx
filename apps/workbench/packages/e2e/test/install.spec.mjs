@@ -1,6 +1,7 @@
 // install.sh is the one command a newcomer runs. These tests run the real script offline: it
 // sparsely clones a throwaway monorepo holding the real setup.mjs and install-service.sh, with fake npm
-// and systemctl on PATH (fixtures/install/) and a temporary HOME, so nothing on this machine changes.
+// and systemctl/ss/loginctl on PATH (fixtures/install/) and a temporary HOME, so no host service or
+// port state affects the result and nothing on this machine changes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -53,31 +54,45 @@ function fixture(t) {
 const token = (file) => readFileSync(file, 'utf8').match(/^LOOCHAT_TOKEN=(.*)$/m)?.[1];
 
 test('a first install builds, writes the settings, starts the service and prints address and token', (t) => {
-  const { run, read, source, home, paths } = fixture(t);
-  const r = run();
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-  const env = readFileSync(paths.env, 'utf8');
-  assert.match(token(paths.env), /^[0-9a-f]{48}$/);
-  assert.match(env, new RegExp(`^LOOCHAT_DATA_DIR=${home}/.local/state/loochat/data$`, 'm'));
-  assert.match(env, new RegExp(`^LOOCHAT_WORKDIRS=${home}$`, 'm'));
-  assert.deepEqual(read('npm.log').trim().split('\n'), ['install --no-audit --no-fund', 'run build']);
-  assert.match(readFileSync(paths.unit, 'utf8'), new RegExp(`^WorkingDirectory=${paths.app}$`, 'm'));
-  assert.match(read('systemctl.log'), /restart loochat/);
-  assert.match(r.stdout, /LooChat is running: http:\/\/127\.0\.0\.1:8787\//);
-  assert.match(r.stdout, new RegExp(`Token: ${token(paths.env)}`));
-  const revision = git(source, 'rev-parse', 'HEAD');
-  assert.match(revision, /^[a-f0-9]{40}$/);
-  assert.ok(r.stdout.includes(`Installed Workbench revision: ${revision}`));
-  assert.ok(r.stdout.includes(`Workbench directory: ${paths.app}`));
-  assert.equal(git(paths.checkout, 'rev-parse', 'HEAD'), revision);
-  assert.equal(git(paths.checkout, 'sparse-checkout', 'list'), 'apps/workbench');
-  assert.equal(existsSync(join(paths.app, 'packages/daemon/dist')), true);
-  assert.equal(existsSync(join(paths.checkout, 'packages/daemon/dist')), false);
-  assert.equal(existsSync(join(paths.checkout, 'unrelated')), false);
+  for (const ports of ['empty', 'unavailable', 'occupied']) {
+    const { run, read, source, state, home, paths } = fixture(t);
+    writeFileSync(join(state, 'ports'), ports);
+    const r = run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const env = readFileSync(paths.env, 'utf8');
+    assert.match(token(paths.env), /^[0-9a-f]{48}$/);
+    assert.match(env, new RegExp(`^LOOCHAT_DATA_DIR=${home}/.local/state/loochat/data$`, 'm'));
+    assert.match(env, new RegExp(`^LOOCHAT_WORKDIRS=${home}$`, 'm'));
+    assert.deepEqual(read('npm.log').trim().split('\n'), ['install --no-audit --no-fund', 'run build']);
+    assert.match(readFileSync(paths.unit, 'utf8'), new RegExp(`^WorkingDirectory=${paths.app}$`, 'm'));
+    assert.match(read('systemctl.log'), /restart loochat/);
+    assert.match(r.stdout, /LooChat is running: http:\/\/127\.0\.0\.1:8787\//);
+    assert.match(r.stdout, new RegExp(`Token: ${token(paths.env)}`));
+    const revision = git(source, 'rev-parse', 'HEAD');
+    assert.match(revision, /^[a-f0-9]{40}$/);
+    assert.ok(r.stdout.includes(`Installed Workbench revision: ${revision}`));
+    assert.ok(r.stdout.includes(`Workbench directory: ${paths.app}`));
+    assert.equal(git(paths.checkout, 'rev-parse', 'HEAD'), revision);
+    assert.equal(git(paths.checkout, 'sparse-checkout', 'list'), 'apps/workbench');
+    assert.equal(existsSync(join(paths.app, 'packages/daemon/dist')), true);
+    assert.equal(existsSync(join(paths.checkout, 'packages/daemon/dist')), false);
+    assert.equal(existsSync(join(paths.checkout, 'unrelated')), false);
+    assert.equal(read('ss.log').trim(), '-ltnp');
+    assert.match(read('loginctl.log'), /show-user .* -p Linger --value/);
+    if (ports === 'occupied') assert.match(r.stdout, /Port 8787 is held by another process \(PID 12345\)/);
+    else assert.doesNotMatch(r.stdout, /Port 8787 is held/);
+    assert.doesNotMatch(r.stdout, /To start LooChat:/);
+  }
+  const failed = fixture(t);
+  writeFileSync(join(failed.state, 'restart-fails'), '');
+  const result = failed.run();
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(failed.read('systemctl.log'), /restart loochat/);
+  assert.doesNotMatch(result.stdout, /LooChat is running:|To start LooChat:/);
 });
 
 test('running it again updates in place: same token, and the restart waits for idle threads', (t) => {
-  const { run, read, paths } = fixture(t);
+  const { run, read, state, paths } = fixture(t);
   assert.equal(run().status, 0);
   const first = token(paths.env);
   const settings = readFileSync(paths.env, 'utf8');
@@ -91,6 +106,10 @@ test('running it again updates in place: same token, and the restart waits for i
   assert.equal(readFileSync(data, 'utf8'), '{"text":"keep this thread"}');
   assert.match(r.stdout, /Already there; kept as it is/);
   assert.equal(read('restart.log').trim(), 'restart.sh --no-build');
+  writeFileSync(join(state, 'restart-fails'), '');
+  const failed = run();
+  assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
+  assert.doesNotMatch(failed.stdout, /LooChat is running:|To start LooChat:/);
 });
 
 test('setup preserves current and historical tokens without appending a second current key', t => {
