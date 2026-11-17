@@ -5,6 +5,26 @@
 - **来源：** 原候选 `648104978fdd67176cccdbb765c5bc3f36bf2ca3`，集成目标 `e8f4c6f8125e3cc0ef912afac653d5542671392f`。
 - **语言镜像：** [English](2026-10-30-c1-source-convergence.md)
 
+## 当前调用方退役边界
+
+当前 #8266 候选通过普通 quota、原 envelope 参数、生成的 heartbeat 入口、
+Benchmark 唤醒及 checkpoint、managed 与 stdio Host 请求交付完整 v1。
+上下文交付 Off 内联同一完整来源。Benchmark 运行指南现按该行为说明。
+原 quota 对照臂使用固定的 pre-C1 runner 与 LoopX 版本，已保存捕获按原版本读取。
+
+| 保留边界 | 当前调用方及退出条件 |
+| --- | --- |
+| 完整来源组合与校验 | 当前 quota、Turn、heartbeat 和 Host 消费方共用既有 TypeScript owner。普通 v0 renderer 及按参数选择来源的分支已退出这些调用方。 |
+| 版本化 plan、capture 与回执恢复 | 历史记录保留原来源、绑定及一次结算。退役需核清支持恢复窗口和未结记录去向。 |
+| 旧对照构造器 | Python `build_turn_envelope` 的树内调用仅在 `model_behavior_corpus.py`。保留的 raw/v0 用例与版本化状态矩阵沿用原对照，完整 v1 用例消费原校验来源。最后一个受支持对照调用方退出后，再退役该构造器。 |
+| 模型成果与安装采用 | 原 quota/C1 单会话对照、完整成本、受支持实装 Host 及原生 Windows 沿原验收继续。 |
+
+旧构造器现直接调用同一 TypeScript 操作，删除只有一个调用方的 Python 包装。
+一项完整捕获测试与另一项的前十三条语句重复，使用相同 actor 和种子。
+保留用例还验证坏绑定在调用 actor 前拒绝，因此删除重复用例并保留覆盖。
+冻结对照和公开构造器的行为保留。这批改动核清调用边界并减少重复维护，
+模型成果与完整成本继续待验。
+
 ## 连续恢复时保留已独立核验的原生选区
 
 原有单次恢复修复能在完整捕获回放失败时保留独立选区。在 C1

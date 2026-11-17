@@ -388,19 +388,7 @@ def build_turn_envelope(
     ) = None,
     captured_decision_path: str | None = None,
 ) -> dict[str, Any]:
-    """Project one full quota decision through the canonical TS transaction."""
-
-    return _build_turn_projection(payload,
-        scheduler_execution_context=scheduler_execution_context,
-        captured_decision_path=captured_decision_path)
-
-
-def _build_turn_projection(
-    payload: Mapping[str, Any], *, scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
-    ) = None,
-    captured_decision_path: str | None = None,
-) -> dict[str, Any]:
+    """Build the v0 comparison view through the existing TypeScript owner."""
 
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     scheduler_execution_args: object = ""

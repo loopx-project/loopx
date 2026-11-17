@@ -334,24 +334,3 @@ def test_fail_closed_expectation_does_not_hide_invalid_actor_output() -> None:
         assert run["safety_violations"] == [
             f"actor_arm_failed:{run['failed_arm']}:actor_result_invalid"
         ]
-
-
-def test_corpus_accepts_an_original_complete_capture_without_recomposition(monkeypatch) -> None:
-    packet = compose_turn_decision({**_full_packet(),
-        "supporting_evidence": {"exact_count": 9007199254740993, "ratio": 1.0}})
-    before = json.dumps(packet, sort_keys=True)
-
-    def retired_projection(*args, **kwargs):
-        raise AssertionError("an original complete source must not become a v0 candidate")
-
-    monkeypatch.setattr("loopx.control_plane.testing.model_behavior_corpus.build_turn_envelope", retired_projection)
-    corpus = build_model_behavior_corpus(packet,
-        retained_packets=[{"case_id": "retained-complete", "packet": packet}])
-    case = corpus["cases"][0]
-    assert json.dumps(case["full_packet"], sort_keys=True) == before
-    assert json.dumps(case["candidate_packet"], sort_keys=True) == before
-    result = run_model_behavior_corpus(corpus, actor=_actor, repeats=2, seed=7)
-    assert result["all_cases_passed"] is True
-    assert result["corpus_gate_passed"] is True
-    assert result["promotion_eligible"] is False
-    assert json.dumps(packet, sort_keys=True) == before

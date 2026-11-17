@@ -5,6 +5,31 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
+## Current caller retirement boundary
+
+The current #8266 candidate delivers complete v1 through ordinary quota,
+the former envelope flag, generated heartbeat loaders, Benchmark wake and
+checkpoint entrypoints, and managed or stdio Host requests. Context delivery
+Off inlines the same complete source. The Benchmark runtime guides now describe
+that behavior. An original-quota reference arm uses its pinned pre-C1 runner
+and LoopX revision, while saved captures retain their recorded version.
+
+| Remaining boundary | Current caller and exit condition |
+| --- | --- |
+| Complete-source composition and validation | Current quota, Turn, heartbeat and Host consumers share the existing TypeScript owner. The ordinary v0 renderer and flag-based source choice have exited those callers. |
+| Versioned plan, capture and receipt recovery | Historical records retain their original source, binding and once-only settlement. Retirement requires the supported recovery window and the disposition of outstanding records. |
+| Legacy comparison constructor | The Python `build_turn_envelope` has tree callers only in `model_behavior_corpus.py`. Raw/v0 retained cases and the versioned state matrix preserve their existing control. Complete v1 cases use their original checked source. Retire this constructor after its last supported comparison caller exits. |
+| Model outcome and installed adoption | The original-quota/C1 single-session comparison, complete costs, supported installed Hosts and native Windows retain their existing acceptance. |
+
+The legacy constructor now forwards directly to the same TypeScript operation;
+its one-caller Python wrapper is removed. One complete-capture test duplicated
+the first thirteen statements of another case, including the same actor and
+seed. The retained case also checks damaged-binding refusal before an actor
+call, so the duplicate is removed with that coverage preserved. These changes
+keep the frozen control and public constructor behavior. They qualify the
+caller boundary and reduce duplicate maintenance. Model outcomes and complete
+costs remain open.
+
 ## Native selections across repeated resume
 
 The existing single-resume repair keeps a selection when the original full
