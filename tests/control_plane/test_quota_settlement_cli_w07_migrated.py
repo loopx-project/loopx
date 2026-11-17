@@ -34,6 +34,7 @@ from loopx.control_plane.scheduler.state import (
 )
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.paths import shell_selected_global_registry
+from loopx.project_prompt import shell_arg_for_host
 from loopx.rollout_event_log import build_rollout_event
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture,
@@ -9519,7 +9520,6 @@ def test_original_turn_closes_automatically_archived_todo_once(
 
 
 def _settle_historical_ack(
-    registry: Path,
     runtime: Path,
     project: Path,
     recovery: dict[str, Any],
@@ -9534,54 +9534,52 @@ def _settle_historical_ack(
     result_read, result_write, direction_read, direction_write, spend = actions
     assert "--purpose delivery_result" in result_read
     assert "--purpose supplement_checkpoint" in direction_read
-    result_args = shlex.split(result_write)
-    read_id_at = result_args.index("--delivery-read-context") + 1
-    assert result_args[read_id_at] == "<delivery-result-read-context-id>"
+    read_placeholder = "<delivery-result-read-context-id>"
+    assert result_write.count(read_placeholder) == 1
+    quiet = " --no-global-sync --suppress-external-sinks"
     before = _spend_run_count(runtime)
 
     if stale_result_read:
         old_context = recovery["delivery_result_context"]
         assert old_context["settlement_identity"] == identity
-        result_args[read_id_at] = old_context["read_context_id"]
-        rc, rejected = _run_generated_cli(shlex.join(result_args), registry_path=registry, cwd=project)
+        rejected_command = result_write.replace(read_placeholder, old_context["read_context_id"]) + quiet
+        rc, rejected, _ = _run_host_command(rejected_command, cwd=project)
         assert rc == 1 and rejected["error_code"] == "checkpoint_read_context_stale", rejected
         assert rejected["appended"] is False and _spend_run_count(runtime) == before
 
-    rc, checked = _run_generated_cli(result_read, registry_path=registry, cwd=project)
+    rc, checked, _ = _run_host_command(result_read, cwd=project)
     assert rc == 0 and checked["settlement_identity"] == identity, checked
     if stale_result_read:
         assert checked["read_context_id"] != old_context["read_context_id"]
-    result_args[read_id_at] = checked["read_context_id"]
-    quiet = ("--no-global-sync", "--suppress-external-sinks")
-    retained_command = shlex.join([*result_args, *quiet])
-    rc, retained = _run_generated_cli(retained_command, registry_path=registry, cwd=project)
+    retained_command = result_write.replace(read_placeholder, checked["read_context_id"]) + quiet
+    rc, retained, _ = _run_host_command(retained_command, cwd=project)
     assert rc == 0 and retained["appended"] is True, retained
     assert retained["settlement_identity"] == identity
     assert retained["first_delivery_progress"]["stage"] == "direction_pending"
-    rc, replay = _run_generated_cli(retained_command, registry_path=registry, cwd=project)
+    rc, replay, _ = _run_host_command(retained_command, cwd=project)
     assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
-    rc, premature = _run_generated_cli(spend, registry_path=registry, cwd=project)
+    rc, premature, _ = _run_host_command(spend, cwd=project)
     assert rc == 1 and premature["appended"] is False and _spend_run_count(runtime) == before, premature
 
-    rc, context = _run_generated_cli(direction_read, registry_path=registry, cwd=project)
+    rc, context, _ = _run_host_command(direction_read, cwd=project)
     assert rc == 0 and context["settlement_identity"] == identity, context
-    direction_args = _checkpoint_decision_args(context, project.parent)
-    tokens = shlex.split(direction_write)
-    directed_command = shlex.join([
-        *tokens[:tokens.index("--checkpoint-read-context")], *direction_args, *quiet,
-    ])
-    rc, accepted = _run_generated_cli(directed_command, registry_path=registry, cwd=project)
-    assert rc == 0 and accepted["vision_checkpoint"]["satisfied"] is True, accepted
+    direction_prefix, marker, _ = direction_write.partition(" --checkpoint-read-context ")
+    assert marker
+    direction_args = " ".join(shell_arg_for_host(arg) for arg in _checkpoint_decision_args(context, project.parent))
+    directed_command = f"{direction_prefix} {direction_args}{quiet}"
+    rc, accepted, _ = _run_host_command(directed_command, cwd=project)
+    assert rc == 0, (accepted.get("error_code"), accepted.get("error"))
+    assert accepted["vision_checkpoint"]["satisfied"] is True, accepted
     assert accepted["settlement_identity"] == identity
     delta = accepted["autonomous_replan_ack"]["semantic_delta"]
     assert delta["accepted"] is True and delta["obligation_id"] == obligation, delta
-    rc, replay = _run_generated_cli(directed_command, registry_path=registry, cwd=project)
+    rc, replay, _ = _run_host_command(directed_command, cwd=project)
     assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
     assert _spend_run_count(runtime) == before
-    rc, spent = _run_generated_cli(spend, registry_path=registry, cwd=project)
+    rc, spent, _ = _run_host_command(spend, cwd=project)
     assert rc == 0 and spent["settlement_identity"] == identity and spent["appended"] is True, spent
     assert _spend_run_count(runtime) == before + 1
-    rc, replay = _run_generated_cli(spend, registry_path=registry, cwd=project)
+    rc, replay, _ = _run_host_command(spend, cwd=project)
     assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
     assert _spend_run_count(runtime) == before + 1
 
@@ -9591,7 +9589,7 @@ def _settle_historical_ack(
 def test_exact_later_ack_executes_original_todo_settlement_commands(
     tmp_path: Path, provider: str, legacy_turn_ref: bool,
 ) -> None:
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path / "owner's fixture")
     _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
@@ -9636,7 +9634,7 @@ def test_exact_later_ack_executes_original_todo_settlement_commands(
     rc, automatic = _run_cli(registry, runtime, *guard_args[:-2])
     assert rc == 0, automatic
     assert automatic["heartbeat_receipt"]["settlement_identity"] == original_identity
-    _settle_historical_ack(registry, runtime, project, recovery, original_identity, obligation)
+    _settle_historical_ack(runtime, project, recovery, original_identity, obligation)
     rc, settled = _run_cli(registry, runtime, *guard_args)
     assert rc == 0 and settled["should_run"] is False, settled
     assert settled["heartbeat_receipt"]["status"] == "replayed"
@@ -9753,5 +9751,5 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     assert decision == "historical_ack_recorded", recovery.get("replan_action_packet")
     original_identity = admitted["heartbeat_receipt"]["settlement_identity"]
     _settle_historical_ack(
-        registry, runtime, project, recovery, original_identity, obligation, stale_result_read=True,
+        runtime, project, recovery, original_identity, obligation, stale_result_read=True,
     )

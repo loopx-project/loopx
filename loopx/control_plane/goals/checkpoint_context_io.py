@@ -112,6 +112,7 @@ def checkpoint_continuation_required(readback: Any) -> bool:
 
 def replan_checkpoint_cli_actions(
     actions: list[str], readback: Any, *, command_prefix: str, reread_delivery_result: bool = False,
+    host_shell: bool = False,
 ) -> list[str]:
     """Render the admitted checkpoint phases; the typed receipt owns policy.
 
@@ -156,8 +157,11 @@ def replan_checkpoint_cli_actions(
     if reread_delivery_result:
         preparation.append(shlex.join([*context, "delivery_result", *context_args]))
         initial.extend(["--delivery-read-context", "<delivery-result-read-context-id>"])
-    return [*preparation, shlex.join([*prefix, "refresh-state", *initial]),
-            shlex.join([*context, "supplement_checkpoint", *context_args]), shlex.join(direction), *actions[1:]]
+    staged = [*preparation, shlex.join([*prefix, "refresh-state", *initial]),
+              shlex.join([*context, "supplement_checkpoint", *context_args]), shlex.join(direction), *actions[1:]]
+    if host_shell:
+        return [_render_checkpoint_host_command(shlex.split(action)) for action in staged]
+    return staged
 
 
 def _render_checkpoint_host_command(argv: list[str]) -> str:

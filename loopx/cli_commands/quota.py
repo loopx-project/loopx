@@ -1379,6 +1379,7 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                         historical_ack = historical_ack_writeback_required(payload)
                         staged_actions = replan_checkpoint_cli_actions(
                             actions, work_readback, reread_delivery_result=historical_ack,
+                            host_shell=historical_ack,
                             command_prefix=render_cli_command_prefix(
                                 registry_path=str(registry_path), runtime_root=str(runtime_root)))
                         channel["next_cli_actions"] = staged_actions
