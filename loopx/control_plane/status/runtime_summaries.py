@@ -39,7 +39,6 @@ class StatusRuntimeSummaryContext:
     run_has_external_evidence_watch_signal: StatusCallback
     decision_classifications: set[str]
     evidence_classifications: set[str]
-    evidence_hints: tuple[str, ...]
     state_classifications: set[str]
     promotion_readiness_classifications: Iterable[str]
     add_promotion_readiness_freshness: StatusCallback
@@ -63,7 +62,6 @@ def event_ledger_event_class(
         run_has_external_evidence_watch_signal=context.run_has_external_evidence_watch_signal,
         decision_classifications=context.decision_classifications,
         evidence_classifications=context.evidence_classifications,
-        evidence_hints=context.evidence_hints,
         state_classifications=context.state_classifications,
     )
 

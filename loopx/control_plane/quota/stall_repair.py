@@ -23,7 +23,11 @@ from ..todos.decision_scope import (
     build_required_decision_scope_repair_hint,
     standing_decision_authority_for_agent,
 )
-from ..todos.user_gate import open_todo_count, open_user_gate_todo_items
+from ..todos.user_gate import (
+    USER_GATE_ACTION_KIND_HINTS,
+    open_todo_count,
+    open_user_gate_todo_items,
+)
 
 STALL_HEALTH_ITEM_COMPACT_FIELDS = (
     "goal_id",
@@ -41,21 +45,6 @@ TODO_PROJECTION_REPAIR_TRIGGERS = frozenset(
         DECISION_SCOPE_REPAIR_TRIGGER,
         USER_GATE_SCOPE_REPAIR_TRIGGER,
         RUNTIME_CAPABILITY_USER_GATE_REPAIR_TRIGGER,
-    }
-)
-RUNTIME_RECOVERY_ACTION_TOKENS = frozenset(
-    {
-        "configure",
-        "execute",
-        "install",
-        "launch",
-        "materialize",
-        "rebuild",
-        "repair",
-        "restore",
-        "retry",
-        "run",
-        "start",
     }
 )
 
@@ -114,13 +103,11 @@ def _compact_health_items(
     return compact
 
 
-def _runtime_recovery_action(action_kind: Any) -> bool:
-    tokens = {
-        token
-        for token in str(action_kind or "").strip().lower().replace("-", "_").split("_")
-        if token
-    }
-    return bool(tokens & RUNTIME_RECOVERY_ACTION_TOKENS)
+def _is_owner_gate_action_kind(action_kind: Any) -> bool:
+    normalized = str(action_kind or "").strip().lower()
+    if not normalized:
+        return False
+    return any(hint in normalized for hint in USER_GATE_ACTION_KIND_HINTS)
 
 
 def _source_todo_items(
@@ -187,7 +174,10 @@ def build_runtime_capability_user_gate_repair_hint(
             continue
         if normalize_todo_decision_scope(gate.get("decision_scope")):
             continue
-        if not _runtime_recovery_action(gate.get("action_kind")):
+        action_kind = gate.get("action_kind")
+        if not str(action_kind or "").strip() or _is_owner_gate_action_kind(
+            action_kind
+        ):
             continue
         target_todo_id = normalize_todo_id(gate.get("unblocks_todo_id"))
         target = agent_items_by_id.get(cast(str, target_todo_id))

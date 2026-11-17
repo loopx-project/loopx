@@ -47,7 +47,6 @@ def event_ledger_event_class(
     run_has_external_evidence_watch_signal: RunPredicate,
     decision_classifications: set[str],
     evidence_classifications: set[str],
-    evidence_hints: tuple[str, ...],
     state_classifications: set[str],
 ) -> str:
     classification = str(run.get("classification") or "").lower()
@@ -66,8 +65,6 @@ def event_ledger_event_class(
     if classification in evidence_classifications:
         return "evidence"
     if run_has_external_evidence_watch_signal(run):
-        return "evidence"
-    if any(hint in classification for hint in evidence_hints):
         return "evidence"
     if any(
         key in run
