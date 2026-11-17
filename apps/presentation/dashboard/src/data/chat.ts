@@ -1009,15 +1009,16 @@ const chatQueuedInputSchema = z.object({input_revision: z.number().int().nonnega
   attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
     mime_type: z.string(), data_url: z.string()})),
 });
-export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema>;
+export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema> & Pick<ChatVisibleMessage, "reply_context">;
 export async function fetchQueuedChatInput(sessionId: string, turnId: string, signal?: AbortSignal) {
   // Keep original-source audience projection and complete paging. The visible
   // input and its revision come from one canonical user row, never raw model context.
   const history = await fetchChatSessionHistory(sessionId, signal, turnId);
   const original = history.messages.find(row => row.role === "user" && row.turn_id === turnId);
   if (!original) throw new Error("Original queued input is unavailable");
-  return chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
-    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []});
+  return {...chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
+    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []}),
+    reply_context: original.reply_context};
 }
 const chatQueueSchema = z.object({
   ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),

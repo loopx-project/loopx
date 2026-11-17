@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.client
+from concurrent.futures import ThreadPoolExecutor
 import json
 import subprocess
 import socket
@@ -32,7 +33,18 @@ def cold_api(tmp_path, monkeypatch, request, source_modules_present):
             # of this same set before the cold receiver is copied.
             (receiver / "loopx" / name).unlink(missing_ok=True)
     registry = tmp_path / "project/.loopx/registry.json"
-    if request.param:
+    if request.param in ("global-source", "global-source-race"):
+        # Keep Chat bound to the source runtime, but invoke it through the
+        # global registry whose own runtime holds the machine index.
+        global_root = tmp_path / "machine-runtime"
+        global_root.mkdir()
+        payload = json.loads(registry.read_text())
+        payload["common_runtime_root"] = str(global_root)
+        payload["registry_role"] = "global-local"
+        payload["goals"][0]["source_registry"] = str(registry)
+        registry = global_root / "registry.global.json"
+        registry.write_text(json.dumps(payload))
+    elif request.param:
         # The configured registry may live outside conventional Goal folders.
         # Only its explicit backup member can cover this observed source.
         external = tmp_path / "project/source-registry.json"
@@ -53,14 +65,33 @@ port = int(sys.argv[4])
 staged_ready = ready.with_suffix('.tmp')
 staged_ready.write_text(json.dumps({'port': port, 'package': loopx.__file__}), encoding='utf-8')
 staged_ready.replace(ready)
+if len(sys.argv) > 5:
+    import time
+    import loopx.presentation.goal_storage_api as storage
+    original_effect = storage.source_effect_runtime_result
+    def paused_import(operation, payload, **kwargs):
+        pause = runtime / 'pause-apply'
+        if (operation == 'coordination.cold_source.import'
+                and payload.get('action') == 'apply' and pause.exists()):
+            pause.with_suffix('.selected').write_text(payload['expected_source_registry'])
+            deadline = time.monotonic() + 20
+            while not pause.with_suffix('.resume').exists():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('test did not resume its paused Apply')
+                time.sleep(.01)
+        return original_effect(operation, payload, **kwargs)
+    storage.source_effect_runtime_result = paused_import
 serve_chat(registry_path=registry, runtime_root_override=runtime,
     scan_roots=[Path(json.loads(registry.read_text())['goals'][0]['repo'])], host='127.0.0.1', port=port,
     goal_id='cold', open_browser=False, verbose=False)
 """
+    server_arguments = [str(registry), str(runtime), str(ready), str(requested_port)]
+    if request.param == "global-source-race":
+        server_arguments.append("pause")
     error_path = tmp_path / "server-errors.txt"
     error_stream = error_path.open("w")
     server = subprocess.Popen([sys.executable, "-u", "-c", script,
-        str(registry), str(runtime), str(ready), str(requested_port)], cwd=tmp_path,
+        *server_arguments], cwd=tmp_path,
         env={**env, "LOOPX_USAGE_PING": "0"}, stdout=subprocess.DEVNULL, stderr=error_stream)
 
     def execute(script):
@@ -78,7 +109,7 @@ serve_chat(registry_path=registry, runtime_root_override=runtime,
         server.wait(timeout=10)
         ready.unlink()
         server = subprocess.Popen([sys.executable, "-u", "-c", script,
-            str(registry), str(runtime), str(ready), str(requested_port)], cwd=tmp_path,
+            *server_arguments], cwd=tmp_path,
             env={**env, "LOOPX_USAGE_PING": "0"}, stdout=subprocess.DEVNULL, stderr=error_stream)
         port = wait_ready()
 
@@ -166,7 +197,7 @@ def test_cold_http_preview_reload_confirm_original_recovery(cold_api, provider):
     assert observed["operation_id"] == plan["operation_id"]
     assert not observed["legacy_writer_fenced"] and not observed["current"]["canonical"]
     assert state.read_bytes() == original
-    assert not list(runtime.rglob("writer-fence.json"))
+    assert not list(runtime.rglob("legacy-writer-fence-*.json"))
     code, refused = call("apply", {**saved, "writers_stopped": False})
     assert code == 409 and refused["reason_code"] == "cold_import_operator_stop_confirmation_required"
     code, applied = call("apply", {**saved, "writers_stopped": True})
@@ -213,6 +244,110 @@ def test_cold_http_preview_reload_confirm_original_recovery(cold_api, provider):
     assert read() == later
 
 
+@pytest.mark.parametrize("cold_api", ["global-source"], indirect=True)
+def test_cold_http_binds_global_mirror_to_the_registered_source(cold_api):
+    call, read, state, body, runtime, registry, _, restart = cold_api
+    original_state = state.read_bytes()
+    original_mirror = registry.read_bytes()
+    mirror = json.loads(original_mirror)
+    source = runtime.parent / "project/.loopx/registry.json"
+
+    code, observed = call()
+    assert code == 200 and observed["current"]["canonical"] is False, observed
+    assert observed["cold_source"]["active_todo_count"] == 1
+    plan = prepare(call, handoff_mode="soft_claim")
+    saved = carrier(plan)
+    assert plan["coordination_source_backup_verified"] is True
+    assert plan["source_inventory"]["archived_todo_count"] == 1
+    restart()
+    code, pending = call()
+    assert code == 200 and pending["pending_preview"] == saved
+    assert call("recover", saved)[1]["status"] == "prepared"
+    code, refused = call("apply", {**saved, "writers_stopped": False})
+    assert code == 409 and refused["reason_code"] == "cold_import_operator_stop_confirmation_required"
+
+    # The saved plan still has an intact source file, the same Goal and the
+    # same target store. An explicit rebinding must still invalidate Apply.
+    other_registry = source.with_name("other-registry.json")
+    other_registry.write_bytes(source.read_bytes())
+    mirror["goals"][0]["source_registry"] = str(other_registry)
+    registry.write_text(json.dumps(mirror))
+    code, refused = call("apply", {**saved, "writers_stopped": True})
+    assert code == 409 and refused["reason_code"] == "source_registry_changed_retry"
+    assert not list(runtime.rglob("legacy-writer-fence-*.json"))
+
+    registry.write_bytes(original_mirror)
+    code, applied = call("apply", {**saved, "writers_stopped": True})
+    assert code == 200 and applied["status"] == "applied", applied
+    assert applied["current"]["provider"] == "sqlite"
+    assert applied["execution_authority_granted"] is False
+    assert next(row["text"] for row in read()["todos"] if row["todo_id"] == "todo_current") == body
+    assert state.read_bytes() == original_state
+    assert not list(registry.parent.rglob("legacy-writer-fence-*.json"))
+
+
+@pytest.mark.parametrize("cold_api", ["global-source-race"], indirect=True)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cold_http_source_rebind_is_ordered_with_cutover(cold_api, provider):
+    from loopx.control_plane.coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
+    from loopx.file_lock import exclusive_cross_runtime_file_lock
+    from loopx.global_registry import GlobalRegistryReduction, mutate_global_registry
+
+    call, read, state, body, runtime, registry, _, _ = cold_api
+    plan = prepare(call, provider, handoff_mode="soft_claim")
+    original = state.read_bytes()
+    source = runtime.parent / "project/.loopx/registry.json"
+    replacement = source.with_name("replacement-registry.json")
+    replacement.write_bytes(source.read_bytes())
+    pause = runtime / "pause-apply"
+    pause.touch()
+
+    def rebind():
+        def reduce(payload):
+            payload["goals"][0]["source_registry"] = str(replacement)
+            return GlobalRegistryReduction(payload, {"bound": "replacement"})
+        return mutate_global_registry(registry, "test-source-rebind", reduce)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        applying = pool.submit(call, "apply", {**carrier(plan), "writers_stopped": True})
+        deadline = time.monotonic() + 15
+        try:
+            while not pause.with_suffix(".selected").exists():
+                assert not applying.done(), applying.result() if applying.done() else None
+                assert time.monotonic() < deadline, "Apply did not reach its effect boundary"
+                time.sleep(.01)
+            assert pause.with_suffix(".selected").read_text() == str(source)
+            # This is the existing registry writer's actual cross-runtime lock,
+            # not a sleep-based guess that the competing thread is blocked.
+            serialized = False
+            try:
+                with exclusive_cross_runtime_file_lock(registry, timeout_seconds=0):
+                    pass
+            except TimeoutError:
+                serialized = True
+            if serialized:
+                writer = pool.submit(rebind)
+            else:
+                rebind()
+        finally:
+            pause.with_suffix(".resume").touch()
+        code, result = applying.result(timeout=90)
+        fence = legacy_coordination_writer_fence_path(runtime_root=runtime, goal_id="cold")
+        if serialized:
+            assert code == 200 and result["status"] == "applied", result
+            assert writer.result(timeout=10)["wrote"]
+            assert fence.exists()
+            assert next(row["text"] for row in read()["todos"] if row["todo_id"] == "todo_current") == body
+        else:
+            # A writer that commits first invalidates the old selected source.
+            # The original bug returned applied and fenced that old source.
+            assert code == 409, {"response": result, "legacy_fence_exists": fence.exists()}
+            assert result["authority_changed"] is False and not fence.exists()
+            assert call()[1]["current"]["canonical"] is False
+        assert state.read_bytes() == original
+        assert json.loads(registry.read_text())["goals"][0]["source_registry"] == str(replacement)
+
+
 def test_cold_http_changed_source_backup_and_untrusted_inputs(cold_api):
     call, read, state, _, runtime, _, _, _ = cold_api
     plan = prepare(call)
@@ -227,7 +362,7 @@ def test_cold_http_changed_source_backup_and_untrusted_inputs(cold_api):
     state.write_text(state.read_text() + "\nChanged after preview\n")
     code, refused = call("apply", {**saved, "writers_stopped": True})
     assert code == 409 and refused["reason_code"] == "source_changed_retry", refused
-    assert not list(runtime.rglob("writer-fence.json"))
+    assert not list(runtime.rglob("legacy-writer-fence-*.json"))
 
     fresh = prepare(call)
     archives = list((runtime / "backups/cold-import").glob(f"*{fresh['operation_id']}*.tar.gz"))
@@ -236,7 +371,7 @@ def test_cold_http_changed_source_backup_and_untrusted_inputs(cold_api):
     code, refused = call("apply", {**carrier(fresh), "writers_stopped": True})
     assert code == 409 and refused["reason_code"] == "cold_import_backup_changed", refused
     assert call()[1]["current"]["canonical"] is False
-    assert not list(runtime.rglob("writer-fence.json"))
+    assert not list(runtime.rglob("legacy-writer-fence-*.json"))
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -292,7 +427,7 @@ def test_registered_runtime_alias_import_preserves_original_operation(cold_api, 
     plan = prepare(call, provider)
     saved = carrier(plan)
     assert call("recover", saved)[1]["status"] == "prepared"
-    assert not list(runtime.rglob("writer-fence.json"))
+    assert not list(runtime.rglob("legacy-writer-fence-*.json"))
     assert call("apply", {**saved, "writers_stopped": False})[0] == 409
     code, applied = call("apply", {**saved, "writers_stopped": True})
     assert code == 200 and applied["status"] == "applied", applied
@@ -329,8 +464,8 @@ def test_registered_runtime_alias_retarget_rejects_without_import(cold_api, prov
     before = state.read_bytes()
     code, refused = call("apply", {**carrier(plan), "writers_stopped": True})
     assert code == 409 and refused["reason_code"] == "shadow_source_runtime_root_mismatch", refused
-    assert not list(runtime.rglob("writer-fence.json"))
-    assert not list(other.rglob("writer-fence.json"))
+    assert not list(runtime.rglob("legacy-writer-fence-*.json"))
+    assert not list(other.rglob("legacy-writer-fence-*.json"))
     assert state.read_bytes() == before
 
 

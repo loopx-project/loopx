@@ -12,11 +12,12 @@ import {launchBrowser, loadPlaywright} from "../../../../examples/dashboard-brow
 const repo = resolve(import.meta.dirname, "../../../..");
 const returnedFiles = process.argv.includes("--returned-files");
 const historyImages = process.argv.includes("--history-images");
+const queuedReply = process.argv.includes("--queued-reply");
 const output = resolve(process.env.LOOPX_REPLY_OUTPUT ?? resolve(repo, "output/playwright/conversation-reply"));
 await mkdir(output, {recursive: true});
 const child = spawn(resolveTestPython({repoRoot: repo}), ["-u",
   "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py", returnedFiles ? "--returned-files" : "--reply-context",
-  ...(historyImages ? ["--history-images"] : [])],
+  ...(historyImages ? ["--history-images"] : []), ...(queuedReply ? ["--queued-reply"] : [])],
   {cwd: repo, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["pipe", "pipe", "pipe"]});
 const exited = once(child, "exit"), queue = [], waiting = [];
 let stderr = "", browser;
@@ -279,6 +280,71 @@ async function checkHistoryImages(ready, page, errors, writes) {
   console.log("history-images-browser: passed (latest, scroll, inline retry and original message link; zero model Turns)");
 }
 
+async function checkQueuedReply(ready, page, errors, writes) {
+  const endpoint = `${ready.origin}/api/chat/sessions/${ready.sessionId}`;
+  const snapshot = await (await page.request.get(endpoint)).json();
+  const original = snapshot.messages.find(row => row.origin === "lark" && row.reply_context);
+  assert.ok(original.text.startsWith("Referenced message ("));
+  const body = original.reply_context.source_text;
+  const queued = await (await page.request.get(`${endpoint}/queue`)).json();
+  assert.equal(queued.turns.length, 2);
+  assert.equal(queued.turns[0].preview, body.slice(0, 240));
+  assert.equal(queued.turns[0].character_count, [...body].length);
+  assert.equal(queued.turns[1].preview, [...original.text].slice(0, 240).join(""),
+    "An identical unbound literal must not become a source-backed quote");
+  await openWhileCheckingOriginalConversation(ready, page);
+  await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
+  const queue = page.locator(".personal-conversation-queue");
+  const message = queue.locator(":scope > ol > li").first();
+  const summary = message.getByLabel("待处理消息 1", {exact: true});
+  await summary.waitFor();
+  assert.equal(await summary.getByText(body, {exact: true}).count(), 1);
+  assert.equal(queued.turns[0].attachment_count, 1);
+  await page.screenshot({path: resolve(output, "queue-default-desktop.png"), animations: "disabled"});
+  child.stdin.write("history-unavailable\n");
+  assert.equal((await next()).history_available, false);
+  await summary.focus(); await page.keyboard.press("Enter");
+  await message.getByRole("alert").waitFor();
+  child.stdin.write("history-available\n");
+  assert.equal((await next()).history_available, true);
+  await message.getByRole("button", {name: "重试", exact: true}).click();
+  const context = message.locator(".conversation-reply-context");
+  await context.waitFor();
+  await page.waitForFunction(() => document.querySelector('.personal-conversation-queue img[alt="queued-image.png"]')?.naturalWidth === 3);
+  assert.equal(await context.getAttribute("open"), null);
+  await context.locator("summary").focus(); await page.keyboard.press("Enter");
+  await context.getByText("原要求：保留已有结果和失败记录。Original requirement: retain results and failed attempts.", {exact: true}).waitFor();
+  assert.equal(await context.locator("section").count(), 1);
+  assert.equal(await context.locator("blockquote ol").first().evaluate(node => getComputedStyle(node).listStyleType), "decimal");
+  assert.deepEqual(await context.locator("blockquote ol").evaluateAll(lists => lists.map(list => list.start)), [1, 2, 3, 7, 0]);
+  assert.equal(await message.locator(".personal-queue-message").getByText(body, {exact: true}).count(), 1);
+  await page.screenshot({path: resolve(output, "queue-expanded-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  await context.locator("summary").scrollIntoViewIfNeeded();
+  assert.ok(await page.locator("body").evaluate(node => node.scrollWidth <= innerWidth + 1));
+  await page.screenshot({path: resolve(output, "queue-expanded-narrow.png"), animations: "disabled"});
+  const literal = queue.locator(":scope > ol > li").nth(1);
+  await literal.getByLabel("待处理消息 2", {exact: true}).click();
+  await literal.locator(".personal-queue-message").getByText("Referenced message (", {exact: false}).waitFor();
+  assert.equal(await literal.locator(".conversation-reply-context").count(), 0);
+  await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+  await page.reload();
+  await queue.getByLabel("Queued message 1", {exact: true}).click();
+  await queue.getByText("Reply and thread context", {exact: true}).waitFor();
+  assert.deepEqual(errors, []);
+  assert.ok(!writes.some(path => /\/turns(?:\/|$)|\/queue\/[^/]+\/(?:input|steer)/u.test(path)));
+  child.stdin.write("inspect\n");
+  const inspection = await next();
+  assert.equal(inspection.model_turns, 0);
+  assert.equal(inspection.reply_evidence_unchanged, true);
+  child.stdin.write("revoke\n");
+  assert.equal((await next()).revoked, ready.bindingId);
+  const denied = await page.request.get(`${endpoint}/queue`);
+  assert.ok(!denied.ok(), "Queue projection must not bypass revoked source access");
+  assert.equal((await denied.json()).turns, undefined);
+  console.log("queued-reply-browser: passed (real HTTP/source journals, readable preview, full quote/thread, literal parity, read failure/retry, keyboard, narrow/English, no model Turns or queue mutations)");
+}
+
 try {
   const ready = await next();
   browser = await launchBrowser(loadPlaywright().chromium);
@@ -291,6 +357,8 @@ try {
     await checkHistoryImages(ready, page, errors, writes);
   } else if (returnedFiles) {
     await checkReturnedFiles(ready, page, errors, writes);
+  } else if (queuedReply) {
+    await checkQueuedReply(ready, page, errors, writes);
   } else {
   const snapshot = await (await page.request.get(`${ready.origin}/api/chat/sessions/${ready.sessionId}`)).json();
   const source = snapshot.messages.find(row => row.role === "user" && row.turn_id);
