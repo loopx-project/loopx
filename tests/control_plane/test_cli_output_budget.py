@@ -1002,11 +1002,8 @@ def test_compact_selected_todo_markdown_preserves_work_context_instruction(
     assert json_exit_code == 0, json_text
     assert markdown_exit_code == 0, markdown_text
     payload = _json_payload(json_text)
-    work_context = (
-        payload["interaction_contract"]["agent_channel"]["work_context"]
-        if surface_id == "quota_should_run"
-        else payload["work_context"]
-    )
+    assert_complete_turn_decision(payload)
+    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
     instruction = work_context["instruction"]
     assert instruction
     assert markdown_text.count(instruction) == 1
