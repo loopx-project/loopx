@@ -163,6 +163,7 @@ def claim_canonical_todo_if_promoted(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     manage_execution: bool = False,
+    allow_settled_execution_switch: bool = False,
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any]:
@@ -191,6 +192,11 @@ def claim_canonical_todo_if_promoted(
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
             **({"manage_execution": True} if manage_execution else {}),
+            **(
+                {"allow_settled_execution_switch": True}
+                if allow_settled_execution_switch
+                else {}
+            ),
             **({"write_worktree": str(worktree)} if worktree is not None else {}),
             "lease_request": (
                 {

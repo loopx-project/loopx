@@ -1,4 +1,5 @@
-import {prepareClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
+import {ClaimExecutionSwitchRejected, prepareClaimExecution, type ClaimExecutionSwitchProof,
+  type ClaimExecutionSwitchVerifier, type ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON,
   EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode} from "./handoff_mode_policy.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
@@ -66,6 +67,8 @@ export interface CoordinationTodoClaimInput {
   readonly replan_obligation_id?: string;
   readonly lease_request?: CoordinationTodoClaimLeaseRequest | null;
   readonly manage_execution?: boolean;
+  /** Explicit caller intent; the verifier still requires a settled source Turn. */
+  readonly allow_settled_execution_switch?: boolean;
   /** Admission constraint on every attempt and replay, not a new business intent. */
   readonly required_handoff_mode?: ExecutionHandoffMode;
   readonly dry_run: boolean;
@@ -346,13 +349,15 @@ export async function executeCoordinationTodoClaim(
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
   observeWorkspace?: ClaimWorkspaceObserver,
+  verifySettledSwitch?: ClaimExecutionSwitchVerifier,
 ): Promise<CoordinationTodoClaimResult> {
   // Retry only a conclusive provider CAS rejection. Each attempt rereads the
   // original receipt and the complete head, then rechecks source authorization,
   // claim ownership, acceptance and lease/write-scope exclusion. Pinned revisions
   // (including handoff grants) must return to their caller for a fresh observation.
   for (let attempt = 0; ; attempt++) {
-    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent, observeWorkspace);
+    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent,
+      observeWorkspace, verifySettledSwitch);
     if (attempt >= 2 || rawInput.expected_provider_revision !== undefined ||
         rawInput.transfer_grant !== undefined || result.status !== "conflict" ||
         result.conflict_kind !== "provider_revision_mismatch") return result;
@@ -364,6 +369,7 @@ async function executeClaimAttempt(
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck,
   observeWorkspace?: ClaimWorkspaceObserver,
+  verifySettledSwitch?: ClaimExecutionSwitchVerifier,
 ): Promise<CoordinationTodoClaimResult> {
   let input: CoordinationTodoClaimInput;
   try {
@@ -379,11 +385,17 @@ async function executeClaimAttempt(
       lease_request: normalizeLeaseRequest(rawInput.lease_request),
     };
     if (input.manage_execution !== undefined) requireAuthorityBoolean(input.manage_execution, "manage_execution");
+    if (input.allow_settled_execution_switch !== undefined) {
+      requireAuthorityBoolean(input.allow_settled_execution_switch, "allow_settled_execution_switch");
+    }
     if (input.required_handoff_mode !== undefined && !EXECUTION_HANDOFF_MODES.includes(input.required_handoff_mode)) {
       throw new AuthorityStoreProtocolError("required_handoff_mode must be a current execution mode");
     }
     if (input.manage_execution && (input.lease_request != null || input.actor_agent_id !== input.claimed_by)) {
       throw new AuthorityStoreProtocolError("Managed execution requires the claiming actor and no explicit lease request");
+    }
+    if (input.allow_settled_execution_switch && !input.manage_execution) {
+      throw new AuthorityStoreProtocolError("Settled execution switch requires managed execution");
     }
     requireAuthorityBoolean(input.dry_run, "dry_run");
     requireAuthorityDate(input.now, "now");
@@ -414,6 +426,7 @@ async function executeClaimAttempt(
     dry_run: input.dry_run,
     ...(leaseRequest === null ? {} : {lease_request: leaseRequest}),
     ...(input.manage_execution ? {manage_execution: true} : {}),
+    ...(input.allow_settled_execution_switch ? {allow_settled_execution_switch: true} : {}),
     ...(input.replan_obligation_id === undefined ? {} : {replan_obligation_id: input.replan_obligation_id}),
   };
   const requestSha = canonicalAuthoritySha256(requestIdentity);
@@ -477,6 +490,35 @@ async function executeClaimAttempt(
     return result;
   };
   const recoverProof = async (result: CoordinationTodoClaimResult): Promise<CoordinationTodoClaimResult> => {
+    if (input.manage_execution && !input.allow_settled_execution_switch &&
+        result.reason_code === "coordination_operation_identity_mismatch") {
+      const original = await store.readReceipt(input.operation_id);
+      const upgradedIntent = {...requestIdentity, allow_settled_execution_switch: true};
+      if (original.status === "found" && original.receipts.length === 1 &&
+          original.receipts[0]?.schema_version === COORDINATION_TODO_CLAIM_RECEIPT_SCHEMA &&
+          original.receipts[0]?.goal_id === input.goal_id &&
+          original.receipts[0]?.request_sha256 === canonicalAuthoritySha256(upgradedIntent)) {
+        // The switch bit only admits a new conflicting claim. Replaying the
+        // already committed operation can safely recover through either client.
+        return executeClaimAttempt(store,
+          {...input, allow_settled_execution_switch: true},
+          authoritySourcesCurrent, observeWorkspace, verifySettledSwitch);
+      }
+    }
+    if (input.allow_settled_execution_switch &&
+        result.reason_code === "coordination_operation_identity_mismatch") {
+      const original = await store.readReceipt(input.operation_id);
+      const legacyIntent = {...requestIdentity};
+      delete legacyIntent.allow_settled_execution_switch;
+      if (original.status === "found" && original.receipts.length === 1 &&
+          original.receipts[0]?.schema_version === COORDINATION_TODO_CLAIM_RECEIPT_SCHEMA &&
+          original.receipts[0]?.goal_id === input.goal_id &&
+          original.receipts[0]?.request_sha256 === canonicalAuthoritySha256(legacyIntent)) {
+        return executeClaimAttempt(store,
+          {...input, allow_settled_execution_switch: false},
+          authoritySourcesCurrent, observeWorkspace, verifySettledSwitch);
+      }
+    }
     if (input.manage_execution && result.reason_code === "coordination_operation_identity_mismatch") {
       const original = await store.readReceipt(input.operation_id);
       const legacyIntent = {...requestIdentity};
@@ -487,7 +529,8 @@ async function executeClaimAttempt(
           original.receipts[0]?.request_sha256 === canonicalAuthoritySha256(legacyIntent)) {
         // Preserve pre-upgrade assignment recovery. It remains historical, not
         // a new managed execution; fresh work needs a new ordinary claim.
-        return executeClaimAttempt(store, {...input, manage_execution: false}, authoritySourcesCurrent);
+        return executeClaimAttempt(store, {...input, manage_execution: false,
+          allow_settled_execution_switch: false}, authoritySourcesCurrent);
       }
     }
     return currentProof(result);
@@ -593,14 +636,19 @@ async function executeClaimAttempt(
   let leaseChanged = false;
   let leaseIdempotent = false;
   let overlapAdvisories: JsonObject[] = [];
+  let releasedSourceLease: JsonObject | null = null;
+  let executionSwitchProof: ClaimExecutionSwitchProof | null = null;
   try {
     const currentLease = projection.leases.get(input.todo_id);
     if (handoffMode === "hard_lease" && input.manage_execution === true) {
-      const prepared = await prepareClaimExecution(head.head, input, observeWorkspace);
+      const prepared = await prepareClaimExecution(head.head, input, observeWorkspace,
+        verifySettledSwitch);
       lease = prepared.lease;
       leaseChanged = prepared.changed;
       leaseIdempotent = !leaseChanged;
       overlapAdvisories = prepared.overlapAdvisories ?? [];
+      releasedSourceLease = prepared.releasedSourceLease ?? null;
+      executionSwitchProof = prepared.switchProof ?? null;
     } else if (handoffMode === "hard_lease" && leaseRequest !== null) {
       // Validate required scopes before planning; a caller cannot omit a required conflict.
       const writeScopes = coordinationTodoWriteScopes(todo);
@@ -666,6 +714,10 @@ async function executeClaimAttempt(
       );
     }
   } catch (error) {
+    if (error instanceof ClaimExecutionSwitchRejected) {
+      return failure(error.reasonCode, error.message, {todo_id: input.todo_id},
+        "decision_rejection");
+    }
     return failure(
       "invalid_coordination_task_lease",
       error instanceof Error ? error.message : "invalid canonical task lease",
@@ -704,6 +756,19 @@ async function executeClaimAttempt(
     ...(changed ? {updated_at: updatedAt} : {}),
     mutation_authority: mutationAuthority,
     ...(overlapAdvisories.length ? {integration_overlap_advisories: overlapAdvisories} : {}),
+    ...(executionSwitchProof === null || releasedSourceLease === null ? {} : {
+      execution_switch: {
+        ...executionSwitchProof,
+        source_lease: {
+          todo_id: releasedSourceLease.todo_id,
+          owner: releasedSourceLease.owner,
+          idempotency_key: releasedSourceLease.idempotency_key,
+          version: releasedSourceLease.version,
+          lease_epoch: releasedSourceLease.lease_epoch,
+          status: releasedSourceLease.status,
+        },
+      },
+    }),
     ...(input.manage_execution ? {execution_managed: true, claim_operation_id: input.operation_id} : {}),
     ...(leaseRequest === null && !(input.manage_execution && handoffMode === "hard_lease") ? {} : {
       todo_changed: todoChanged,
@@ -728,6 +793,9 @@ async function executeClaimAttempt(
   // A successful no-op still consumes its operation identity. Commit only its
   // receipt under the observed head's CAS; never fabricate a Todo mutation.
   const mutations: CoordinationProjectionMutation[] = [
+    ...(releasedSourceLease !== null
+      ? [{kind: "lease_upsert" as const, lease: releasedSourceLease}]
+      : []),
     ...(leaseChanged && lease !== null
       ? [{kind: "lease_upsert" as const, lease}]
       : []),
