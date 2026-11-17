@@ -611,7 +611,7 @@ async function readOperationReceipt(
       );
     }
     const expectedOperationId = operationIdentity(request);
-    const expectedRequestDigest = operationRequestDigest(request);
+    operationRequestDigest(request);
     if (
       record.schema_version !== TASK_LEASE_LIFECYCLE_RECEIPT_SCHEMA ||
       typeof record.operation_id !== "string" ||

@@ -575,7 +575,7 @@ export async function revalidateAuthoritySources(receipts: readonly SourceReceip
 }
 
 function successEnvelope(
-  request: AcquireRequest,
+  _request: AcquireRequest,
   lease: LeaseRecord,
   leasePath: string,
   effectId: string,
