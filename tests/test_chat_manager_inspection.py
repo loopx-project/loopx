@@ -343,6 +343,13 @@ def test_oversized_portfolio_metadata_still_obeys_the_record_budget(tmp_path, mo
     assert result["unknown"] is True and result["oversized_rows"] == [0]
     assert result["rows"][0]["status"] == "oversized_record"
     assert result["rows"][0]["read_reference"] == {"view": "todos", "goal_id": "alpha"}
+    assert result["rows"][0]["goal_lifecycle"] == {
+        "schema_version": "goal_lifecycle_readback_v0", "goal_id": "alpha",
+        "status": "unavailable", "reason": "omitted_due_to_size",
+    }
+    assert result["rows"][0]["attention"] == {
+        "status": "unavailable", "items": [], "reason": "omitted_due_to_size",
+    }
     assert len(json.dumps(result)) < 2000
 
 

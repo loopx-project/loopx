@@ -411,7 +411,11 @@ def _oversized_portfolio_index(row: dict[str, Any], gap: dict[str, Any]) -> dict
         return index
     # Even metadata can exceed the budget. Keep an explicit unknown gap and
     # the existing scoped read route, never malformed JSON or a partial term.
-    return {**gap, "details_omitted": True, "read_reference": reference}
+    from ...goal_portfolio import lifecycle_readback_unavailable
+
+    return {**gap, "details_omitted": True, "read_reference": reference,
+            "goal_lifecycle": lifecycle_readback_unavailable(row["goal_id"], "omitted_due_to_size"),
+            "attention": {"status": "unavailable", "items": [], "reason": "omitted_due_to_size"}}
 
 
 class ManagerInspection:
