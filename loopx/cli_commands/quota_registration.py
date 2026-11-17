@@ -347,6 +347,14 @@ def register_quota_command(
         help="Source label for `quota spend-slot`.",
     )
     quota_parser.add_argument(
+        "--delivery-workspace-path",
+        help=(
+            "Local git worktree that produced this accountable delivery for "
+            "`quota spend-slot`. Use when spend-slot runs outside the worktree; "
+            "the local path is validated but is not persisted."
+        ),
+    )
+    quota_parser.add_argument(
         "--void-generated-at",
         help="generated_at timestamp of the quota_slot_spent run to void.",
     )
