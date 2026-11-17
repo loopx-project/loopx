@@ -147,11 +147,11 @@ class GoalStorageRequestMixin:
     ) -> tuple[Path, dict[str, object], dict[str, object]]:
         from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
         from ..control_plane.goals.state_resolution import resolve_goal_state
-        from ..control_plane.projects.registry_codec import load_project_registry
+        from ..control_plane.projects.registry_codec import load_registry
         from ..registry import find_registry_goal
 
         if source_registry != Path(self.server.registry_path).resolve():
-            registry = load_project_registry(source_registry)
+            registry = load_registry(source_registry)
             selected_goal = find_registry_goal(registry, goal_id)
             if selected_goal is None:
                 raise ValueError("registered Goal source changed")
