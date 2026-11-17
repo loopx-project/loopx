@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ...release_manifest import checkout_release_metadata
+from ...release_metadata import checkout_release_metadata
 from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..runtime.public_safety import public_safe_compact_text
 from .actual_default_model_behavior_portfolio import (

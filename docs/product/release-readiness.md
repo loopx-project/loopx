@@ -159,7 +159,10 @@ expected public tag is `vX.Y.Z` for that version.
 Exact-source qualification reads both version declarations from the selected
 checkout without executing its package. Missing, malformed or conflicting build
 metadata refuses qualification even when the commit is clean and all supplied
-receipts agree. Release artifact tooling uses the same metadata reader.
+receipts agree. Release artifact tooling loads the shared static reader without
+bootstrapping the candidate package, including when the tool and candidate use
+the same checkout. Invalid metadata retains the artifact CLI's normal error
+output; inspection does not execute package initialization.
 
 Before moving `stable`, maintainers should:
 

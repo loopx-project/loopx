@@ -10,15 +10,13 @@ import hashlib
 import io
 import json
 import re
+import runpy
 import subprocess
 import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from loopx.release_manifest import checkout_release_metadata
 
 
 class ReleaseArtifactError(ValueError):
@@ -41,8 +39,11 @@ class ReleaseIdentity:
 
 def load_identity(project_root: Path) -> ReleaseIdentity:
     try:
-        return ReleaseIdentity(**checkout_release_metadata(project_root))
-    except ValueError as exc:
+        # The tool can inspect its own checkout: loading its package would run
+        # the very initializer whose version must remain inert.
+        reader = runpy.run_path(str(Path(__file__).resolve().parents[1] / "loopx/release_metadata.py"))
+        return ReleaseIdentity(**reader["checkout_release_metadata"](project_root))
+    except (OSError, SyntaxError, ValueError) as exc:
         raise ReleaseArtifactError(str(exc)) from exc
 
 
