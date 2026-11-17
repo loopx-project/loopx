@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import ipaddress
 from collections import Counter
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
+from http.client import HTTPMessage
+from typing import IO
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from loopx.control_plane.runtime.time import now_utc_iso
@@ -14,7 +15,6 @@ from .connector_packets import (
     source_item_and_trial_from_private_gate_packet,
     source_item_and_trial_from_public_packet,
 )
-from .social_browser_x import build_social_browser_x_provider_packet
 from .markdown import (
     render_content_ops_chatview_report_markdown as render_content_ops_chatview_report_markdown,
     render_content_ops_exploration_plan_markdown as render_content_ops_exploration_plan_markdown,
@@ -47,93 +47,95 @@ from .schemas import (
     PUBLISH_GATE_SCHEMA_VERSION,
     SOURCE_ITEM_SCHEMA_VERSION,
 )
+from .social_browser_x import build_social_browser_x_provider_packet
 
 RAW_MATERIAL_KEY_HINTS = (
-    "body",
-    "chat",
-    "credential",
-    "dm",
-    "local_path",
-    "log",
-    "message",
-    "raw",
-    "secret",
-    "token",
-    "transcript",
+    "body", "chat", "credential", "dm", "local_path",
+    "log", "message", "raw", "secret", "token", "transcript",
 )
-
 ALLOWED_SOURCE_STATUSES = {
-    "public",
-    "private_needs_review",
-    "synthetic_public_safe",
-    "unpublished",
-    "forbidden_for_public_surface",
+    "public", "private_needs_review", "synthetic_public_safe",
+    "unpublished", "forbidden_for_public_surface",
 }
 ALLOWED_FRESHNESS = {"fresh", "stale", "unknown"}
-ALLOWED_USE_POLICIES = {
-    "summarize_and_transform",
-    "metadata_only",
-    "do_not_quote",
-    "forbidden",
-}
+ALLOWED_USE_POLICIES = {"summarize_and_transform", "metadata_only", "do_not_quote", "forbidden"}
 ALLOWED_ANGLE_DECISIONS = {"draft", "reject", "hold", "needs_review"}
 ALLOWED_DRAFT_STATES = {"outline", "draft", "rewrite", "blocked", "ready_for_review"}
 ALLOWED_FEEDBACK_EFFECTS = {
-    "preference_hint",
-    "source_boundary_correction",
-    "rewrite_todo",
-    "publish_decision",
+    "preference_hint", "source_boundary_correction", "rewrite_todo", "publish_decision",
 }
-ALLOWED_PUBLISH_GATE_STATUSES = {
-    "blocked_until_user_approval",
-    "approved",
-    "denied",
-    "needs_revision",
-}
+ALLOWED_PUBLISH_GATE_STATUSES = {"blocked_until_user_approval", "approved", "denied", "needs_revision"}
 ALLOWED_CONNECTOR_TRIAL_STATES = {
-    "candidate",
-    "metadata_packet_collected",
-    "ready_for_metadata_trial",
-    "needs_owner_gate",
-    "blocked",
+    "candidate", "metadata_packet_collected", "ready_for_metadata_trial",
+    "needs_owner_gate", "blocked",
 }
 ALLOWED_CONNECTOR_ACCESS_MODES = {
-    "public_metadata_only",
-    "private_metadata_only",
-    "synthetic_fixture_only",
+    "public_metadata_only", "private_metadata_only", "synthetic_fixture_only",
 }
 ALLOWED_EXPLORATION_READ_STATUSES = {
-    "metadata_ready",
-    "not_read",
-    "blocked_until_owner_gate",
-    "compact_result_ready",
+    "metadata_ready", "not_read", "blocked_until_owner_gate", "compact_result_ready",
 }
 ALLOWED_EXPLORATION_EVIDENCE_QUALITIES = {
-    "primary_source_metadata",
-    "metadata_only",
-    "not_evidence_until_approved",
-    "compact_result_metadata",
+    "primary_source_metadata", "metadata_only",
+    "not_evidence_until_approved", "compact_result_metadata",
 }
 
+_UNSAFE_LABEL_MARKERS = (
+    "http://", "https://", "/users/", "/private/", "bearer ", "credential", "secret",
+)
+_DEFAULT_OPERATOR_STATES = (
+    "waiting_for_source_review", "ready_to_draft", "waiting_for_feedback",
+    "ready_for_publish_decision", "safe_side_work_available",
+)
+_SAFE_EXPLORATION_LANE_FLAGS: dict[str, bool] = {
+    "source_body_captured": False,
+    "response_payload_captured": False,
+    "local_path_captured": False,
+    "external_write_allowed": False,
+}
 
-def _as_mappings(values: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
-    if not values:
+_GroupSpec = tuple[str, str, str, str, tuple[tuple[str, set[str]], ...]]
+_SURFACE_GROUP_SPECS: tuple[_GroupSpec, ...] = (
+    ("source_items", SOURCE_ITEM_SCHEMA_VERSION, "source item", "source_item_id", (
+        ("source_status", ALLOWED_SOURCE_STATUSES),
+        ("freshness", ALLOWED_FRESHNESS),
+        ("allowed_use", ALLOWED_USE_POLICIES),
+    )),
+    ("angle_candidates", ANGLE_CANDIDATE_SCHEMA_VERSION, "angle", "angle_id", (("decision", ALLOWED_ANGLE_DECISIONS),)),
+    ("draft_items", DRAFT_ITEM_SCHEMA_VERSION, "draft", "draft_id", (("state", ALLOWED_DRAFT_STATES),)),
+    ("feedback_signals", FEEDBACK_SIGNAL_SCHEMA_VERSION, "feedback", "feedback_id", (("effect", ALLOWED_FEEDBACK_EFFECTS),)),
+    ("publish_gates", PUBLISH_GATE_SCHEMA_VERSION, "publish gate", "gate_id", (("status", ALLOWED_PUBLISH_GATE_STATUSES),)),
+    ("material_memory", MATERIAL_MEMORY_SCHEMA_VERSION, "memory", "memory_id", ()),
+    ("connector_trials", CONNECTOR_TRIAL_SCHEMA_VERSION, "connector trial", "trial_id", (
+        ("source_status", ALLOWED_SOURCE_STATUSES),
+        ("freshness", ALLOWED_FRESHNESS),
+        ("allowed_use", ALLOWED_USE_POLICIES),
+        ("trial_state", ALLOWED_CONNECTOR_TRIAL_STATES),
+        ("access_mode", ALLOWED_CONNECTOR_ACCESS_MODES),
+    )),
+)
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _as_mappings(values: object) -> list[dict[str, object]]:
+    if not values or isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
         return []
     return [dict(item) for item in values if isinstance(item, Mapping)]
 
 
-def _text(value: Any, *, limit: int = 160) -> str | None:
+def _text(value: object, *, limit: int = 160) -> str | None:
     if value is None:
         return None
     text = " ".join(str(value).split())
     if not text:
         return None
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 1)].rstrip() + "..."
+    return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "..."
 
 
-def _ids(items: Sequence[Mapping[str, Any]], key: str) -> set[str]:
+def _ids(items: Sequence[Mapping[str, object]], key: str) -> set[str]:
     return {
         str(item.get(key))
         for item in items
@@ -141,31 +143,35 @@ def _ids(items: Sequence[Mapping[str, Any]], key: str) -> set[str]:
     }
 
 
-def _counter(values: Sequence[Any]) -> dict[str, int]:
+def _counter(values: Iterable[object]) -> dict[str, int]:
     return dict(sorted(Counter(str(value) for value in values if value).items()))
 
 
-def _normalise_exploration_label(value: Any, label: str) -> str:
+def _require_text(value: object, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} is required")
+    return text
+
+
+def _require_choice(value: str, allowed: set[str], label: str) -> str:
+    if value not in allowed:
+        raise ValueError(f"{label} must be one of {sorted(allowed)}")
+    return value
+
+
+def _normalise_exploration_label(value: object, label: str) -> str:
     text = _text(value, limit=80)
     if not text:
         raise ValueError(f"{label} is required")
     lowered = text.lower()
-    if (
-        "http://" in lowered
-        or "https://" in lowered
-        or "/users/" in lowered
-        or "/private/" in lowered
-        or "bearer " in lowered
-        or "credential" in lowered
-        or "secret" in lowered
-    ):
+    if any(marker in lowered for marker in _UNSAFE_LABEL_MARKERS):
         raise ValueError(f"{label} must be a compact public-safe label")
     return text
 
 
-def _normalise_public_https_url(url: str) -> tuple[str, Any]:
-    text = str(url or "").strip()
-    parsed = urlsplit(text)
+def _normalise_public_https_url(url: str) -> tuple[str, SplitResult]:
+    parsed = urlsplit(str(url or "").strip())
     if parsed.scheme != "https":
         raise ValueError("public handle observation requires an https URL")
     if parsed.username or parsed.password:
@@ -202,69 +208,121 @@ def _normalise_public_https_url(url: str) -> tuple[str, Any]:
 
 
 class _NoFollowPublicHandleRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+    def redirect_request(
+        self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str,
+    ) -> Request | None:
         _normalise_public_https_url(newurl)
         return None
 
 
-def _public_handle_attribution(parsed: Any) -> str:
-    path = parsed.path.rstrip("/") or "/"
-    return f"{parsed.hostname}{path}"
+def _public_handle_attribution(parsed: SplitResult) -> str:
+    return f"{parsed.hostname}{parsed.path.rstrip('/') or '/'}"
 
 
-def _source_item_from_public_handle_observation(
+def _metadata_source_item(
     *,
     source_item_id: str,
     source_kind: str,
+    source_status: str,
     freshness: str,
     terms_note: str,
-    parsed_url: Any,
-    observation: Mapping[str, Any],
-) -> dict[str, Any]:
+    attribution: str,
+    summary: str,
+    extra_key: str,
+    extra_value: Mapping[str, object],
+) -> dict[str, object]:
     return {
         "schema_version": SOURCE_ITEM_SCHEMA_VERSION,
         "source_item_id": source_item_id,
         "source_kind": source_kind,
-        "source_status": "public",
+        "source_status": source_status,
         "freshness": freshness,
         "terms_note": terms_note,
         "allowed_use": "metadata_only",
-        "attribution": _public_handle_attribution(parsed_url),
-        "summary": (
-            "Public handle observed as metadata-only; no source content was "
-            "captured and no external write was attempted."
-        ),
-        "observation": dict(observation),
+        "attribution": attribution,
+        "summary": summary,
+        extra_key: dict(extra_value),
     }
 
 
-def _source_item_from_private_connector_gate(
+def _surface_payload(
     *,
-    source_item_id: str,
-    source_kind: str,
-    freshness: str,
-    connector_name: str,
-    owner_label: str,
-    gate: Mapping[str, Any],
-) -> dict[str, Any]:
+    surface_id: str,
+    generated_at: str | None,
+    source_items: list[dict[str, object]],
+    angle_candidates: list[dict[str, object]],
+    draft_items: list[dict[str, object]],
+    feedback_signals: list[dict[str, object]],
+    publish_gates: list[dict[str, object]],
+    material_memory: list[dict[str, object]],
+    connector_trials: list[dict[str, object]],
+) -> dict[str, object]:
     return {
-        "schema_version": SOURCE_ITEM_SCHEMA_VERSION,
-        "source_item_id": source_item_id,
-        "source_kind": source_kind,
-        "source_status": "private_needs_review",
-        "freshness": freshness,
-        "terms_note": (
-            "private connector metadata-only placeholder; owner approval is "
-            "required before any source content read, quote, summary, or publication"
-        ),
-        "allowed_use": "metadata_only",
-        "attribution": f"{owner_label} via {connector_name}",
-        "summary": (
-            "Private connector is represented only as an owner-gated metadata "
-            "signal; no source content was read or copied."
-        ),
-        "owner_gate": dict(gate),
+        "schema_version": CONTENT_OPS_SURFACE_SCHEMA_VERSION,
+        "surface_id": surface_id,
+        "generated_at": generated_at,
+        "mode": "compact_state_surface",
+        "source_items": source_items,
+        "angle_candidates": angle_candidates,
+        "draft_items": draft_items,
+        "feedback_signals": feedback_signals,
+        "publish_gates": publish_gates,
+        "material_memory": material_memory,
+        "connector_trials": connector_trials,
+        "operator_states": list(_DEFAULT_OPERATOR_STATES),
+        "boundary": {
+            "public_safe": True,
+            "raw_private_material_recorded": False,
+            "raw_platform_data_recorded": False,
+            "credentials_recorded": False,
+            "autopublish_allowed": False,
+            "publish_requires_user_gate": True,
+            "connector_bodies_are_source_of_truth": False,
+        },
     }
+
+
+def _packet_envelope(
+    *,
+    ok: bool,
+    schema_version: str,
+    mode: str,
+    next_safe_action: object,
+    external_reads_performed: bool = False,
+    include_private_content_flag: bool = True,
+    extra_flags: Mapping[str, object] | None = None,
+    **fields: object,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "ok": ok,
+        "schema_version": schema_version,
+        "mode": mode,
+        **fields,
+        "external_reads_performed": external_reads_performed,
+        "external_writes_performed": False,
+        "private_source_bodies_read": False,
+    }
+    if include_private_content_flag:
+        payload["private_source_content_read"] = False
+    payload["autopublish_allowed"] = False
+    if extra_flags:
+        payload.update(extra_flags)
+    payload["next_safe_action"] = next_safe_action
+    return payload
+
+
+def _surface_groups(surface: Mapping[str, object]) -> dict[str, list[dict[str, object]]]:
+    return {key: _as_mappings(surface.get(key)) for key, *_ in _SURFACE_GROUP_SPECS}
+
+
+def _validate_item_fields(errors: list[str], item: Mapping[str, object], spec: _GroupSpec) -> None:
+    _, schema_version, label, id_key, allowed_fields = spec
+    item_id = item.get(id_key)
+    if item.get("schema_version") != schema_version:
+        errors.append(f"{label} {item_id} has wrong schema")
+    for field, allowed in allowed_fields:
+        if item.get(field) not in allowed:
+            errors.append(f"{label} {item_id} has invalid {field}")
 
 
 def build_content_ops_connector_runtime_policy(
@@ -273,19 +331,19 @@ def build_content_ops_connector_runtime_policy(
     connector_name: str,
     access_mode: str,
     connector_url: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build the runtime policy that keeps connector runs inside source bounds."""
 
-    if access_mode not in ALLOWED_CONNECTOR_ACCESS_MODES:
-        allowed_modes = sorted(ALLOWED_CONNECTOR_ACCESS_MODES)
-        raise ValueError(f"access_mode must be one of {allowed_modes}")
-
+    _require_choice(access_mode, ALLOWED_CONNECTOR_ACCESS_MODES, "access_mode")
+    base: dict[str, object] = {
+        "schema_version": CONTENT_OPS_CONNECTOR_RUNTIME_POLICY_SCHEMA_VERSION,
+        "connector_id": connector_id,
+        "connector_name": connector_name,
+        "access_mode": access_mode,
+    }
     if access_mode == "public_metadata_only":
         return {
-            "schema_version": CONTENT_OPS_CONNECTOR_RUNTIME_POLICY_SCHEMA_VERSION,
-            "connector_id": connector_id,
-            "connector_name": connector_name,
-            "access_mode": access_mode,
+            **base,
             "safe_default": "head_only_metadata_probe",
             "browser_open_allowed_before_gate": False,
             "browser_open_risk": (
@@ -299,19 +357,13 @@ def build_content_ops_connector_runtime_policy(
                 "record attribution and freshness metadata",
             ],
             "forbidden_before_approval": [
-                "timeline body capture",
-                "media download",
-                "login-gated reads",
+                "timeline body capture", "media download", "login-gated reads",
                 "posting or engagement actions",
             ],
         }
-
     if access_mode == "private_metadata_only":
         return {
-            "schema_version": CONTENT_OPS_CONNECTOR_RUNTIME_POLICY_SCHEMA_VERSION,
-            "connector_id": connector_id,
-            "connector_name": connector_name,
-            "access_mode": access_mode,
+            **base,
             "connector_url": connector_url,
             "safe_default": "gate_projection_only",
             "browser_open_allowed_before_gate": False,
@@ -321,33 +373,21 @@ def build_content_ops_connector_runtime_policy(
             ),
             "allowed_probe_methods": [],
             "allowed_before_approval": [
-                "store this compact gate packet",
-                "display the owner question",
+                "store this compact gate packet", "display the owner question",
                 "prepare fixture-only smoke coverage",
             ],
             "forbidden_url_path_prefixes_before_approval": [
-                "/api/messages",
-                "/api/reports",
-                "/api/channel-state",
+                "/api/messages", "/api/reports", "/api/channel-state",
             ],
             "forbidden_before_approval": [
                 "browser-opening the default private connector route",
-                "private source content read",
-                "message-list API calls",
-                "message-detail API calls",
-                "derived report ingestion",
-                "source quote",
-                "source summary",
-                "external posting",
-                "autopublish",
+                "private source content read", "message-list API calls",
+                "message-detail API calls", "derived report ingestion",
+                "source quote", "source summary", "external posting", "autopublish",
             ],
         }
-
     return {
-        "schema_version": CONTENT_OPS_CONNECTOR_RUNTIME_POLICY_SCHEMA_VERSION,
-        "connector_id": connector_id,
-        "connector_name": connector_name,
-        "access_mode": access_mode,
+        **base,
         "safe_default": "fixture_only",
         "browser_open_allowed_before_gate": False,
         "allowed_before_approval": ["fixture-only validation"],
@@ -355,20 +395,19 @@ def build_content_ops_connector_runtime_policy(
     }
 
 
-def _raw_material_key_names(*groups: Sequence[Mapping[str, Any]]) -> list[str]:
-    names: set[str] = set()
-    for group in groups:
-        for item in group:
-            for key in item:
-                lowered = str(key).lower()
-                if any(hint in lowered for hint in RAW_MATERIAL_KEY_HINTS):
-                    names.add(str(key))
-    return sorted(names)
+def _raw_material_key_names(*groups: Sequence[Mapping[str, object]]) -> list[str]:
+    return sorted({
+        str(key)
+        for group in groups
+        for item in group
+        for key in item
+        if any(hint in str(key).lower() for hint in RAW_MATERIAL_KEY_HINTS)
+    })
 
 
 def build_content_ops_surface_fixture(
     *, generated_at: str | None = "2026-06-23T00:00:00Z"
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build a synthetic public-safe content-ops state surface fixture.
 
     This fixture demonstrates the shape of a creator/self-media loop without
@@ -376,7 +415,7 @@ def build_content_ops_surface_fixture(
     local paths into LoopX state.
     """
 
-    source_items = [
+    source_items: list[dict[str, object]] = [
         {
             "schema_version": SOURCE_ITEM_SCHEMA_VERSION,
             "source_item_id": "source_demo_public_feed_001",
@@ -386,10 +425,7 @@ def build_content_ops_surface_fixture(
             "terms_note": "synthetic demo only; no platform scraping claim",
             "allowed_use": "summarize_and_transform",
             "attribution": "LoopX synthetic creator-ops demo",
-            "summary": (
-                "A public-safe trend summary suggests creator operators need "
-                "source-aware drafting queues."
-            ),
+            "summary": "A public-safe trend summary suggests creator operators need source-aware drafting queues.",
         },
         {
             "schema_version": SOURCE_ITEM_SCHEMA_VERSION,
@@ -403,7 +439,7 @@ def build_content_ops_surface_fixture(
             "summary": "Private source is represented only as a compact review-needed signal.",
         },
     ]
-    angle_candidates = [
+    angle_candidates: list[dict[str, object]] = [
         {
             "schema_version": ANGLE_CANDIDATE_SCHEMA_VERSION,
             "angle_id": "angle_source_aware_loop",
@@ -428,29 +464,22 @@ def build_content_ops_surface_fixture(
             "rejection_reason": "private material cannot be quoted or promoted without review",
         },
     ]
-    draft_items = [
+    draft_items: list[dict[str, object]] = [
         {
             "schema_version": DRAFT_ITEM_SCHEMA_VERSION,
             "draft_id": "draft_source_aware_loop_outline",
             "angle_id": "angle_source_aware_loop",
             "state": "outline",
-            "source_map": [
-                {
-                    "source_item_id": "source_demo_public_feed_001",
-                    "use": "summarized premise",
-                }
-            ],
+            "source_map": [{"source_item_id": "source_demo_public_feed_001", "use": "summarized premise"}],
             "preference_hints": [
                 "explain value as quality and feedback, not raw publish count",
                 "keep publish decision human-gated",
             ],
             "publish_gate_id": "publish_gate_source_aware_loop",
-            "validation_surface": (
-                "source map present; no raw private material; publish gate visible"
-            ),
+            "validation_surface": "source map present; no raw private material; publish gate visible",
         }
     ]
-    feedback_signals = [
+    feedback_signals: list[dict[str, object]] = [
         {
             "schema_version": FEEDBACK_SIGNAL_SCHEMA_VERSION,
             "feedback_id": "feedback_demo_style_001",
@@ -470,7 +499,7 @@ def build_content_ops_surface_fixture(
             "summary": "Private source stays metadata-only until an explicit review approves use.",
         },
     ]
-    publish_gates = [
+    publish_gates: list[dict[str, object]] = [
         {
             "schema_version": PUBLISH_GATE_SCHEMA_VERSION,
             "gate_id": "publish_gate_source_aware_loop",
@@ -478,15 +507,10 @@ def build_content_ops_surface_fixture(
             "status": "blocked_until_user_approval",
             "approval_required": True,
             "autopublish_allowed": False,
-            "required_review": [
-                "source attribution",
-                "tone/style",
-                "platform policy",
-                "final publish destination",
-            ],
+            "required_review": ["source attribution", "tone/style", "platform policy", "final publish destination"],
         }
     ]
-    material_memory = [
+    material_memory: list[dict[str, object]] = [
         {
             "schema_version": MATERIAL_MEMORY_SCHEMA_VERSION,
             "memory_id": "memory_source_aware_loop",
@@ -497,7 +521,7 @@ def build_content_ops_surface_fixture(
             "preference_hints": ["quality and feedback beat raw article count"],
         }
     ]
-    connector_trials = [
+    connector_trials: list[dict[str, object]] = [
         build_social_browser_x_provider_packet()["connector_trial"],
         {
             "schema_version": CONNECTOR_TRIAL_SCHEMA_VERSION,
@@ -516,46 +540,24 @@ def build_content_ops_surface_fixture(
             "external_write_allowed": False,
         },
     ]
-    return {
-        "schema_version": CONTENT_OPS_SURFACE_SCHEMA_VERSION,
-        "surface_id": "creator_ops_public_safe_demo",
-        "generated_at": generated_at,
-        "mode": "compact_state_surface",
-        "source_items": source_items,
-        "angle_candidates": angle_candidates,
-        "draft_items": draft_items,
-        "feedback_signals": feedback_signals,
-        "publish_gates": publish_gates,
-        "material_memory": material_memory,
-        "connector_trials": connector_trials,
-        "operator_states": [
-            "waiting_for_source_review",
-            "ready_to_draft",
-            "waiting_for_feedback",
-            "ready_for_publish_decision",
-            "safe_side_work_available",
-        ],
-        "boundary": {
-            "public_safe": True,
-            "raw_private_material_recorded": False,
-            "raw_platform_data_recorded": False,
-            "credentials_recorded": False,
-            "autopublish_allowed": False,
-            "publish_requires_user_gate": True,
-            "connector_bodies_are_source_of_truth": False,
-        },
-    }
+    return _surface_payload(
+        surface_id="creator_ops_public_safe_demo",
+        generated_at=generated_at,
+        source_items=source_items,
+        angle_candidates=angle_candidates,
+        draft_items=draft_items,
+        feedback_signals=feedback_signals,
+        publish_gates=publish_gates,
+        material_memory=material_memory,
+        connector_trials=connector_trials,
+    )
 
 
-def validate_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
-    source_items = _as_mappings(surface.get("source_items"))  # type: ignore[arg-type]
-    angle_candidates = _as_mappings(surface.get("angle_candidates"))  # type: ignore[arg-type]
-    draft_items = _as_mappings(surface.get("draft_items"))  # type: ignore[arg-type]
-    feedback_signals = _as_mappings(surface.get("feedback_signals"))  # type: ignore[arg-type]
-    publish_gates = _as_mappings(surface.get("publish_gates"))  # type: ignore[arg-type]
-    material_memory = _as_mappings(surface.get("material_memory"))  # type: ignore[arg-type]
-    connector_trials = _as_mappings(surface.get("connector_trials"))  # type: ignore[arg-type]
-
+def validate_content_ops_surface(surface: Mapping[str, object]) -> dict[str, object]:
+    groups = _surface_groups(surface)
+    source_items, angle_candidates, draft_items, feedback_signals, publish_gates, material_memory, connector_trials = (
+        groups[spec[0]] for spec in _SURFACE_GROUP_SPECS
+    )
     errors: list[str] = []
     source_ids = _ids(source_items, "source_item_id")
     angle_ids = _ids(angle_candidates, "angle_id")
@@ -564,189 +566,122 @@ def validate_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
 
     if surface.get("schema_version") != CONTENT_OPS_SURFACE_SCHEMA_VERSION:
         errors.append("surface schema_version must be content_ops_surface_v0")
-    if not source_items:
-        errors.append("at least one source_item_v0 record is required")
-    if not angle_candidates:
-        errors.append("at least one angle_candidate_v0 record is required")
-    if not draft_items:
-        errors.append("at least one draft_item_v0 record is required")
-    if not feedback_signals:
-        errors.append("at least one feedback_signal_v0 record is required")
-    if not publish_gates:
-        errors.append("at least one publish_gate_v0 record is required")
-    if not material_memory:
-        errors.append("at least one material_memory_v0 record is required")
-    if not connector_trials:
-        errors.append("at least one connector_trial_v0 record is required")
+    for group_key, schema_version, *_ in _SURFACE_GROUP_SPECS:
+        if not groups[group_key]:
+            errors.append(f"at least one {schema_version} record is required")
 
+    specs = {spec[0]: spec for spec in _SURFACE_GROUP_SPECS}
     for item in source_items:
-        if item.get("schema_version") != SOURCE_ITEM_SCHEMA_VERSION:
-            errors.append(f"source item {item.get('source_item_id')} has wrong schema")
-        if item.get("source_status") not in ALLOWED_SOURCE_STATUSES:
-            errors.append(
-                f"source item {item.get('source_item_id')} has invalid source_status"
-            )
-        if item.get("freshness") not in ALLOWED_FRESHNESS:
-            errors.append(f"source item {item.get('source_item_id')} has invalid freshness")
-        if item.get("allowed_use") not in ALLOWED_USE_POLICIES:
-            errors.append(f"source item {item.get('source_item_id')} has invalid allowed_use")
+        _validate_item_fields(errors, item, specs["source_items"])
 
     for item in angle_candidates:
-        if item.get("schema_version") != ANGLE_CANDIDATE_SCHEMA_VERSION:
-            errors.append(f"angle {item.get('angle_id')} has wrong schema")
-        if item.get("decision") not in ALLOWED_ANGLE_DECISIONS:
-            errors.append(f"angle {item.get('angle_id')} has invalid decision")
-        for source_id in item.get("source_item_ids") or []:
-            if str(source_id) not in source_ids:
-                errors.append(
-                    f"angle {item.get('angle_id')} references unknown source {source_id}"
-                )
+        _validate_item_fields(errors, item, specs["angle_candidates"])
+        raw_source_ids = item.get("source_item_ids")
+        if isinstance(raw_source_ids, Sequence) and not isinstance(raw_source_ids, (str, bytes)):
+            for source_id in raw_source_ids:
+                if str(source_id) not in source_ids:
+                    errors.append(f"angle {item.get('angle_id')} references unknown source {source_id}")
 
     for item in draft_items:
-        if item.get("schema_version") != DRAFT_ITEM_SCHEMA_VERSION:
-            errors.append(f"draft {item.get('draft_id')} has wrong schema")
-        if item.get("state") not in ALLOWED_DRAFT_STATES:
-            errors.append(f"draft {item.get('draft_id')} has invalid state")
+        _validate_item_fields(errors, item, specs["draft_items"])
+        draft_id = item.get("draft_id")
         if str(item.get("angle_id")) not in angle_ids:
-            errors.append(f"draft {item.get('draft_id')} references unknown angle")
+            errors.append(f"draft {draft_id} references unknown angle")
         if str(item.get("publish_gate_id")) not in gate_ids:
-            errors.append(f"draft {item.get('draft_id')} references unknown publish gate")
+            errors.append(f"draft {draft_id} references unknown publish gate")
         source_map = item.get("source_map")
         if not isinstance(source_map, Sequence) or isinstance(source_map, (str, bytes)):
-            errors.append(f"draft {item.get('draft_id')} must carry a source_map")
+            errors.append(f"draft {draft_id} must carry a source_map")
         else:
             for source_ref in source_map:
                 if not isinstance(source_ref, Mapping):
-                    errors.append(f"draft {item.get('draft_id')} has invalid source_map item")
+                    errors.append(f"draft {draft_id} has invalid source_map item")
                     continue
-                source_id = str(source_ref.get("source_item_id") or "")
-                if source_id not in source_ids:
-                    errors.append(
-                        f"draft {item.get('draft_id')} source_map references unknown source"
-                    )
+                if str(source_ref.get("source_item_id") or "") not in source_ids:
+                    errors.append(f"draft {draft_id} source_map references unknown source")
 
     for item in feedback_signals:
-        if item.get("schema_version") != FEEDBACK_SIGNAL_SCHEMA_VERSION:
-            errors.append(f"feedback {item.get('feedback_id')} has wrong schema")
-        if item.get("effect") not in ALLOWED_FEEDBACK_EFFECTS:
-            errors.append(f"feedback {item.get('feedback_id')} has invalid effect")
+        _validate_item_fields(errors, item, specs["feedback_signals"])
         target_id = str(item.get("target_id") or "")
-        if (
-            target_id not in draft_ids
-            and target_id not in source_ids
-            and target_id not in angle_ids
-        ):
+        if target_id not in draft_ids and target_id not in source_ids and target_id not in angle_ids:
             errors.append(f"feedback {item.get('feedback_id')} references unknown target")
 
     for item in publish_gates:
-        if item.get("schema_version") != PUBLISH_GATE_SCHEMA_VERSION:
-            errors.append(f"publish gate {item.get('gate_id')} has wrong schema")
-        if item.get("status") not in ALLOWED_PUBLISH_GATE_STATUSES:
-            errors.append(f"publish gate {item.get('gate_id')} has invalid status")
+        _validate_item_fields(errors, item, specs["publish_gates"])
+        gate_id = item.get("gate_id")
         if item.get("autopublish_allowed") is not False:
-            errors.append(
-                f"publish gate {item.get('gate_id')} must set autopublish_allowed=false"
-            )
+            errors.append(f"publish gate {gate_id} must set autopublish_allowed=false")
         if item.get("approval_required") is not True:
-            errors.append(f"publish gate {item.get('gate_id')} must require approval")
+            errors.append(f"publish gate {gate_id} must require approval")
 
     for item in material_memory:
-        if item.get("schema_version") != MATERIAL_MEMORY_SCHEMA_VERSION:
-            errors.append(f"memory {item.get('memory_id')} has wrong schema")
-        source_id = str(item.get("source_item_id") or "")
-        if source_id not in source_ids:
+        _validate_item_fields(errors, item, specs["material_memory"])
+        if str(item.get("source_item_id") or "") not in source_ids:
             errors.append(f"memory {item.get('memory_id')} references unknown source")
 
     for item in connector_trials:
-        if item.get("schema_version") != CONNECTOR_TRIAL_SCHEMA_VERSION:
-            errors.append(f"connector trial {item.get('trial_id')} has wrong schema")
-        if item.get("source_status") not in ALLOWED_SOURCE_STATUSES:
-            errors.append(
-                f"connector trial {item.get('trial_id')} has invalid source_status"
-            )
-        if item.get("freshness") not in ALLOWED_FRESHNESS:
-            errors.append(
-                f"connector trial {item.get('trial_id')} has invalid freshness"
-            )
-        if item.get("allowed_use") not in ALLOWED_USE_POLICIES:
-            errors.append(
-                f"connector trial {item.get('trial_id')} has invalid allowed_use"
-            )
-        if item.get("trial_state") not in ALLOWED_CONNECTOR_TRIAL_STATES:
-            errors.append(
-                f"connector trial {item.get('trial_id')} has invalid trial_state"
-            )
-        if item.get("access_mode") not in ALLOWED_CONNECTOR_ACCESS_MODES:
-            errors.append(
-                f"connector trial {item.get('trial_id')} has invalid access_mode"
-            )
+        _validate_item_fields(errors, item, specs["connector_trials"])
+        trial_id = item.get("trial_id")
         if item.get("external_write_allowed") is not False:
-            errors.append(
-                f"connector trial {item.get('trial_id')} must keep external_write_allowed=false"
-            )
-        if item.get("access_mode") == "private_metadata_only" and item.get(
-            "requires_user_gate"
-        ) is not True:
-            errors.append(
-                f"connector trial {item.get('trial_id')} must gate private metadata use"
-            )
+            errors.append(f"connector trial {trial_id} must keep external_write_allowed=false")
+        if item.get("access_mode") == "private_metadata_only" and item.get("requires_user_gate") is not True:
+            errors.append(f"connector trial {trial_id} must gate private metadata use")
 
-    boundary = surface.get("boundary") if isinstance(surface.get("boundary"), Mapping) else {}
-    if boundary.get("public_safe") is not True:
-        errors.append("boundary.public_safe must be true")
-    for key in (
-        "raw_private_material_recorded",
-        "raw_platform_data_recorded",
-        "credentials_recorded",
-        "autopublish_allowed",
-        "connector_bodies_are_source_of_truth",
+    boundary = _as_mapping(surface.get("boundary"))
+    for key, expected in (
+        ("public_safe", True),
+        ("raw_private_material_recorded", False),
+        ("raw_platform_data_recorded", False),
+        ("credentials_recorded", False),
+        ("autopublish_allowed", False),
+        ("connector_bodies_are_source_of_truth", False),
+        ("publish_requires_user_gate", True),
     ):
-        if boundary.get(key) is not False:
-            errors.append(f"boundary.{key} must be false")
-    if boundary.get("publish_requires_user_gate") is not True:
-        errors.append("boundary.publish_requires_user_gate must be true")
+        if boundary.get(key) is not expected:
+            errors.append(f"boundary.{key} must be {str(expected).lower()}")
 
-    raw_key_names = _raw_material_key_names(
-        source_items,
-        angle_candidates,
-        draft_items,
-        feedback_signals,
-        publish_gates,
-        material_memory,
-        connector_trials,
-    )
+    raw_key_names = _raw_material_key_names(*groups.values())
     if raw_key_names:
-        errors.append(
-            "raw/private-looking key names must not appear in content-ops records"
-        )
+        errors.append("raw/private-looking key names must not appear in content-ops records")
 
     return {
         "schema_version": CONTENT_OPS_VALIDATION_SCHEMA_VERSION,
         "ok": not errors,
         "errors": errors,
-        "record_counts": {
-            "source_items": len(source_items),
-            "angle_candidates": len(angle_candidates),
-            "draft_items": len(draft_items),
-            "feedback_signals": len(feedback_signals),
-            "publish_gates": len(publish_gates),
-            "material_memory": len(material_memory),
-            "connector_trials": len(connector_trials),
-        },
+        "record_counts": {key: len(groups[key]) for key, *_ in _SURFACE_GROUP_SPECS},
         "raw_material_key_names": raw_key_names,
     }
 
 
-def project_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
+def _todo_candidate(
+    role: str,
+    action_kind: str,
+    title: str,
+    ids_key: str,
+    items: Sequence[Mapping[str, object]],
+    id_key: str,
+    validation_surface: str,
+    stop_condition: str | None = None,
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "role": role,
+        "action_kind": action_kind,
+        "title": title,
+        ids_key: [str(item.get(id_key)) for item in items],
+        "validation_surface": validation_surface,
+    }
+    if stop_condition is not None:
+        entry["stop_condition"] = stop_condition
+    return entry
+
+
+def project_content_ops_surface(surface: Mapping[str, object]) -> dict[str, object]:
     """Project a content-ops surface into first-screen status fields."""
 
-    source_items = _as_mappings(surface.get("source_items"))  # type: ignore[arg-type]
-    angle_candidates = _as_mappings(surface.get("angle_candidates"))  # type: ignore[arg-type]
-    draft_items = _as_mappings(surface.get("draft_items"))  # type: ignore[arg-type]
-    feedback_signals = _as_mappings(surface.get("feedback_signals"))  # type: ignore[arg-type]
-    publish_gates = _as_mappings(surface.get("publish_gates"))  # type: ignore[arg-type]
-    material_memory = _as_mappings(surface.get("material_memory"))  # type: ignore[arg-type]
-    connector_trials = _as_mappings(surface.get("connector_trials"))  # type: ignore[arg-type]
+    groups = _surface_groups(surface)
+    source_items, angle_candidates, draft_items, feedback_signals, publish_gates, material_memory, connector_trials = (
+        groups[spec[0]] for spec in _SURFACE_GROUP_SPECS
+    )
     validation = validate_content_ops_surface(surface)
 
     source_review_required = [
@@ -755,25 +690,20 @@ def project_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         if item.get("source_status") in {"private_needs_review", "unpublished"}
         or item.get("allowed_use") == "metadata_only"
     ]
-    ready_angles = [
-        item for item in angle_candidates if item.get("decision") == "draft"
-    ]
+    ready_angles = [item for item in angle_candidates if item.get("decision") == "draft"]
     drafts_waiting_feedback = [
-        item
-        for item in draft_items
-        if item.get("state") in {"outline", "draft", "ready_for_review"}
+        item for item in draft_items if item.get("state") in {"outline", "draft", "ready_for_review"}
     ]
     publish_decision_gates = [
-        item
-        for item in publish_gates
-        if item.get("status") == "blocked_until_user_approval"
+        item for item in publish_gates if item.get("status") == "blocked_until_user_approval"
     ]
     feedback_effects = _counter(item.get("effect") for item in feedback_signals)
-    operator_states = [
-        str(item)
-        for item in surface.get("operator_states", []) or []
-        if isinstance(item, str) and item.strip()
-    ]
+    raw_operator_states = surface.get("operator_states")
+    operator_states = (
+        [str(item) for item in raw_operator_states if isinstance(item, str) and item.strip()]
+        if isinstance(raw_operator_states, Sequence) and not isinstance(raw_operator_states, (str, bytes))
+        else []
+    )
     user_action_required = bool(publish_decision_gates)
     safe_side_work_available = "safe_side_work_available" in operator_states
     ready_to_draft = bool(ready_angles)
@@ -791,42 +721,6 @@ def project_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         waiting_on = "agent"
         next_safe_action = "collect more compact source signals"
 
-    todo_candidates = []
-    if ready_angles:
-        todo_candidates.append(
-            {
-                "role": "agent",
-                "action_kind": "content_ops_draft_from_angle",
-                "title": "Draft or rewrite the selected source-mapped angle",
-                "angle_ids": [str(item.get("angle_id")) for item in ready_angles],
-                "validation_surface": "source_map plus publish_gate must remain present",
-                "stop_condition": "stop before external posting",
-            }
-        )
-    if source_review_required:
-        todo_candidates.append(
-            {
-                "role": "user",
-                "action_kind": "content_ops_source_review",
-                "title": "Review private or metadata-only source before use",
-                "source_item_ids": [
-                    str(item.get("source_item_id")) for item in source_review_required
-                ],
-                "validation_surface": "source_status and allowed_use updated",
-            }
-        )
-    if publish_decision_gates:
-        todo_candidates.append(
-            {
-                "role": "user",
-                "action_kind": "content_ops_publish_gate",
-                "title": "Approve, deny, or request revision before publication",
-                "publish_gate_ids": [
-                    str(item.get("gate_id")) for item in publish_decision_gates
-                ],
-                "validation_surface": "publish gate decision recorded",
-            }
-        )
     runnable_connector_trials = [
         item
         for item in connector_trials
@@ -836,31 +730,42 @@ def project_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
     gated_connector_trials = [
         item for item in connector_trials if item.get("requires_user_gate") is True
     ]
-    if runnable_connector_trials:
-        todo_candidates.append(
-            {
-                "role": "agent",
-                "action_kind": "content_ops_connector_metadata_trial",
-                "title": "Run a connector metadata-only observation trial",
-                "trial_ids": [
-                    str(item.get("trial_id")) for item in runnable_connector_trials
-                ],
-                "validation_surface": (
-                    "compact source_item_v0 produced; no raw platform or private material"
-                ),
-                "stop_condition": "stop before login-gated reads, posting, or private source use",
-            }
-        )
-    if gated_connector_trials:
-        todo_candidates.append(
-            {
-                "role": "user",
-                "action_kind": "content_ops_connector_owner_gate",
-                "title": "Approve or reject private connector metadata intake",
-                "trial_ids": [str(item.get("trial_id")) for item in gated_connector_trials],
-                "validation_surface": "connector trial gate decision recorded",
-            }
-        )
+
+    todo_specs: tuple[tuple[str, str, str, str, list[dict[str, object]], str, str, str | None], ...] = (
+        (
+            "agent", "content_ops_draft_from_angle",
+            "Draft or rewrite the selected source-mapped angle",
+            "angle_ids", ready_angles, "angle_id",
+            "source_map plus publish_gate must remain present",
+            "stop before external posting",
+        ),
+        (
+            "user", "content_ops_source_review",
+            "Review private or metadata-only source before use",
+            "source_item_ids", source_review_required, "source_item_id",
+            "source_status and allowed_use updated", None,
+        ),
+        (
+            "user", "content_ops_publish_gate",
+            "Approve, deny, or request revision before publication",
+            "publish_gate_ids", publish_decision_gates, "gate_id",
+            "publish gate decision recorded", None,
+        ),
+        (
+            "agent", "content_ops_connector_metadata_trial",
+            "Run a connector metadata-only observation trial",
+            "trial_ids", runnable_connector_trials, "trial_id",
+            "compact source_item_v0 produced; no raw platform or private material",
+            "stop before login-gated reads, posting, or private source use",
+        ),
+        (
+            "user", "content_ops_connector_owner_gate",
+            "Approve or reject private connector metadata intake",
+            "trial_ids", gated_connector_trials, "trial_id",
+            "connector trial gate decision recorded", None,
+        ),
+    )
+    todo_candidates = [_todo_candidate(*spec) for spec in todo_specs if spec[4]]
 
     return {
         "schema_version": CONTENT_OPS_SURFACE_PROJECTION_SCHEMA_VERSION,
@@ -893,9 +798,7 @@ def project_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         },
         "material_memory": {
             "count": len(material_memory),
-            "reuse_boundaries": _counter(
-                item.get("reuse_boundary") for item in material_memory
-            ),
+            "reuse_boundaries": _counter(item.get("reuse_boundary") for item in material_memory),
         },
         "todo_candidates": todo_candidates,
         "validation": validation,
@@ -916,7 +819,7 @@ def project_content_ops_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
 
 def build_content_ops_preview_packet(
     *, generated_at: str | None = "2026-06-23T00:00:00Z"
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build a public-safe content-ops preview packet.
 
     The preview uses synthetic/metadata-only connector trial records. It does
@@ -927,40 +830,32 @@ def build_content_ops_preview_packet(
     surface = build_content_ops_surface_fixture(generated_at=generated_at)
     validation = validate_content_ops_surface(surface)
     projection = project_content_ops_surface(surface)
-    return {
-        "ok": bool(validation.get("ok")),
-        "schema_version": CONTENT_OPS_PREVIEW_PACKET_SCHEMA_VERSION,
-        "mode": "content-ops-preview",
-        "surface": surface,
-        "projection": projection,
-        "validation": validation,
-        "connector_trials": projection.get("connector_trials"),
-        "external_reads_performed": False,
-        "external_writes_performed": False,
-        "private_source_bodies_read": False,
-        "autopublish_allowed": False,
-        "next_safe_action": projection.get("first_screen", {}).get("next_safe_action")
-        if isinstance(projection.get("first_screen"), Mapping)
-        else None,
-    }
+    return _packet_envelope(
+        ok=bool(validation.get("ok")),
+        schema_version=CONTENT_OPS_PREVIEW_PACKET_SCHEMA_VERSION,
+        mode="content-ops-preview",
+        include_private_content_flag=False,
+        surface=surface,
+        projection=projection,
+        validation=validation,
+        connector_trials=projection.get("connector_trials"),
+        next_safe_action=_as_mapping(projection.get("first_screen")).get("next_safe_action"),
+    )
 
 
 def build_content_ops_exploration_plan_packet(
     *,
     scenario: str = "mixed_connector_product_workflow",
     generated_at: str | None = "2026-06-23T00:00:00Z",
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build a fixture-only exploration plan packet.
 
     The plan expresses source lanes, read status, gates, and promotion targets
     before any connector reads source bodies or performs external writes.
     """
 
-    scenario_label = _normalise_exploration_label(
-        scenario,
-        "scenario",
-    )
-    source_lanes = [
+    scenario_label = _normalise_exploration_label(scenario, "scenario")
+    source_lanes: list[dict[str, object]] = [
         {
             "lane_id": "repo_issue_public_metadata",
             "surface": "repo_issue_fix",
@@ -973,10 +868,7 @@ def build_content_ops_exploration_plan_packet(
             "evidence_quality": "primary_source_metadata",
             "promotion_target": "loopx_agent_todo_candidate",
             "requires_user_gate": False,
-            "source_body_captured": False,
-            "response_payload_captured": False,
-            "local_path_captured": False,
-            "external_write_allowed": False,
+            **_SAFE_EXPLORATION_LANE_FLAGS,
         },
         {
             "lane_id": "public_social_signal_metadata",
@@ -990,10 +882,7 @@ def build_content_ops_exploration_plan_packet(
             "evidence_quality": "metadata_only",
             "promotion_target": "source_item_v0",
             "requires_user_gate": False,
-            "source_body_captured": False,
-            "response_payload_captured": False,
-            "local_path_captured": False,
-            "external_write_allowed": False,
+            **_SAFE_EXPLORATION_LANE_FLAGS,
         },
         {
             "lane_id": "private_chat_metadata_gate",
@@ -1014,17 +903,9 @@ def build_content_ops_exploration_plan_packet(
                     "Approve metadata-only private connector intake, reject it, "
                     "or narrow the source handle before source content use."
                 ),
-                "blocks": [
-                    "source content read",
-                    "source quote",
-                    "source summary",
-                    "external posting",
-                ],
+                "blocks": ["source content read", "source quote", "source summary", "external posting"],
             },
-            "source_body_captured": False,
-            "response_payload_captured": False,
-            "local_path_captured": False,
-            "external_write_allowed": False,
+            **_SAFE_EXPLORATION_LANE_FLAGS,
         },
         {
             "lane_id": "experiment_compact_result_metadata",
@@ -1045,23 +926,18 @@ def build_content_ops_exploration_plan_packet(
                     "Approve any raw experiment material read; compact status "
                     "metadata can be used without raw logs."
                 ),
-                "blocks": [
-                    "raw run log read",
-                    "private dataset sample read",
-                    "credential or environment dump",
-                ],
+                "blocks": ["raw run log read", "private dataset sample read", "credential or environment dump"],
             },
-            "source_body_captured": False,
-            "response_payload_captured": False,
-            "local_path_captured": False,
-            "external_write_allowed": False,
+            **_SAFE_EXPLORATION_LANE_FLAGS,
         },
     ]
     validation = validate_content_ops_exploration_plan_lanes(source_lanes)
-    user_gate_lanes = [
-        lane for lane in source_lanes if bool(lane.get("requires_user_gate"))
-    ]
-    plan = {
+    user_gate_lanes = [lane for lane in source_lanes if bool(lane.get("requires_user_gate"))]
+    top_agent_action = (
+        "promote metadata-ready public lanes or ask concrete owner gates "
+        "before private/raw source use"
+    )
+    plan: dict[str, object] = {
         "schema_version": EXPLORATION_PLAN_SCHEMA_VERSION,
         "scenario": scenario_label,
         "generated_at": generated_at,
@@ -1069,29 +945,18 @@ def build_content_ops_exploration_plan_packet(
         "lane_counts": {
             "total": len(source_lanes),
             "user_gate_required": len(user_gate_lanes),
-            "metadata_ready": sum(
-                1 for lane in source_lanes if lane.get("read_status") == "metadata_ready"
-            ),
+            "metadata_ready": sum(1 for lane in source_lanes if lane.get("read_status") == "metadata_ready"),
             "blocked_until_owner_gate": sum(
-                1
-                for lane in source_lanes
-                if lane.get("read_status") == "blocked_until_owner_gate"
+                1 for lane in source_lanes if lane.get("read_status") == "blocked_until_owner_gate"
             ),
         },
-        "promotion_targets": _counter(
-            [lane.get("promotion_target") for lane in source_lanes]
-        ),
+        "promotion_targets": _counter(lane.get("promotion_target") for lane in source_lanes),
         "first_screen": {
             "waiting_on": "user" if user_gate_lanes else "agent",
             "user_action_required": bool(user_gate_lanes),
             "agent_can_continue": True,
-            "top_agent_action": (
-                "promote metadata-ready public lanes or ask concrete owner gates "
-                "before private/raw source use"
-            ),
-            "top_user_gate": user_gate_lanes[0].get("user_gate")
-            if user_gate_lanes
-            else None,
+            "top_agent_action": top_agent_action,
+            "top_user_gate": user_gate_lanes[0].get("user_gate") if user_gate_lanes else None,
         },
         "boundary": {
             "external_reads_performed": False,
@@ -1108,25 +973,20 @@ def build_content_ops_exploration_plan_packet(
             "private_boundary_crossing_requires_user_gate": True,
         },
     }
-    return {
-        "ok": bool(validation.get("ok")),
-        "schema_version": CONTENT_OPS_EXPLORATION_PLAN_PACKET_SCHEMA_VERSION,
-        "mode": "content-ops-exploration-plan",
-        "exploration_plan": plan,
-        "validation": validation,
-        "external_reads_performed": False,
-        "external_writes_performed": False,
-        "private_source_bodies_read": False,
-        "private_source_content_read": False,
-        "local_paths_captured": False,
-        "autopublish_allowed": False,
-        "next_safe_action": plan["first_screen"]["top_agent_action"],
-    }
+    return _packet_envelope(
+        ok=bool(validation.get("ok")),
+        schema_version=CONTENT_OPS_EXPLORATION_PLAN_PACKET_SCHEMA_VERSION,
+        mode="content-ops-exploration-plan",
+        exploration_plan=plan,
+        validation=validation,
+        extra_flags={"local_paths_captured": False},
+        next_safe_action=top_agent_action,
+    )
 
 
 def validate_content_ops_exploration_plan_lanes(
-    source_lanes: Sequence[Mapping[str, Any]],
-) -> dict[str, Any]:
+    source_lanes: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
     errors: list[str] = []
     if not source_lanes:
         errors.append("at least one source lane is required")
@@ -1138,46 +998,23 @@ def validate_content_ops_exploration_plan_lanes(
         elif lane_id in seen_ids:
             errors.append(f"lane {index + 1}: duplicate lane_id {lane_id}")
         seen_ids.add(lane_id)
-        if lane.get("source_status") not in ALLOWED_SOURCE_STATUSES:
-            errors.append(
-                f"{lane_id or index + 1}: source_status must be one of "
-                f"{sorted(ALLOWED_SOURCE_STATUSES)}"
-            )
-        if lane.get("access_mode") not in ALLOWED_CONNECTOR_ACCESS_MODES:
-            errors.append(
-                f"{lane_id or index + 1}: access_mode must be one of "
-                f"{sorted(ALLOWED_CONNECTOR_ACCESS_MODES)}"
-            )
-        if lane.get("read_status") not in ALLOWED_EXPLORATION_READ_STATUSES:
-            errors.append(
-                f"{lane_id or index + 1}: read_status must be one of "
-                f"{sorted(ALLOWED_EXPLORATION_READ_STATUSES)}"
-            )
-        if lane.get("evidence_quality") not in ALLOWED_EXPLORATION_EVIDENCE_QUALITIES:
-            errors.append(
-                f"{lane_id or index + 1}: evidence_quality must be one of "
-                f"{sorted(ALLOWED_EXPLORATION_EVIDENCE_QUALITIES)}"
-            )
-        if not str(lane.get("route") or "").strip():
-            errors.append(f"{lane_id or index + 1}: route is required")
-        if not str(lane.get("fallback") or "").strip():
-            errors.append(f"{lane_id or index + 1}: fallback is required")
-        if not str(lane.get("promotion_target") or "").strip():
-            errors.append(f"{lane_id or index + 1}: promotion_target is required")
-        if bool(lane.get("source_body_captured")):
-            errors.append(f"{lane_id or index + 1}: source_body_captured must be false")
-        if bool(lane.get("response_payload_captured")):
-            errors.append(
-                f"{lane_id or index + 1}: response_payload_captured must be false"
-            )
-        if bool(lane.get("local_path_captured")):
-            errors.append(f"{lane_id or index + 1}: local_path_captured must be false")
-        if bool(lane.get("external_write_allowed")):
-            errors.append(f"{lane_id or index + 1}: external_write_allowed must be false")
-        if bool(lane.get("requires_user_gate")) and not isinstance(
-            lane.get("user_gate"), Mapping
+        lane_ref = lane_id or index + 1
+        for field, allowed in (
+            ("source_status", ALLOWED_SOURCE_STATUSES),
+            ("access_mode", ALLOWED_CONNECTOR_ACCESS_MODES),
+            ("read_status", ALLOWED_EXPLORATION_READ_STATUSES),
+            ("evidence_quality", ALLOWED_EXPLORATION_EVIDENCE_QUALITIES),
         ):
-            errors.append(f"{lane_id or index + 1}: user_gate is required")
+            if lane.get(field) not in allowed:
+                errors.append(f"{lane_ref}: {field} must be one of {sorted(allowed)}")
+        for field in ("route", "fallback", "promotion_target"):
+            if not str(lane.get(field) or "").strip():
+                errors.append(f"{lane_ref}: {field} is required")
+        for field in _SAFE_EXPLORATION_LANE_FLAGS:
+            if bool(lane.get(field)):
+                errors.append(f"{lane_ref}: {field} must be false")
+        if bool(lane.get("requires_user_gate")) and not isinstance(lane.get("user_gate"), Mapping):
+            errors.append(f"{lane_ref}: user_gate is required")
     return {
         "schema_version": "content_ops_exploration_plan_validation_v0",
         "ok": not errors,
@@ -1196,26 +1033,23 @@ def build_content_ops_public_handle_observation_packet(
     terms_note: str | None = None,
     timeout_seconds: float = 10.0,
     fetch: bool = True,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Observe a public handle as a metadata-only ``source_item_v0`` record.
 
     The live path issues at most one HEAD request. It never reads response
     content, sends cookies, logs in, posts, or follows redirects.
     """
 
-    if not str(source_item_id or "").strip():
-        raise ValueError("source_item_id is required")
-    if freshness not in ALLOWED_FRESHNESS:
-        raise ValueError(f"freshness must be one of {sorted(ALLOWED_FRESHNESS)}")
+    clean_source_item_id = _require_text(source_item_id, "source_item_id")
+    _require_choice(freshness, ALLOWED_FRESHNESS, "freshness")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
 
     normalised_url, parsed_url = _normalise_public_https_url(url)
     effective_terms_note = terms_note or (
-        "public metadata-only handle observation; no login, body capture, "
-        "posting, or private source use"
+        "public metadata-only handle observation; no login, body capture, posting, or private source use"
     )
-    observation: dict[str, Any] = {
+    observation: dict[str, object] = {
         "schema_version": CONTENT_OPS_PUBLIC_HANDLE_OBSERVATION_SCHEMA_VERSION,
         "surface": surface,
         "input_url": normalised_url,
@@ -1261,18 +1095,23 @@ def build_content_ops_public_handle_observation_packet(
         finally:
             if response is not None:
                 response.close()
-
         _normalise_public_https_url(str(observation["url_effective"]))
     else:
         observation["observation_status"] = "not_fetched"
 
-    source_item = _source_item_from_public_handle_observation(
-        source_item_id=str(source_item_id).strip(),
+    source_item = _metadata_source_item(
+        source_item_id=clean_source_item_id,
         source_kind=source_kind,
+        source_status="public",
         freshness=freshness,
         terms_note=effective_terms_note,
-        parsed_url=parsed_url,
-        observation=observation,
+        attribution=_public_handle_attribution(parsed_url),
+        summary=(
+            "Public handle observed as metadata-only; no source content was "
+            "captured and no external write was attempted."
+        ),
+        extra_key="observation",
+        extra_value=observation,
     )
     runtime_policy = build_content_ops_connector_runtime_policy(
         connector_id=f"{surface}_{source_kind}",
@@ -1280,27 +1119,22 @@ def build_content_ops_public_handle_observation_packet(
         access_mode="public_metadata_only",
         connector_url=normalised_url,
     )
-    return {
-        "ok": True,
-        "schema_version": CONTENT_OPS_PUBLIC_HANDLE_OBSERVATION_PACKET_SCHEMA_VERSION,
-        "mode": "content-ops-observe-public-handle",
-        "surface": surface,
-        "source_item": source_item,
-        "source_item_schema_version": SOURCE_ITEM_SCHEMA_VERSION,
-        "observation": observation,
-        "runtime_policy": runtime_policy,
-        "external_reads_performed": bool(fetch),
-        "external_read_kind": "http_head" if fetch else "none",
-        "external_writes_performed": False,
-        "private_source_bodies_read": False,
-        "private_source_content_read": False,
-        "autopublish_allowed": False,
-        "promotion_target": "source_item_v0",
-        "next_safe_action": (
+    return _packet_envelope(
+        ok=True,
+        schema_version=CONTENT_OPS_PUBLIC_HANDLE_OBSERVATION_PACKET_SCHEMA_VERSION,
+        mode="content-ops-observe-public-handle",
+        external_reads_performed=bool(fetch),
+        surface=surface,
+        source_item=source_item,
+        source_item_schema_version=SOURCE_ITEM_SCHEMA_VERSION,
+        observation=observation,
+        runtime_policy=runtime_policy,
+        extra_flags={"external_read_kind": "http_head" if fetch else "none", "promotion_target": "source_item_v0"},
+        next_safe_action=(
             "promote the compact source_item_v0 into content_ops_surface_v0 "
             "only after attribution and allowed_use remain metadata_only"
         ),
-    }
+    )
 
 
 def build_content_ops_private_connector_gate_packet(
@@ -1312,67 +1146,65 @@ def build_content_ops_private_connector_gate_packet(
     source_kind: str = "wechat_private_connector_metadata",
     owner_label: str = "WeChat archive owner",
     freshness: str = "unknown",
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Project a concrete owner gate before private connector intake.
 
     This packet is a routing artifact only. It does not connect to private
     sources, read source content, quote material, or authorize publication.
     """
 
-    if not str(connector_id or "").strip():
-        raise ValueError("connector_id is required")
-    if not str(proposed_source_item_id or "").strip():
-        raise ValueError("proposed_source_item_id is required")
-    if freshness not in ALLOWED_FRESHNESS:
-        raise ValueError(f"freshness must be one of {sorted(ALLOWED_FRESHNESS)}")
+    clean_connector_id = _require_text(connector_id, "connector_id")
+    clean_source_item_id = _require_text(proposed_source_item_id, "proposed_source_item_id")
+    _require_choice(freshness, ALLOWED_FRESHNESS, "freshness")
+    clean_connector_name = str(connector_name).strip()
+    clean_owner_label = str(owner_label).strip()
 
-    gate_id = f"owner_gate_{str(connector_id).strip()}"
+    gate_id = f"owner_gate_{clean_connector_id}"
     runtime_policy = build_content_ops_connector_runtime_policy(
-        connector_id=str(connector_id).strip(),
-        connector_name=str(connector_name).strip(),
+        connector_id=clean_connector_id,
+        connector_name=clean_connector_name,
         access_mode="private_metadata_only",
-        connector_url="https://chatview.zaynjarvis.com/"
-        if str(connector_id).strip() == "chatlog_alpha_chatview"
-        else None,
+        connector_url="https://chatview.zaynjarvis.com/" if clean_connector_id == "chatlog_alpha_chatview" else None,
     )
-    gate = {
+    gate: dict[str, object] = {
         "schema_version": CONTENT_OPS_PRIVATE_CONNECTOR_OWNER_GATE_SCHEMA_VERSION,
         "gate_id": gate_id,
-        "connector_id": str(connector_id).strip(),
-        "connector_name": str(connector_name).strip(),
+        "connector_id": clean_connector_id,
+        "connector_name": clean_connector_name,
         "surface": surface,
         "status": "blocked_until_user_approval",
         "approval_required": True,
-        "owner_label": str(owner_label).strip(),
+        "owner_label": clean_owner_label,
         "requested_decision": "approve_metadata_only_intake_or_reject",
         "approval_options": [
-            "approve metadata-only intake",
-            "reject connector intake",
-            "request a narrower source handle",
+            "approve metadata-only intake", "reject connector intake", "request a narrower source handle",
         ],
         "forbidden_until_approved": [
-            "source content read",
-            "source quote",
-            "source summary",
-            "external posting",
-            "autopublish",
+            "source content read", "source quote", "source summary", "external posting", "autopublish",
         ],
         "allowed_before_approval": [
-            "store this compact gate packet",
-            "display the owner question",
-            "prepare fixture-only smoke coverage",
+            "store this compact gate packet", "display the owner question", "prepare fixture-only smoke coverage",
         ],
         "runtime_policy": runtime_policy,
     }
-    source_item = _source_item_from_private_connector_gate(
-        source_item_id=str(proposed_source_item_id).strip(),
+    source_item = _metadata_source_item(
+        source_item_id=clean_source_item_id,
         source_kind=source_kind,
+        source_status="private_needs_review",
         freshness=freshness,
-        connector_name=str(connector_name).strip(),
-        owner_label=str(owner_label).strip(),
-        gate=gate,
+        terms_note=(
+            "private connector metadata-only placeholder; owner approval is "
+            "required before any source content read, quote, summary, or publication"
+        ),
+        attribution=f"{clean_owner_label} via {clean_connector_name}",
+        summary=(
+            "Private connector is represented only as an owner-gated metadata "
+            "signal; no source content was read or copied."
+        ),
+        extra_key="owner_gate",
+        extra_value=gate,
     )
-    user_todo_projection = {
+    user_todo_projection: dict[str, object] = {
         "role": "user",
         "action_kind": "content_ops_private_connector_owner_gate",
         "title": (
@@ -1380,76 +1212,60 @@ def build_content_ops_private_connector_gate_packet(
             "before LoopX reads any private source content."
         ),
         "gate_id": gate_id,
-        "connector_id": str(connector_id).strip(),
+        "connector_id": clean_connector_id,
         "source_item_id": source_item["source_item_id"],
         "validation_surface": "owner decision recorded before private source use",
     }
-    return {
-        "ok": True,
-        "schema_version": CONTENT_OPS_PRIVATE_CONNECTOR_GATE_PACKET_SCHEMA_VERSION,
-        "mode": "content-ops-project-private-connector-gate",
-        "surface": surface,
-        "connector": {
-            "connector_id": str(connector_id).strip(),
-            "connector_name": str(connector_name).strip(),
+    return _packet_envelope(
+        ok=True,
+        schema_version=CONTENT_OPS_PRIVATE_CONNECTOR_GATE_PACKET_SCHEMA_VERSION,
+        mode="content-ops-project-private-connector-gate",
+        surface=surface,
+        connector={
+            "connector_id": clean_connector_id,
+            "connector_name": clean_connector_name,
             "access_mode": "private_metadata_only",
             "source_status": "private_needs_review",
             "allowed_use": "metadata_only",
             "promotion_target": "source_item_v0_after_owner_gate",
         },
-        "owner_gate": gate,
-        "runtime_policy": runtime_policy,
-        "source_item": source_item,
-        "user_todo_projection": user_todo_projection,
-        "external_reads_performed": False,
-        "external_writes_performed": False,
-        "private_source_bodies_read": False,
-        "private_source_content_read": False,
-        "autopublish_allowed": False,
-        "owner_gate_required": True,
-        "next_safe_action": (
+        owner_gate=gate,
+        runtime_policy=runtime_policy,
+        source_item=source_item,
+        user_todo_projection=user_todo_projection,
+        extra_flags={"owner_gate_required": True},
+        next_safe_action=(
             "surface the projected owner gate; do not read private source content "
             "until an owner decision updates the gate"
         ),
-    }
+    )
 
 
-def _non_negative_int(value: int, label: str) -> int:
+def _non_negative_int(value: object, label: str) -> int:
+    if not isinstance(value, (int, float, str)):
+        raise ValueError(f"{label} must be an integer")
     count = int(value)
     if count < 0:
         raise ValueError(f"{label} must be non-negative")
     return count
 
 
-def _normalise_api_path_counts(values: Mapping[str, Any] | None) -> dict[str, int]:
+def _normalise_api_path_counts(values: Mapping[str, object] | None) -> dict[str, int]:
     counts: dict[str, int] = {}
     for raw_path, raw_count in (values or {}).items():
         path = str(raw_path or "").strip()
         if not path.startswith("/api/"):
             raise ValueError("ChatView API path counts must use /api/ path classes")
-        counts[path] = _non_negative_int(int(raw_count), f"api path count for {path}")
+        counts[path] = _non_negative_int(raw_count, f"api path count for {path}")
     return dict(sorted(counts.items()))
 
 
 def _normalise_theme_signals(values: Sequence[str] | None) -> list[str]:
-    signals: list[str] = []
-    for raw_value in values or []:
-        signal = _text(raw_value, limit=80)
-        if not signal:
-            continue
-        lowered = signal.lower()
-        if (
-            "http://" in lowered
-            or "https://" in lowered
-            or "/users/" in lowered
-            or "/private/" in lowered
-            or "bearer " in lowered
-            or "credential" in lowered
-            or "secret" in lowered
-        ):
-            raise ValueError("theme_signal must be a compact public-safe label")
-        signals.append(signal)
-    return signals[:8]
+    return [
+        _normalise_exploration_label(raw_value, "theme_signal")
+        for raw_value in values or []
+        if _text(raw_value, limit=80)
+    ][:8]
 
 
 def build_content_ops_chatview_report_packet(
@@ -1458,12 +1274,12 @@ def build_content_ops_chatview_report_packet(
     recent_record_count: int,
     report_count: int,
     api_request_count: int,
-    api_path_counts: Mapping[str, Any] | None = None,
+    api_path_counts: Mapping[str, object] | None = None,
     connector_url: str = "https://chatview.zaynjarvis.com/",
     source_item_id: str = "source_chatview_metadata_signal_001",
     owner_label: str = "ChatView owner",
     generated_at: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build a public-safe ChatView report that remains aggregation-compatible."""
 
     channels = _non_negative_int(channel_count, "channel_count")
@@ -1471,8 +1287,7 @@ def build_content_ops_chatview_report_packet(
     reports = _non_negative_int(report_count, "report_count")
     api_requests = _non_negative_int(api_request_count, "api_request_count")
     path_counts = _normalise_api_path_counts(api_path_counts)
-    if not str(source_item_id or "").strip():
-        raise ValueError("source_item_id is required")
+    clean_source_item_id = _require_text(source_item_id, "source_item_id")
     normalised_url, _parsed = _normalise_public_https_url(connector_url)
 
     operator_card = (
@@ -1483,7 +1298,7 @@ def build_content_ops_chatview_report_packet(
         connector_id="chatlog_alpha_chatview",
         connector_name="chatlog-alpha/chatview",
         surface="wechat_private_archive",
-        proposed_source_item_id=str(source_item_id).strip(),
+        proposed_source_item_id=clean_source_item_id,
         source_kind="wechat_private_connector_metadata",
         owner_label=owner_label,
         freshness="fresh",
@@ -1491,8 +1306,7 @@ def build_content_ops_chatview_report_packet(
     source_item = packet.get("source_item")
     if isinstance(source_item, dict):
         source_item["summary"] = (
-            "ChatView metadata signal: "
-            f"{operator_card} No source body or response payload was saved."
+            f"ChatView metadata signal: {operator_card} No source body or response payload was saved."
         )
         source_item["terms_note"] = (
             "metadata-only ChatView connector report; owner approval is required "
@@ -1504,11 +1318,9 @@ def build_content_ops_chatview_report_packet(
             "Approve, reject, or narrow ChatView metadata use before LoopX reads "
             "any private source content."
         )
-        user_todo["validation_surface"] = (
-            "owner decision recorded after reviewing the public-safe operator card"
-        )
+        user_todo["validation_surface"] = "owner decision recorded after reviewing the public-safe operator card"
 
-    report = {
+    report: dict[str, object] = {
         "schema_version": CONTENT_OPS_CHATVIEW_CONNECTOR_REPORT_SCHEMA_VERSION,
         "generated_at": generated_at if generated_at is not None else now_utc_iso(),
         "connector_url": normalised_url,
@@ -1522,10 +1334,8 @@ def build_content_ops_chatview_report_packet(
         },
         "aggregation": {
             "aggregation_ready": True,
-            "private_gate_packet_schema_version": (
-                CONTENT_OPS_PRIVATE_CONNECTOR_GATE_PACKET_SCHEMA_VERSION
-            ),
-            "source_item_id": str(source_item_id).strip(),
+            "private_gate_packet_schema_version": CONTENT_OPS_PRIVATE_CONNECTOR_GATE_PACKET_SCHEMA_VERSION,
+            "source_item_id": clean_source_item_id,
         },
         "boundary": {
             "source_bodies_saved": False,
@@ -1535,64 +1345,49 @@ def build_content_ops_chatview_report_packet(
         },
     }
     packet.update(
-        {
-            "mode": "content-ops-project-chatview-report",
-            "chatview_report": report,
-            "operator_card": operator_card,
-            "aggregation_ready": True,
-            "external_reads_performed": False,
-            "external_writes_performed": False,
-            "private_source_bodies_read": False,
-            "private_source_content_read": False,
-            "autopublish_allowed": False,
-            "next_safe_action": (
+        _packet_envelope(
+            ok=True,
+            schema_version=CONTENT_OPS_PRIVATE_CONNECTOR_GATE_PACKET_SCHEMA_VERSION,
+            mode="content-ops-project-chatview-report",
+            chatview_report=report,
+            operator_card=operator_card,
+            aggregation_ready=True,
+            next_safe_action=(
                 "aggregate this private gate packet with public source packets, "
                 "or ask the owner to approve a narrower ChatView source handle"
             ),
-        }
+        )
     )
     return packet
 
 
 def build_content_ops_surface_from_connector_packets(
     *,
-    public_handle_packets: Sequence[Mapping[str, Any]],
-    private_connector_gate_packets: Sequence[Mapping[str, Any]],
+    public_handle_packets: Sequence[Mapping[str, object]],
+    private_connector_gate_packets: Sequence[Mapping[str, object]],
     surface_id: str = "content_ops_connector_packet_aggregation",
     generated_at: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Aggregate connector packets into a compact content-ops state surface."""
 
-    public_packets = [dict(packet) for packet in public_handle_packets]
-    private_packets = [dict(packet) for packet in private_connector_gate_packets]
-    if not public_packets:
+    if not public_handle_packets:
         raise ValueError("at least one public handle observation packet is required")
-    if not private_packets:
+    if not private_connector_gate_packets:
         raise ValueError("at least one private connector gate packet is required")
 
-    source_items: list[dict[str, Any]] = []
-    connector_trials: list[dict[str, Any]] = []
-
-    for index, packet in enumerate(public_packets):
-        source_item, connector_trial = source_item_and_trial_from_public_packet(
-            packet,
-            index,
-        )
-        source_items.append(source_item)
-        connector_trials.append(connector_trial)
-
-    for index, packet in enumerate(private_packets):
-        source_item, connector_trial = source_item_and_trial_from_private_gate_packet(
-            packet,
-            index,
-        )
-        source_items.append(source_item)
-        connector_trials.append(connector_trial)
+    source_items: list[dict[str, object]] = []
+    connector_trials: list[dict[str, object]] = []
+    for extract, packets in (
+        (source_item_and_trial_from_public_packet, public_handle_packets),
+        (source_item_and_trial_from_private_gate_packet, private_connector_gate_packets),
+    ):
+        for index, packet in enumerate(packets):
+            source_item, connector_trial = extract(packet, index)
+            source_items.append(source_item)
+            connector_trials.append(connector_trial)
 
     public_source_ids = [
-        str(item.get("source_item_id"))
-        for item in source_items
-        if item.get("source_status") == "public"
+        str(item.get("source_item_id")) for item in source_items if item.get("source_status") == "public"
     ]
     private_source_ids = [
         str(item.get("source_item_id"))
@@ -1603,7 +1398,7 @@ def build_content_ops_surface_from_connector_packets(
     publish_gate_id = "publish_gate_connector_packet_aggregation"
     draft_id = "draft_connector_packet_aggregation_outline"
 
-    angle_candidates = [
+    angle_candidates: list[dict[str, object]] = [
         {
             "schema_version": ANGLE_CANDIDATE_SCHEMA_VERSION,
             "angle_id": aggregate_angle_id,
@@ -1624,38 +1419,30 @@ def build_content_ops_surface_from_connector_packets(
                 "source_item_ids": private_source_ids,
                 "audience": "creator operators evaluating bounded automation",
                 "topic": "private connector source quote",
-            "novelty": "blocked by private-source owner gate",
-            "preference_fit": "unknown",
-            "evidence_quality": "needs_owner_review",
-            "decision": "reject",
-            "rejection_reason": (
-                "private connector material cannot be quoted or summarized "
-                "before owner approval"
-            ),
+                "novelty": "blocked by private-source owner gate",
+                "preference_fit": "unknown",
+                "evidence_quality": "needs_owner_review",
+                "decision": "reject",
+                "rejection_reason": "private connector material cannot be quoted or summarized before owner approval",
             }
         )
 
-    draft_items = [
+    draft_items: list[dict[str, object]] = [
         {
             "schema_version": DRAFT_ITEM_SCHEMA_VERSION,
             "draft_id": draft_id,
             "angle_id": aggregate_angle_id,
             "state": "outline",
-            "source_map": [
-                {"source_item_id": source_id, "use": "metadata-only premise"}
-                for source_id in public_source_ids
-            ],
+            "source_map": [{"source_item_id": sid, "use": "metadata-only premise"} for sid in public_source_ids],
             "preference_hints": [
                 "explain connector value as bounded signal intake",
                 "keep private-source use and publishing behind explicit gates",
             ],
             "publish_gate_id": publish_gate_id,
-            "validation_surface": (
-                "public source map present; private connector represented only by owner gate"
-            ),
+            "validation_surface": "public source map present; private connector represented only by owner gate",
         }
     ]
-    feedback_signals = [
+    feedback_signals: list[dict[str, object]] = [
         {
             "schema_version": FEEDBACK_SIGNAL_SCHEMA_VERSION,
             "feedback_id": "feedback_connector_packet_boundary",
@@ -1666,7 +1453,7 @@ def build_content_ops_surface_from_connector_packets(
             "summary": "Private connector packets remain owner-gated before source use.",
         }
     ]
-    publish_gates = [
+    publish_gates: list[dict[str, object]] = [
         {
             "schema_version": PUBLISH_GATE_SCHEMA_VERSION,
             "gate_id": publish_gate_id,
@@ -1675,76 +1462,52 @@ def build_content_ops_surface_from_connector_packets(
             "approval_required": True,
             "autopublish_allowed": False,
             "required_review": [
-                "source attribution",
-                "private connector owner gate",
-                "tone/style",
-                "final publish destination",
+                "source attribution", "private connector owner gate", "tone/style", "final publish destination",
             ],
         }
     ]
-    material_memory = [
+    material_memory: list[dict[str, object]] = [
         {
             "schema_version": MATERIAL_MEMORY_SCHEMA_VERSION,
             "memory_id": f"memory_{source_id}",
             "source_item_id": source_id,
-            "attribution": "content-ops packet aggregation",
-            "reuse_boundary": "metadata_only_public_handle",
+            "attribution": attribution,
+            "reuse_boundary": reuse_boundary,
             "rejected_angles": ["angle_private_connector_source_quote"],
-            "preference_hints": ["bounded connector intake before drafting"],
+            "preference_hints": [hint],
         }
-        for source_id in public_source_ids
+        for source_ids, attribution, reuse_boundary, hint in (
+            (
+                public_source_ids, "content-ops packet aggregation",
+                "metadata_only_public_handle", "bounded connector intake before drafting",
+            ),
+            (
+                private_source_ids, "content-ops private connector gate",
+                "private_owner_gate_required", "do not quote or summarize before owner approval",
+            ),
+        )
+        for source_id in source_ids
     ]
-    material_memory.extend(
-        {
-            "schema_version": MATERIAL_MEMORY_SCHEMA_VERSION,
-            "memory_id": f"memory_{source_id}",
-            "source_item_id": source_id,
-            "attribution": "content-ops private connector gate",
-            "reuse_boundary": "private_owner_gate_required",
-            "rejected_angles": ["angle_private_connector_source_quote"],
-            "preference_hints": ["do not quote or summarize before owner approval"],
-        }
-        for source_id in private_source_ids
+    return _surface_payload(
+        surface_id=surface_id,
+        generated_at=generated_at if generated_at is not None else now_utc_iso(),
+        source_items=source_items,
+        angle_candidates=angle_candidates,
+        draft_items=draft_items,
+        feedback_signals=feedback_signals,
+        publish_gates=publish_gates,
+        material_memory=material_memory,
+        connector_trials=connector_trials,
     )
-
-    return {
-        "schema_version": CONTENT_OPS_SURFACE_SCHEMA_VERSION,
-        "surface_id": surface_id,
-        "generated_at": generated_at if generated_at is not None else now_utc_iso(),
-        "mode": "compact_state_surface",
-        "source_items": source_items,
-        "angle_candidates": angle_candidates,
-        "draft_items": draft_items,
-        "feedback_signals": feedback_signals,
-        "publish_gates": publish_gates,
-        "material_memory": material_memory,
-        "connector_trials": connector_trials,
-        "operator_states": [
-            "waiting_for_source_review",
-            "ready_to_draft",
-            "waiting_for_feedback",
-            "ready_for_publish_decision",
-            "safe_side_work_available",
-        ],
-        "boundary": {
-            "public_safe": True,
-            "raw_private_material_recorded": False,
-            "raw_platform_data_recorded": False,
-            "credentials_recorded": False,
-            "autopublish_allowed": False,
-            "publish_requires_user_gate": True,
-            "connector_bodies_are_source_of_truth": False,
-        },
-    }
 
 
 def build_content_ops_packet_aggregation_packet(
     *,
-    public_handle_packets: Sequence[Mapping[str, Any]],
-    private_connector_gate_packets: Sequence[Mapping[str, Any]],
+    public_handle_packets: Sequence[Mapping[str, object]],
+    private_connector_gate_packets: Sequence[Mapping[str, object]],
     surface_id: str = "content_ops_connector_packet_aggregation",
     generated_at: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     surface = build_content_ops_surface_from_connector_packets(
         public_handle_packets=public_handle_packets,
         private_connector_gate_packets=private_connector_gate_packets,
@@ -1753,32 +1516,25 @@ def build_content_ops_packet_aggregation_packet(
     )
     validation = validate_content_ops_surface(surface)
     projection = project_content_ops_surface(surface)
-    return {
-        "ok": bool(validation.get("ok")),
-        "schema_version": CONTENT_OPS_PACKET_AGGREGATION_SCHEMA_VERSION,
-        "mode": "content-ops-aggregate-packets",
-        "surface": surface,
-        "projection": projection,
-        "validation": validation,
-        "input_summary": {
+    raw_sources = surface.get("source_items")
+    source_item_count = len(raw_sources) if isinstance(raw_sources, Sequence) else 0
+    return _packet_envelope(
+        ok=bool(validation.get("ok")),
+        schema_version=CONTENT_OPS_PACKET_AGGREGATION_SCHEMA_VERSION,
+        mode="content-ops-aggregate-packets",
+        surface=surface,
+        projection=projection,
+        validation=validation,
+        input_summary={
             "public_handle_packet_count": len(public_handle_packets),
             "private_connector_gate_packet_count": len(private_connector_gate_packets),
-            "source_item_count": len(surface.get("source_items") or []),
-            "owner_gate_required_count": projection.get("connector_trials", {}).get(
+            "source_item_count": source_item_count,
+            "owner_gate_required_count": _as_mapping(projection.get("connector_trials")).get(
                 "owner_gate_required_count"
-            )
-            if isinstance(projection.get("connector_trials"), Mapping)
-            else None,
+            ),
         },
-        "external_reads_performed": False,
-        "external_writes_performed": False,
-        "private_source_bodies_read": False,
-        "private_source_content_read": False,
-        "autopublish_allowed": False,
-        "next_safe_action": projection.get("first_screen", {}).get("next_safe_action")
-        if isinstance(projection.get("first_screen"), Mapping)
-        else None,
-    }
+        next_safe_action=_as_mapping(projection.get("first_screen")).get("next_safe_action"),
+    )
 
 
 def build_content_ops_walkthrough_artifact_packet(
@@ -1792,19 +1548,16 @@ def build_content_ops_walkthrough_artifact_packet(
     recent_record_count: int,
     report_count: int,
     api_request_count: int,
-    api_path_counts: Mapping[str, Any] | None = None,
+    api_path_counts: Mapping[str, object] | None = None,
     private_preview_item_count: int = 0,
     theme_signals: Sequence[str] | None = None,
     generated_at: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build the public-safe operator artifact for the content-ops chain."""
 
     if generated_at is None:
         generated_at = now_utc_iso()
-    preview_count = _non_negative_int(
-        private_preview_item_count,
-        "private_preview_item_count",
-    )
+    preview_count = _non_negative_int(private_preview_item_count, "private_preview_item_count")
     themes = _normalise_theme_signals(theme_signals)
     public_packet = build_content_ops_public_handle_observation_packet(
         url=public_handle_url,
@@ -1831,34 +1584,19 @@ def build_content_ops_walkthrough_artifact_packet(
         generated_at=generated_at,
     )
 
-    surface = aggregate.get("surface") if isinstance(aggregate.get("surface"), Mapping) else {}
-    projection = (
-        aggregate.get("projection")
-        if isinstance(aggregate.get("projection"), Mapping)
-        else {}
-    )
-    first_screen = (
-        projection.get("first_screen")
-        if isinstance(projection.get("first_screen"), Mapping)
-        else {}
-    )
-    source_items = _as_mappings(surface.get("source_items"))  # type: ignore[arg-type]
-    draft_items = _as_mappings(surface.get("draft_items"))  # type: ignore[arg-type]
-    publish_gates = _as_mappings(surface.get("publish_gates"))  # type: ignore[arg-type]
-    chatview_report = (
-        chatview_packet.get("chatview_report")
-        if isinstance(chatview_packet.get("chatview_report"), Mapping)
-        else {}
-    )
-    chatview_observed = (
-        chatview_report.get("observed_shape")
-        if isinstance(chatview_report.get("observed_shape"), Mapping)
-        else {}
-    )
+    surface = _as_mapping(aggregate.get("surface"))
+    projection = _as_mapping(aggregate.get("projection"))
+    first_screen = _as_mapping(projection.get("first_screen"))
+    source_items = _as_mappings(surface.get("source_items"))
+    draft_items = _as_mappings(surface.get("draft_items"))
+    publish_gates = _as_mappings(surface.get("publish_gates"))
+    chatview_report = _as_mapping(chatview_packet.get("chatview_report"))
+    chatview_observed = _as_mapping(chatview_report.get("observed_shape"))
+    input_summary = _as_mapping(aggregate.get("input_summary"))
     gate = publish_gates[0] if publish_gates else {}
     draft = draft_items[0] if draft_items else {}
 
-    operator_artifact = {
+    operator_artifact: dict[str, object] = {
         "headline": (
             "Public and private connector signals can reach a draft plan, but "
             "private source use and publication stay behind explicit gates."
@@ -1895,7 +1633,7 @@ def build_content_ops_walkthrough_artifact_packet(
         ],
     }
 
-    chain_steps = [
+    chain_steps: list[dict[str, object]] = [
         {
             "step": "public_signal_intake",
             "result": "metadata-only public handle packet",
@@ -1922,38 +1660,25 @@ def build_content_ops_walkthrough_artifact_packet(
         },
     ]
 
-    return {
-        "ok": bool(aggregate.get("ok")),
-        "schema_version": CONTENT_OPS_WALKTHROUGH_ARTIFACT_SCHEMA_VERSION,
-        "mode": "content-ops-walkthrough-artifact",
-        "generated_at": generated_at,
-        "operator_artifact": operator_artifact,
-        "chain_steps": chain_steps,
-        "aggregation_projection": projection,
-        "validation": aggregate.get("validation"),
-        "packet_summary": {
+    return _packet_envelope(
+        ok=bool(aggregate.get("ok")),
+        schema_version=CONTENT_OPS_WALKTHROUGH_ARTIFACT_SCHEMA_VERSION,
+        mode="content-ops-walkthrough-artifact",
+        generated_at=generated_at,
+        operator_artifact=operator_artifact,
+        chain_steps=chain_steps,
+        aggregation_projection=projection,
+        validation=aggregate.get("validation"),
+        packet_summary={
             "public_packet_schema_version": public_packet.get("schema_version"),
             "chatview_packet_schema_version": chatview_packet.get("schema_version"),
             "aggregation_schema_version": aggregate.get("schema_version"),
-            "source_item_count": aggregate.get("input_summary", {}).get(
-                "source_item_count"
-            )
-            if isinstance(aggregate.get("input_summary"), Mapping)
-            else None,
-            "owner_gate_required_count": aggregate.get("input_summary", {}).get(
-                "owner_gate_required_count"
-            )
-            if isinstance(aggregate.get("input_summary"), Mapping)
-            else None,
+            "source_item_count": input_summary.get("source_item_count"),
+            "owner_gate_required_count": input_summary.get("owner_gate_required_count"),
         },
-        "external_reads_performed": False,
-        "external_writes_performed": False,
-        "private_source_bodies_read": False,
-        "private_source_content_read": False,
-        "autopublish_allowed": False,
-        "public_repo_safe": True,
-        "next_safe_action": (
+        extra_flags={"public_repo_safe": True},
+        next_safe_action=(
             "show the operator artifact, then collect owner approval before "
             "private source use or publication"
         ),
-    }
+    )

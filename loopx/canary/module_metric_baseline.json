@@ -34,8 +34,9 @@
       "dict_any_count": 0
     },
     "loopx/capabilities/content_ops/surface.py": {
-      "any_count": 40,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1700
     },
     "loopx/capabilities/issue_fix/cli.py": {
       "any_count": 5,
