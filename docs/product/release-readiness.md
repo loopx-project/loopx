@@ -1225,6 +1225,15 @@ not commit display names or an unreviewed generated changelog. Attribution is
 part of the release contract even when the same pull request is linked again
 under a product group.
 
+Match the complete Git range against GitHub's actual merge commit identifiers;
+PR numbers in commit titles are navigation, not a completeness check. Confirm
+that metadata coverage reaches the whole range, resolving unmatched integration
+commits through their associated merged PRs. Check an author's earlier merged
+PR history before calling a contribution first-time. Reconcile both language
+lists and their summary counts against that verified set; a formatting gate
+does not establish source completeness. Refresh this evidence when the final
+release range changes.
+
 Organize the remaining release note into the following stable groups. Omit an
 empty product group instead of inventing filler:
 
