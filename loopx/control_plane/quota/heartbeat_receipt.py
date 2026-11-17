@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ...file_lock import exclusive_cross_runtime_file_lock
@@ -176,73 +176,6 @@ def _effective_heartbeat_receipt(
     if identities:
         return next(iter(identities.values()))
     return events[-1]
-
-
-def first_bound_heartbeat_receipt(
-    events: Sequence[Mapping[str, object]],
-    *,
-    goal_id: str,
-    agent_id: str,
-    turn_instance_id: str,
-) -> tuple[int, Mapping[str, object]] | None:
-    """Return the earliest bound ``quota_should_run`` for one Turn identity.
-
-    A later review-guard upgrade or work requalify appends another receipt for
-    the same binding. ``_effective_heartbeat_receipt`` still returns that later
-    event so review and work content stay current. Historical ACK admission
-    order uses this first event's time and log position instead.
-    """
-
-    turn = str(turn_instance_id or "").strip()
-    if not turn:
-        return None
-    found: tuple[int, Mapping[str, object]] | None = None
-    identity: tuple[SettlementBindingKind, str, str] | None = None
-    for index, event in enumerate(events):
-        if (
-            event.get("event_kind") != "quota_should_run"
-            or event.get("goal_id") != goal_id
-            or event.get("agent_id") != agent_id
-            or event.get("run_id") != turn
-        ):
-            continue
-        bound = _receipt_settlement_identity(event)
-        if bound is None:
-            continue
-        if identity is None:
-            identity = bound
-            found = (index, event)
-            continue
-        if bound != identity:
-            return None
-    return found
-
-
-def heartbeat_admission_recorded_at(
-    runtime_root: Path,
-    *,
-    goal_id: str,
-    agent_id: str | None,
-    turn_instance_id: str | None,
-    fallback: object = None,
-) -> str | None:
-    """Read the admission clock from the first bound receipt, not the upgrade."""
-
-    fallback_text = fallback if isinstance(fallback, str) and fallback.strip() else None
-    if not agent_id or not turn_instance_id:
-        return fallback_text
-    found = first_bound_heartbeat_receipt(
-        load_rollout_events(rollout_event_log_path(runtime_root, goal_id)),
-        goal_id=goal_id,
-        agent_id=agent_id,
-        turn_instance_id=turn_instance_id,
-    )
-    if found is None:
-        return fallback_text
-    recorded = found[1].get("recorded_at")
-    if isinstance(recorded, str) and recorded.strip():
-        return recorded
-    return fallback_text
 
 
 def find_heartbeat_receipt(

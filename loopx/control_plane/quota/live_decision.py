@@ -786,19 +786,10 @@ def build_live_quota_should_run_decision(
     receipt_bound_guard_fields = _receipt_bound_guard_fields(
         settlement_readback, receipt_bound_replan_obligation_id,
     )
-    from .heartbeat_receipt import heartbeat_admission_recorded_at
-
-    receipt_bound_guard_fields["receipt_bound_guard_recorded_at"] = (
-        heartbeat_admission_recorded_at(
-            runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            turn_instance_id=receipt_bound_guard_fields[
-                "receipt_bound_guard_turn_instance_id"
-            ],
-            fallback=receipt_bound_guard_fields["receipt_bound_guard_recorded_at"],
+    if settlement_readback is not None and settlement_readback.admission_recorded_at:
+        receipt_bound_guard_fields["receipt_bound_guard_recorded_at"] = (
+            settlement_readback.admission_recorded_at
         )
-    )
     if (
         receipt_bound_guard_fields["receipt_bound_replan_guard_scoped"]
         and receipt_bound_replay_phase is ReceiptBoundReplayPhase.OPEN
@@ -810,7 +801,10 @@ def build_live_quota_should_run_decision(
             runtime_root, goal_id=goal_id, agent_id=agent_id,
             obligation_id=receipt_bound_replan_obligation_id,
             guard_recorded_at=receipt_bound_guard_fields["receipt_bound_guard_recorded_at"],
-            guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"])
+            guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"],
+            admission_event_id=(
+                settlement_readback.admission_event_id if settlement_readback is not None else None
+            ))
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )
