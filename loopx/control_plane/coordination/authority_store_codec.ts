@@ -42,6 +42,63 @@ export function requireAuthorityStoreId(value: unknown, name: string): string {
   return value;
 }
 
+export function optionalAuthorityString(value: unknown, label: string): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") {
+    throw new AuthorityStoreProtocolError(`${label} must be a string or null`);
+  }
+  return value;
+}
+
+export function optionalAuthoritySafeInteger(value: unknown, label: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new AuthorityStoreProtocolError(`${label} must be a non-negative safe integer or null`);
+  }
+  return Number(value);
+}
+
+export function requireAuthorityBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new AuthorityStoreProtocolError(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+export function optionalAuthorityBoolean(value: unknown, label: string): boolean | null {
+  if (value === null || value === undefined) return null;
+  return requireAuthorityBoolean(value, label);
+}
+
+export function requireAuthorityDate(value: unknown, label: string): Date {
+  if (!(value instanceof Date) || Number.isNaN(value.valueOf())) {
+    throw new AuthorityStoreProtocolError(`${label} must be a valid Date`);
+  }
+  return value;
+}
+
+export function requireAuthorityLiteral<T extends string>(
+  value: unknown,
+  values: readonly T[],
+  label: string,
+): T {
+  if (typeof value !== "string" || !values.includes(value as T)) {
+    throw new AuthorityStoreProtocolError(`${label} must be one of: ${values.join(", ")}`);
+  }
+  return value as T;
+}
+
+export function uniqueAuthorityStoreIds(value: readonly string[], label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new AuthorityStoreProtocolError(`${label} must be an array`);
+  }
+  const values = value.map((item, index) => requireAuthorityStoreId(item, `${label}[${index}]`));
+  if (new Set(values).size !== values.length) {
+    throw new AuthorityStoreProtocolError(`${label} must contain unique ids`);
+  }
+  return values;
+}
+
 export function canonicalAuthorityJson(
   value: unknown,
   stack = new Set<object>(),
