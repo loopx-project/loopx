@@ -558,6 +558,7 @@ def authority_upgrade_roots(registry_path: Path, runtime_root_arg: str | None,
     selected = resolve_runtime_root(registry, override, registry_path=registry_path).resolve()
     roots = {selected}
     if all_known:
+        roots.add(resolve_runtime_root(registry, registry_path=registry_path).resolve())
         common = Path(override).expanduser().resolve() if override else select_default_runtime_root().resolve()
         roots.add(common)
         global_path = global_registry_path(common)

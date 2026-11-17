@@ -1059,7 +1059,10 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
 @pytest.mark.parametrize(
     "target_read", ["compatible", "rejected", "other_revision", "legacy_fallback", "launcher_changed"],
 )
-def test_rollback_checks_registered_todo_read_before_switching(tmp_path, monkeypatch, capsys, target_read):
+@pytest.mark.parametrize("select_source_registry", [False, True])
+def test_rollback_checks_registered_todo_read_before_switching(
+    tmp_path, monkeypatch, capsys, target_read, select_source_registry,
+):
     from loopx.cli import main
 
     common_runtime = tmp_path / "common"
@@ -1101,7 +1104,7 @@ def test_rollback_checks_registered_todo_read_before_switching(tmp_path, monkeyp
 
     def is_promoted(*, runtime_root, goal_id):
         promoted.append((runtime_root, goal_id))
-        return goal_id != "legacy-only"
+        return runtime_root == source_runtime and goal_id != "legacy-only"
 
     def read_current(*, runtime_root, goal_id):
         current_reads.append((runtime_root, goal_id))
@@ -1139,7 +1142,8 @@ def test_rollback_checks_registered_todo_read_before_switching(tmp_path, monkeyp
     monkeypatch.setattr(f"{authority}.read_canonical_todos_if_promoted", read_current)
     monkeypatch.setattr("loopx.self_update.subprocess.run", run)
     exit_code = main([
-        "--registry", str(global_registry), "--runtime-root", str(common_runtime),
+        "--registry", str(source_registry if select_source_registry else global_registry),
+        "--runtime-root", str(common_runtime),
         "--format", "json", "update", "--rollback", "target",
     ])
     result = json.loads(capsys.readouterr().out)
@@ -1160,6 +1164,65 @@ def test_rollback_checks_registered_todo_read_before_switching(tmp_path, monkeyp
         assert "could not verify current Todo state" in result["execution"]["error"]
         assert goal_id in result["execution"]["error"]
         assert launcher.resolve() == current and launcher.lstat().st_ino == original_inode
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX archive rollback")
+@pytest.mark.parametrize("legacy_writer", [False, True])
+def test_rollback_serializes_launcher_recovery_with_other_promotions(tmp_path, monkeypatch, legacy_writer):
+    from loopx.self_update import execute_rollback_plan
+
+    releases = tmp_path / ".local/share/loopx/releases"
+    current, target, concurrent = (
+        releases / label / "scripts/loopx" for label in ("current", "target", "concurrent")
+    )
+    for command in (current, target, concurrent):
+        command.parent.mkdir(parents=True)
+        command.touch()
+    launcher = tmp_path / ".local/bin/loopx"
+    launcher.parent.mkdir(parents=True)
+    launcher.symlink_to(current)
+    entered_doctor = threading.Event()
+    release_doctor = threading.Event()
+    results = {}
+
+    def run(argv, **kwargs):
+        if "doctor" in argv and "extension" not in argv and launcher.resolve() == target:
+            entered_doctor.set()
+            assert release_doctor.wait(timeout=5)
+            if legacy_writer:
+                replacement = launcher.with_name("legacy-launcher")
+                replacement.symlink_to(concurrent)
+                os.replace(replacement, launcher)
+            return subprocess.CompletedProcess(argv, 1, '{"ok":false}', "")
+        return subprocess.CompletedProcess(argv, 0, '{"ok":true}', "")
+
+    monkeypatch.setattr("loopx.self_update.subprocess.run", run)
+    def payload(command):
+        return {"ok": True, "plan": {"selected_release_root": str(command.parent.parent)}}
+
+    def first_rollback():
+        results["first"] = execute_rollback_plan(payload(target), home=tmp_path, timeout_seconds=2)
+
+    first = threading.Thread(target=first_rollback)
+    first.start()
+    try:
+        assert entered_doctor.wait(timeout=5)
+        assert launcher.resolve() == target
+        blocked = execute_rollback_plan(payload(concurrent), home=tmp_path, timeout_seconds=0.05)
+        assert not blocked["ok"]
+        assert "waiting for another local install" in blocked["execution"]["error"]
+        assert not blocked["execution"]["restored_previous_on_failure"]
+        assert launcher.resolve() == target
+    finally:
+        release_doctor.set()
+        first.join(timeout=5)
+    assert not first.is_alive()
+    assert not results["first"]["ok"]
+    assert results["first"]["execution"]["restored_previous_on_failure"] is (not legacy_writer)
+    assert launcher.resolve() == (concurrent if legacy_writer else current)
+    resumed = execute_rollback_plan(payload(concurrent), home=tmp_path, timeout_seconds=2)
+    assert resumed["ok"]
+    assert launcher.resolve() == concurrent
 
 
 

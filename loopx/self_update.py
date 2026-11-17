@@ -1397,25 +1397,20 @@ def _verify_rollback_todos(
 
     selected = registry_path.expanduser().resolve()
     registries = authority_upgrade_registries(selected, runtime_root, all_known=True)
-    registry_set = set(registries)
+    routes: list[tuple[Path, str | None]] = [(registry, None) for registry in registries]
+    if runtime_root:
+        routes.append((selected, runtime_root))
     checked: set[tuple[Path, str]] = set()
     deadline = time.monotonic() + timeout_seconds
-    for registry in registries:
+    for registry, override in routes:
         document = read_activation_upgrade_registry(registry)
-        if registry == selected:
-            root = resolve_runtime_root(document, runtime_root, registry_path=registry)
-        elif registry.name == GLOBAL_REGISTRY_FILENAME:
+        if registry.name == GLOBAL_REGISTRY_FILENAME and override is None:
             root = registry.parent
         else:
-            root = resolve_runtime_root(document, registry_path=registry)
+            root = resolve_runtime_root(document, override, registry_path=registry)
         root = root.resolve()
         for goal in registry_goals(document):
             goal_id = str(goal["id"])
-            source = goal.get("source_registry")
-            owner = Path(str(source)).expanduser().resolve() if source else None
-            # Check a global mirror through the source that owns its runtime.
-            if owner != registry and owner in registry_set:
-                continue
             key = (root, goal_id)
             if key in checked or not local_authority_is_promoted(runtime_root=root, goal_id=goal_id):
                 continue
@@ -1492,6 +1487,7 @@ def execute_rollback_plan(
     }
     updated = dict(payload)
     switched = False
+    promotion_guard = None
     try:
         compatible = subprocess.run(
             [str(target_script), *route_arguments, "--format", "json", "authority-archive", "upgrade",
@@ -1507,6 +1503,18 @@ def execute_rollback_plan(
         if compatible.returncode != 0:
             raise RuntimeError("Rollback target authority check failed. Keep the current runtime "
                                "and inspect the compatibility readback before retrying.")
+        from .file_lock import _open_lock_descriptor, _try_acquire_kernel_lock
+
+        # Share the archive installer's exact guard through checks and recovery.
+        guard_path = release_root.parent / ".install-guard"
+        guard_path.parent.mkdir(parents=True, exist_ok=True)
+        promotion_guard = os.fdopen(_open_lock_descriptor(guard_path, flags=os.O_CREAT | os.O_RDWR), "r+")
+        deadline = time.monotonic() + timeout_seconds
+        while not _try_acquire_kernel_lock(promotion_guard):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("Timed out waiting for another local install to finish before rollback.")
+            time.sleep(min(0.1, remaining))
         if registry_path is not None:
             _verify_rollback_todos(target_script, registry_path, runtime_root, timeout_seconds=timeout_seconds)
         observed_link = os.readlink(loopx_bin) if loopx_bin.is_symlink() else None
@@ -1517,6 +1525,7 @@ def execute_rollback_plan(
         if temp_link.exists() or temp_link.is_symlink():
             temp_link.unlink()
         temp_link.symlink_to(target_script)
+        promoted_link_stat = temp_link.lstat()
         os.replace(temp_link, loopx_bin)
         switched = True
         doctor_result = subprocess.run(
@@ -1563,15 +1572,8 @@ def execute_rollback_plan(
         else:
             execution["extension_doctor_status"] = "skipped_core_doctor_failed"
             updated["ok"] = False
-        if doctor_result.returncode != 0 and previous_link_target:
-            restore_link = loopx_bin.with_name(
-                f".{loopx_bin.name}.rollback.restore.{os.getpid()}"
-            )
-            if restore_link.exists() or restore_link.is_symlink():
-                restore_link.unlink()
-            restore_link.symlink_to(previous_link_target)
-            os.replace(restore_link, loopx_bin)
-            execution["restored_previous_on_failure"] = True
+        if doctor_result.returncode != 0:
+            raise RuntimeError("Rollback target failed runtime checks; inspect the Doctor output.")
     except Exception as exc:
         execution["error"] = str(exc)
         updated["ok"] = False
@@ -1580,11 +1582,12 @@ def execute_rollback_plan(
                 f".{loopx_bin.name}.rollback.restore.{os.getpid()}"
             )
             try:
-                if restore_link.exists() or restore_link.is_symlink():
-                    restore_link.unlink()
-                restore_link.symlink_to(previous_link_target)
-                os.replace(restore_link, loopx_bin)
-                execution["restored_previous_on_failure"] = True
+                if os.path.samestat(promoted_link_stat, loopx_bin.lstat()):
+                    if restore_link.exists() or restore_link.is_symlink():
+                        restore_link.unlink()
+                    restore_link.symlink_to(previous_link_target)
+                    os.replace(restore_link, loopx_bin)
+                    execution["restored_previous_on_failure"] = True
             except Exception as restore_exc:
                 execution["restore_error"] = str(restore_exc)
     finally:
@@ -1594,6 +1597,8 @@ def execute_rollback_plan(
             restore_link.exists() or restore_link.is_symlink()
         ):
             restore_link.unlink()
+        if promotion_guard is not None:
+            promotion_guard.close()
     updated["execution"] = execution
     if updated["ok"]:
         updated["recommended_action"] = "rollback complete; review doctor output"
