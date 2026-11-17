@@ -5057,13 +5057,19 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     )
 
 
-@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
-def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, profile: str) -> None:
+@pytest.mark.parametrize(
+    "profile",
+    [None, "generic_cli", "codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"],
+)
+def test_unbound_visible_goal_selection_binds_the_chosen_todo(
+    tmp_path: Path, profile: str | None,
+) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _initialize_fixture_authority(project, runtime)
+    profile_args = ("--runtime-profile", profile) if profile else ()
     rc, preview = _run_cli(
-        registry_path, runtime, "quota", "should-run", "--runtime-profile", profile,
+        registry_path, runtime, "quota", "should-run", *profile_args,
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
     )
     assert rc == 0, preview
@@ -5083,7 +5089,10 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, pr
     assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == ALTERNATIVE_TODO_ID
-    assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+    if profile is None:
+        assert "settlement_plan" not in bound["interaction_contract"]["cli_channel"]
+    else:
+        assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
     assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
     assert _spend_run_count(runtime) == 0
 
