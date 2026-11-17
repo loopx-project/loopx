@@ -117,9 +117,6 @@
   --viewer-rim: rgba(255, 255, 255, 0.12);
   --viewer-glass: rgba(12, 12, 12, 0.65);
   --viewer-glass-rim: rgba(255, 255, 255, 0.18);
-  /* Below the app on a phone: the browser's own bottom-bar area. A clear step deeper than the
-     page so the strip reads as the screen's edge, not empty space under the composer. */
-  --below: #e9e6dd;
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', 'Noto Sans CJK SC',
     'Microsoft YaHei', sans-serif;
   --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
@@ -219,7 +216,6 @@
   --voice-fg: color-mix(in srgb, #9fbfff 72%, var(--text));
   --bg: #1b1a18;
   --sidebar: #161514;
-  --below: #151413;
   --surface: #252422;
   --surface-2: #201f1d;
   --text: #ecebe7;
@@ -803,22 +799,8 @@ button:disabled {
     background: var(--sidebar);
   }
 
-  /* The app is only as tall as the visual viewport; below it the browser holds its bottom bar.
-     That strip is the page's own background, and in the page colour it reads as empty app space
-     under the composer. --below is a clear step deeper: the strip becomes the browser's edge,
-     the way Codex's floating composer sits above the screen's own area. */
-  body {
-    background: var(--below);
-  }
-
-  /* Opened from the home screen there is no browser bar below the app, and iOS paints the body's
-     colour behind the status bar instead: --below there is a grey band above every page but the
-     list. The page colour, so the top of the screen is one colour up to the edge. */
-  @media (display-mode: standalone) {
-    body {
-      background: var(--bg);
-    }
-  }
+  /* iOS Safari paints the body's colour behind both its status bar and its bottom bar, so the
+     body keeps the page colour: a deeper shade there reads as a grey band above the page. */
 
   .sidebar {
     position: absolute;
