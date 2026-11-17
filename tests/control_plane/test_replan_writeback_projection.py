@@ -155,7 +155,7 @@ def test_declared_outcomes_not_trigger_name_determine_writeback_input() -> None:
 def test_guarded_successor_guidance_closes_original_turn_before_stopping(profile: str) -> None:
     payload = {"replan_action_packet": {"writeback_contract": {"successor_command": "loopx todo add"}}}
     binding = "--replan-obligation-id replan-1111111111111111 --turn-instance-id turn-original"
-    guard = f"loopx --format json quota should-run {profile} --goal-id example --agent-id agent-example {binding}"
+    guard = f"loopx --format json quota should-run {profile} --goal-id example --agent-id agent-example --turn-instance-id turn-original"
     actions = build_autonomous_replan_cli_actions(
         payload, goal_id="example", settlement_args=f" {binding}",
         scoped_cli_args=" --agent-id agent-example", quota_spend_action="spend-bound-turn",
@@ -243,10 +243,11 @@ def test_successor_guard_entrypoint_retains_host_and_only_pure_replan_binding(
     tokens = shlex.split(actions[1])
     assert tokens[tokens.index("--runtime-root") + 1] == "/tmp/public-safe-replan-runtime"
     assert tokens[tokens.index("--turn-instance-id") + 1] == "turn-original"
-    assert tokens[tokens.index("--replan-obligation-id") + 1] == identity["replan_obligation_id"]
+    assert "--replan-obligation-id" not in tokens
     assert tokens[tokens.index("--agent-id") + 1] == "agent-example"
     assert "--todo-id" not in tokens
-    assert render_scheduler_execution_args(scheduler_execution_context=context).strip() in actions[1]
+    for arg in shlex.split(render_scheduler_execution_args(scheduler_execution_context=context)):
+        assert arg in tokens
     assert "do not execute or select its successor" in actions[2]
 
 

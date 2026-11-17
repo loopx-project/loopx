@@ -67,6 +67,17 @@ print('{{"type":',end='',flush=True)
 if {output!r} == 'truncated_failure': sys.exit(1)
 time.sleep(60)
 """)
+    original = worker.child_process
+
+    @contextmanager
+    def tracked(*args, **kwargs):
+        with original(*args, **kwargs) as process:
+            # Observe the actual owned child even when a deadline prevents the
+            # synthetic interpreter from writing its first fixture marker.
+            (project / "owned-pid").write_text(str(process.pid))
+            yield process
+
+    monkeypatch.setattr(worker, "child_process", tracked)
     return env, project, runtime, source, state, clock
 
 
@@ -77,8 +88,13 @@ def _receipt(env):
 
 
 def _assert_reaped(project):
+    # In-process fixtures observe the parent's child handle; subprocess CLI
+    # fixtures report their own PID before executing any synthetic work.
+    path = project / "owned-pid"
+    if not path.exists():
+        path = project / "pid"
     with pytest.raises(ProcessLookupError):
-        os.kill(int((project / "pid").read_text()), 0)
+        os.kill(int(path.read_text()), 0)
 
 
 def _listen_without_capture(monkeypatch):
@@ -164,6 +180,21 @@ def test_preparation_and_admission_consume_original_phase_budget(tmp_path, monke
 
 def test_independent_earlier_timeout_stays_unknown(tmp_path, monkeypatch):
     env, project, *_ = _phase_worker(tmp_path, monkeypatch, work_seconds=300, independent=.4)
+    original = worker.child_process
+
+    @contextmanager
+    def started(*args, **kwargs):
+        with original(*args, **kwargs) as process:
+            # Qualify the independent communication timeout, as the adjacent
+            # phase-budget test does, without timing cold interpreter startup.
+            ready_deadline = time.monotonic() + 5
+            while not (project / "native-ready").exists():
+                assert process.poll() is None
+                assert time.monotonic() < ready_deadline, "native fixture did not start"
+                time.sleep(.01)
+            yield process
+
+    monkeypatch.setattr(worker, "child_process", started)
     receipt = worker.run_once(env)
     assert receipt["timed_out"] and not receipt["ok"]
     assert not receipt.get("budget_exhausted")

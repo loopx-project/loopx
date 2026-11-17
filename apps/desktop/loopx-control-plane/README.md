@@ -449,6 +449,13 @@ directly in Research after a normal quit and a loopback-port change. Window
 close/reopen, an explicit return to Manager and a corrupt preference were also
 checked. It does not demonstrate model execution or an official App upgrade.
 
+Within a local Goal's Research view, the preference also retains an explicit
+case/history choice, selected registered analysis pack and chapter or citation
+bookmark. The dashboard rechecks the pack and source when reopening. A missing
+or inaccessible pack keeps its existing reader recovery path. The bookmark
+must match the selected pack and the dashboard's chapter grammar. Existing
+version-1 preferences without research selections continue to open as before.
+
 ![Packaged QA reopening the same synthetic Goal in Research](docs/assets/research-reopen-qa.jpg)
 
 For native qualification, use a separately identified packaged App with the

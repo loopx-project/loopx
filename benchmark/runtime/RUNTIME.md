@@ -176,6 +176,17 @@ a complete-mode binding cannot verify a pending command that uses
 `--complete-turn`. Historical ordinary and envelope guards remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
 
+Restoring a pending replan for a fresh native conversation and checking whether
+a restored session may capture again use the same checkpoint artifact reader.
+It verifies the sealed decision member and original replan binding. Present
+complete-source versions are verified; an unversioned decision is readable
+only as historical evidence in this sealed path. A refusal holds that recovery
+before a session reset or a new capture. A successful read does not replace
+current native admission, current semantic settlement, or full archive checking.
+Empty historical replan annotations keep the ordinary restore path. A declared
+held-decision member still requires its original intent and sealed bytes, even
+when an annotation is empty.
+
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`
 with that original path and hash. The shared presentation owner prepares the

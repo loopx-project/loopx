@@ -822,6 +822,11 @@ def handle_refresh_state_command(
                 replan_obligation_id=getattr(
                     args, "replan_obligation_id", None
                 ),
+                # The write may be addressed through the retained Todo while
+                # quota should-run bound this Turn to its semantic replan.
+                # Read back the immutable guard identity instead of treating
+                # that supported command shape as a second binding.
+                resolve_original_binding=True,
                 registry_path=registry_path,
                 goal_ref=goal_ref,
             )

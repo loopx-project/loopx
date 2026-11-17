@@ -13,6 +13,8 @@ import shlex
 import typing
 from collections.abc import Collection, Mapping
 
+from ...install_contract import render_host_cli_command
+
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction, agent_scope_frontier_action as _agent_scope_frontier_action
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..agents.workspace_guard import delivery_workspace_refresh_hint
@@ -47,7 +49,7 @@ from ..todos.contract import (
     normalize_todo_replan_obligation_id,
 )
 from ..todos.todo_semantics import todo_item_task_class
-from ..todos.user_gate import has_only_open_user_actions, open_todo_count
+from ..todos.user_gate import has_only_open_user_actions, open_todo_count, open_user_gate_todo_items
 from ..todos.write_hint import build_capability_resolution_writeback_actions
 from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
@@ -463,6 +465,17 @@ def _due_monitor_cli_actions(
     ]
 
 
+# Observation is evidence, never an owner decision: no completion command is projected.
+# Keep the text free of quote characters; consumers shlex-split every action.
+MONITOR_USER_GATE_NOTICE = (
+    "A Monitor observation never completes or approves a User gate. Do not pass the id or claim proof "
+    "of this Turn to a gate completion, and do not attach evidence to a gate through todo update. "
+    "Record the observation with the poll below and yield. Work that may continue on an observed change "
+    "without an owner decision belongs in the successor of that poll (--material-change with "
+    "--next-agent-todo), not behind a User gate."
+)
+
+
 def _turn_scoped_cli_settlement_context(
     payload: dict[str, Any],
     *,
@@ -633,7 +646,7 @@ def _selection_recovery_command(
 
 def _render_replan_successor_closeout_guard(
     *, settlement_plan: Mapping[str, Any] | None,
-    scheduler_args: str, typed_quota_guard: str, settlement_args: str,
+    scheduler_args: str, typed_quota_guard: str,
 ) -> str | None:
     """Render this host's guard for an existing TS-owned pure replan identity."""
     if not scheduler_args or not settlement_plan:
@@ -642,7 +655,11 @@ def _render_replan_successor_closeout_guard(
     if not isinstance(identity, Mapping) or identity.get("binding_kind") != "autonomous_replan":
         # Todo-bound replans retain their distinct closeout path.
         return None
-    return typed_quota_guard + settlement_args
+    # The receipt recovers the obligation; should-run accepts only its Turn.
+    return render_host_cli_command([
+        *shlex.split(typed_quota_guard),
+        "--turn-instance-id", str(identity["turn_instance_id"]),
+    ])
 
 
 def _deferred_resume_continuation(
@@ -1019,7 +1036,7 @@ def _admitted_interaction_next_cli_actions(
             ),
             successor_closeout_guard=_render_replan_successor_closeout_guard(
                 settlement_plan=settlement_plan, scheduler_args=scheduler_args,
-                typed_quota_guard=typed_quota_guard, settlement_args=settlement_args,
+                typed_quota_guard=typed_quota_guard,
             ),
         )
     return _terminal_cli_actions(
@@ -1396,7 +1413,7 @@ def _build_interaction_cli_channel(
             registry_path=registry_path,
         )
     )
-    channel = {
+    channel: dict[str, Any] = {
         "next_cli_actions": _admitted_interaction_next_cli_actions(
             payload,
             mode=mode,
@@ -1436,6 +1453,10 @@ def _build_interaction_cli_channel(
     work_lane = payload.get("work_lane_contract")
     if not isinstance(work_lane, Mapping):
         work_lane = {}
+    if primary_monitor is not None and turn_instance_id and open_user_gate_todo_items(payload.get("user_todo_summary")):
+        # Keep the Monitor instruction first; the notice precedes the poll it qualifies.
+        actions = channel["next_cli_actions"]
+        channel["next_cli_actions"] = [*actions[:1], MONITOR_USER_GATE_NOTICE, *actions[1:]]
     auxiliary_monitor = work_lane.get("auxiliary_monitor_poll")
     if not isinstance(auxiliary_monitor, Mapping):
         auxiliary_monitor = None

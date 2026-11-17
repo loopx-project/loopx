@@ -141,15 +141,28 @@ class SyntheticPrivateSource:
                              "position": 1, "content": body}]}}
                 frozen = conversation_reply_context(raw)["context_text"] + "\n\nCurrent user message:\n" + body
                 record.update(reply_context_message=frozen, reply_context_source_text=body)
-            turn, _ = server.chat_store.create_turn(sid, client_turn_id=f"external-{request}", message=frozen, origin="lark")
+            queued_reply = "--queued-reply" in sys.argv
+            if queued_reply:
+                server.chat_store.create_turn(sid, client_turn_id="synthetic-held-turn", message="An active synthetic task.", origin="web")
+            create = server.chat_store.create_queued_turn if queued_reply else server.chat_store.create_turn
+            attachments = []
+            if queued_reply:
+                image = "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4v0gdghjgLABwBAqxX1jWkgAAAABJRU5ErkJggg=="
+                attachments = [{"id": "queued-image", "name": "queued-image.png", "mime_type": "image/png",
+                    "size": len(base64.b64decode(image)), "data_url": "data:image/png;base64," + image}]
+            turn, _ = create(sid, client_turn_id=f"external-{request}", message=frozen, origin="lark", attachments=attachments)
             correlation = {"request_ref": request, "binding_id": binding["binding_id"], "source": source,
                            "session_id": sid, "turn_id": turn["turn_id"]}
             for directory, value in (("external-requests", {**correlation, "status": "accepted", "command": None, "message": frozen}),
                     ("lark-private-deliveries", {**record, **correlation, "status": "delivered"})):
                 _atomic_write_json(server.chat_store.root / directory / f"{request}.json", value)
-            server.chat_store.update_turn(sid, turn["turn_id"], status="completed")
-            server.chat_store.release_active_turn(sid, turn["turn_id"])
-            server.chat_store.append_message(sid, role="agent", text="已保留原要求，当前核验结果待进一步确认。", turn_id=turn["turn_id"])
+            if queued_reply:
+                # Identical prose without admission journals must stay literal.
+                server.chat_store.create_queued_turn(sid, client_turn_id="synthetic-literal-context", message=frozen, origin="web")
+            else:
+                server.chat_store.update_turn(sid, turn["turn_id"], status="completed")
+                server.chat_store.release_active_turn(sid, turn["turn_id"])
+                server.chat_store.append_message(sid, role="agent", text="已保留原要求，当前核验结果待进一步确认。", turn_id=turn["turn_id"])
             paths = [server.chat_store.root / directory / f"{request}.json"
                      for directory in ("external-requests", "lark-private-deliveries")]
             paths.extend([server.chat_store.sessions_root / sid / "messages.jsonl",

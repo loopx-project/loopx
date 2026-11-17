@@ -1078,6 +1078,7 @@ def build_quota_should_run(
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_replan_execution_pending: bool = False,
     receipt_bound_successor_replan: bool = False,
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
@@ -1087,6 +1088,7 @@ def build_quota_should_run(
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
+    app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -1122,6 +1124,7 @@ def build_quota_should_run(
         receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+        receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
         receipt_bound_successor_replan=receipt_bound_successor_replan,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
@@ -1132,6 +1135,7 @@ def build_quota_should_run(
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
         replan_explore_reader=read_explore_context,
+        app_scheduler_state_observer=app_scheduler_state_observer,
     )
 
 
@@ -1833,12 +1837,15 @@ def spend_quota_slot(
                 ),
             }
         if settlement_readback.spend_run_present:
+            # The precheck verified these terms against the retained debit.
+            # Carry them to the existing receipt writer without charging again.
             return {
                 "ok": True,
                 "mode": "spend-slot",
                 "dry_run": not execute,
                 "appended": False,
                 "receipt_repair_required": bool(execute),
+                **spend_request,
                 "goal_id": safe_goal_id,
                 "agent_id": identity.agent_id,
                 "todo_id": identity.todo_id,

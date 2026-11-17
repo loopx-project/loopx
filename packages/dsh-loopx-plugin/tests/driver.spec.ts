@@ -365,7 +365,7 @@ function runnerFixture(options: {
     runner: async (_file, args) => {
       calls.push([...args])
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       }
       if (args.includes('resolve-agent-thread')) {
         const threadIdIndex = args.indexOf('--thread-id')
@@ -2338,6 +2338,49 @@ describe('GoalBar exact-Session Driver bridge', () => {
     })
     expect(host.nextTurn).toHaveLength(0)
     await driver.dispose()
+  })
+
+  it.each([
+    { plan: 'queue', shouldRun: true, interruption: 'Pause' },
+    { plan: 'wait', shouldRun: false, interruption: 'Pause' },
+    { plan: 'queue', shouldRun: true, interruption: 'maintenance cancellation' },
+    { plan: 'wait', shouldRun: false, interruption: 'maintenance cancellation' },
+  ])('discards a $plan plan returned after $interruption', async ({ shouldRun, interruption }) => {
+    const fixture = runnerFixture({ shouldRun, waitMinutes: 5 })
+    const clock = schedulerClock()
+    const host = fakeAgent()
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      retryDelaysMs: [0, 0],
+      clock,
+    })
+    const capture = { agent: host.agent, session: host.agent.session }
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementationOnce(async task => {
+      const maintenance = new AbortController()
+      const plan = await task(maintenance.signal)
+      if (interruption === 'Pause') {
+        await expect(driver.cancelQueued(capture)).resolves.toEqual({ kind: 'applied' })
+      } else {
+        maintenance.abort()
+      }
+      return plan
+    })
+    try {
+      driver.observeAgent(host.agent)
+      host.appendEvent(userSkillInvocationEvent())
+      const interrupted = await driver.evaluateActivatedSession(capture)
+      expect(host.nextTurn).toHaveLength(0)
+      expect(clock.timers).toHaveLength(0)
+      expect(interrupted).toEqual({ kind: 'unavailable', reason: 'evaluation_unavailable' })
+
+      await expect(driver.evaluateActivatedSession(capture)).resolves.toEqual({ kind: 'applied' })
+      expect(fixture.quotaCalls).toHaveLength(2)
+      expect(host.nextTurn).toHaveLength(shouldRun ? 1 : 0)
+      expect(clock.timers).toHaveLength(shouldRun ? 0 : 1)
+    } finally {
+      await driver.dispose()
+    }
   })
 
   it('Pause removes only the captured Session scheduled continuation', async () => {

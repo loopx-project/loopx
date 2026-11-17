@@ -35,6 +35,11 @@ import {
   preflightPriorHostTurnCloseout,
 } from "../../loopx/control_plane/quota/unsettled_host_turn_recovery.ts";
 import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
+import {
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+} from "../../loopx/control_plane/work_items/replan_semantics.ts";
 
 const goalId = "settlement-goal";
 const agentId = "codex-settlement";
@@ -94,9 +99,36 @@ test("recorded review source retains its stop clause under the exact selected gu
     semantic_replan_review_stop_condition: "Stop at owner-only decisions."};
   assert.deepEqual(projectSemanticReplanGuard(details).selected_review_source, {
     kind: details.semantic_replan_review_kind, stop_condition: details.semantic_replan_review_stop_condition});
+  const digest = createHash("sha256").update(details.semantic_replan_review_stop_condition, "utf8").digest("hex");
+  assert.deepEqual(projectSemanticReplanGuard({semantic_replan_obligation_id: details.semantic_replan_obligation_id,
+    semantic_replan_review_kind: details.semantic_replan_review_kind,
+    semantic_replan_review_stop_condition_sha256: digest}).selected_review_source, {
+    kind: details.semantic_replan_review_kind, stop_condition_sha256: digest});
+  assert.deepEqual(projectSemanticReplanGuard({...details,
+    semantic_replan_review_stop_condition_sha256: digest}).selected_review_source, {
+    kind: details.semantic_replan_review_kind,
+    stop_condition: details.semantic_replan_review_stop_condition,
+    stop_condition_sha256: digest});
+  const defaultDigest = createHash("sha256").update(
+    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, "utf8").digest("hex");
+  assert.deepEqual(projectSemanticReplanGuard({
+    semantic_replan_obligation_id: details.semantic_replan_obligation_id,
+    semantic_replan_review_kind: "periodic_review_due",
+    semantic_replan_review_stop_condition: AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+    semantic_replan_review_stop_condition_sha256: defaultDigest,
+    semantic_replan_review_stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  }).selected_review_source, {
+    kind: "periodic_review_due",
+    stop_condition: AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+    stop_condition_sha256: defaultDigest,
+    stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  });
   for (const patch of [{semantic_replan_obligation_id: ""},
     {semantic_replan_obligation_id: undefined}, {semantic_replan_review_kind: undefined},
     {semantic_replan_review_stop_condition: undefined}, {semantic_replan_review_stop_condition: "s".repeat(241)},
+    {semantic_replan_review_stop_condition_sha256: "bad"},
+    {semantic_replan_review_stop_condition_sha256: "0".repeat(64)},
+    {semantic_replan_review_stop_contract_id: AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID},
     {semantic_replan_capability_id: "explore"}]) {
     assert.throws(() => projectSemanticReplanGuard({...details, ...patch}));
   }
@@ -1967,6 +1999,44 @@ test("rejects a guard bound to another Todo", async () => {
   );
 });
 
+test("a retained Todo selects its original replan guard without rebinding it", async () => {
+  const obligation = "replan-0000000000000001";
+  const bound = settlementIdentity({
+    goal_id: goalId,
+    agent_id: agentId,
+    todo_id: null,
+    replan_obligation_id: obligation,
+    turn_instance_id: turnId,
+  });
+  const runtimeRoot = await fixture();
+  try {
+    const log = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
+    const events = (await readFile(log, "utf8")).trim().split("\n")
+      .map(line => JSON.parse(line));
+    Object.assign(events[0].details, {
+      todo_id: "",
+      replan_obligation_id: obligation,
+      settlement_effect_id: bound.effect_id,
+      pending_action_selection_todo_id: todoId,
+      semantic_replan_obligation_id: obligation,
+    });
+    await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+
+    const result = await readQuotaSettlement(request(runtimeRoot, {
+      resolve_original_binding: true,
+    }));
+    assert.deepEqual((result.identity as any).result.value, settlementIdentityPayload(bound));
+
+    const mismatch = await readQuotaSettlement(request(runtimeRoot, {
+      todo_id: "todo_other",
+      resolve_original_binding: true,
+    }));
+    assert.equal((mismatch.identity as any).result.failure.kind, "identity_mismatch");
+  } finally {
+    await rm(runtimeRoot, {recursive: true, force: true});
+  }
+});
+
 test("rejects dual Todo and replan bindings before reading settlement facts", async () => {
   const runtimeRoot = await fixture({
     writeback: true,
@@ -2217,6 +2287,53 @@ test("effective cadence scopes settlement and ACKs to its admitted Goal instance
       /must be supplied together/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent cadence does not interpret another agent's malformed semantic receipt", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const root = await fixture({writeback: true, spend: true, completion: true});
+  const peer = "codex-peer";
+  const peerTurn = "peer-turn";
+  const peerIdentity = settlementIdentity({goal_id: goalId, agent_id: peer,
+    todo_id: todoId, turn_instance_id: peerTurn});
+  const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+  const row = (agent: string, turn: string) => ({agent_id: agent, public_agent_id: agent,
+    monitor_agent_id: agent, turn_id: turn, classification: "state_refreshed",
+    generated_at: "2026-01-01T00:00:00Z", observed_at: 1,
+    accepted_ack: false, progress: null, monitor: {}});
+  const cadence = {schema_version: "replan_history_request_v0", operation: "periodic",
+    agent_id: agentId, monitor_agent_id: agentId, neutral_classifications: [],
+    stall_threshold: 2, periodic_threshold: 1, monitor_threshold: 6,
+    streak_threshold: 5, monitor_schema: "dead_monitor_repeat_v0",
+    todos: {monitors: [], advancements: [], resume: null},
+    settlement_source: {runtime_root: root, goal_id: goalId},
+    runs: [row(peer, peerTurn), row(agentId, turnId)]};
+  try {
+    const baseline = await projectSettledReplanHistory({...cadence, runs: cadence.runs.slice(1)});
+    assert.equal(requireJsonObject(baseline.trigger, "trigger").run_count, 1);
+    await appendFile(log, JSON.stringify({schema_version: "loopx_rollout_event_v0",
+      event_id: "malformed-peer-review", event_kind: "quota_should_run",
+      goal_id: goalId, agent_id: peer, run_id: peerTurn, details: {
+        todo_id: todoId, settlement_effect_id: peerIdentity.effect_id,
+        semantic_replan_obligation_id: "replan-0000000000000001",
+        semantic_replan_review_kind: "periodic_review_due",
+        semantic_replan_review_stop_condition: null,
+      }}) + "\n");
+    const originalLog = await readFile(log, "utf8");
+    assert.deepEqual(await projectSettledReplanHistory(cadence), baseline);
+    assert.equal((await projectSettledReplanHistory({...cadence,
+      runs: cadence.runs.slice(0, 1)})).trigger, null, "peer work cannot qualify this agent");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: peer}),
+      /receipt review stop condition/, "the affected agent still sees its own invalid receipt");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: null}),
+      /receipt review stop condition/, "unscoped history still validates every contributing agent");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: 42}),
+      /agent_id/, "invalid scope must not silently become unscoped");
+    assert.equal(await readFile(log, "utf8"), originalLog, "readback cannot repair historical receipts");
+  } finally {
+    await rm(root, {recursive: true, force: true});
   }
 });
 

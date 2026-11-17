@@ -972,6 +972,32 @@ export async function fetchChatSession(sessionId: string, signal?: AbortSignal) 
   return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
 }
 
+export async function fetchSavedChatAnswer(sessionId: string, messageId: string, signal: AbortSignal, turnId?: string) {
+  const query = new URLSearchParams({report_message_id: messageId});
+  if (turnId !== undefined) query.set("turn_id", turnId);
+  const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`;
+  try {
+    const snapshot = await requestJson<ChatSessionSnapshot & {report_message_id?: string}>(path, {signal});
+    // A legacy service can ignore the selector and return its complete v1
+    // snapshot. A conflicting marker or a partial history remains invalid.
+    if (Object.hasOwn(snapshot, "report_message_id")) {
+      if (snapshot.report_message_id !== messageId) throw new Error("The saved answer selection changed during read.");
+    } else if ("message_page" in snapshot || "history_resume" in snapshot) {
+      throw new Error("The saved answer history is incomplete.");
+    }
+    return snapshot;
+  } catch (error) {
+    // Older Chat builds reject unknown history selectors before reading the
+    // Session. Only that response enables the earlier history read paths.
+    if (!(error instanceof ChatApiError) || error.payload.http_status !== 400
+      || error.message !== "invalid history page arguments") throw error;
+    signal.throwIfAborted();
+    return turnId === undefined
+      ? fetchChatSession(sessionId, signal)
+      : fetchChatSessionHistory(sessionId, signal, turnId);
+  }
+}
+
 export const chatQueueInputRequestSchema = z.discriminatedUnion("action", [
   z.object({action: z.literal("edit"), operation_id: z.string().min(1).max(160),
     expected_revision: z.number().int().nonnegative(), message: z.string().min(1).max(24000)}).strict(),
@@ -983,15 +1009,16 @@ const chatQueuedInputSchema = z.object({input_revision: z.number().int().nonnega
   attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
     mime_type: z.string(), data_url: z.string()})),
 });
-export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema>;
+export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema> & Pick<ChatVisibleMessage, "reply_context">;
 export async function fetchQueuedChatInput(sessionId: string, turnId: string, signal?: AbortSignal) {
   // Keep original-source audience projection and complete paging. The visible
   // input and its revision come from one canonical user row, never raw model context.
   const history = await fetchChatSessionHistory(sessionId, signal, turnId);
   const original = history.messages.find(row => row.role === "user" && row.turn_id === turnId);
   if (!original) throw new Error("Original queued input is unavailable");
-  return chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
-    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []});
+  return {...chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
+    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []}),
+    reply_context: original.reply_context};
 }
 const chatQueueSchema = z.object({
   ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),
@@ -3131,12 +3158,16 @@ export async function updateGoalOwnership(body: { goal_id: string; mode: Executi
 
 const privateAgentSessionSchema = z.object({session_id: z.string(), goal_id: z.string(), agent_id: z.string(), executor_endpoint_id: z.string()});
 const privateAgentTargetSchema = privateAgentSessionSchema.extend({target_ref: z.string(), host_ref: z.string(), goal_instance_id: z.string().nullable()});
-const privateConversationSchema = z.object({
+const privateConversationSettingsRowSchema = z.object({
   binding_id: z.string(), app_ref: z.string(), context_kind: z.enum(["project", "steward"]),
   project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
-  grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
+  grant: z.enum(["workspace_read", "workspace_write", "portfolio_read"]), goal_count: z.number().int().default(0),
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
   audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
+  agent_targets: z.array(privateAgentTargetSchema).default([]),
+});
+const privateConversationDiagnosticsRowSchema = z.object({
+  binding_id: z.string(), listener_status: z.string(),
   pending_count: z.number().int(), recovery_count: z.number().int(),
   ingress: z.object({status: z.enum(["unobserved", "verified", "gap", "unavailable"]),
     last_checked_at: z.number().nullable(), last_complete_at: z.number().nullable(),
@@ -3169,14 +3200,21 @@ const privateConversationSchema = z.object({
     z.object({available: z.literal(false), error_code: z.string(),
       execution_available: z.boolean().optional(), execution_error_code: z.string().optional()}),
   ]).optional(),
-  agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
+  agent_candidates: z.array(privateAgentSessionSchema).default([]),
 });
+const privateConversationSchema = privateConversationSettingsRowSchema.extend(privateConversationDiagnosticsRowSchema.shape);
 const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
   project_title: z.string(), pending_count: z.number().int().positive()});
 export type PrivateConversationStopRecovery = z.infer<typeof privateConversationStopRecoverySchema>;
-const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+const privateConversationSettingsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
   app_steward_binding_id: z.string().regex(/^[a-f0-9]{24}$/).nullable().default(null),
+  connections: z.array(privateConversationSettingsRowSchema)});
+const privateConversationDiagnosticsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
+  connections: z.array(privateConversationDiagnosticsRowSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema)});
+const privateConversationsSchema = privateConversationSettingsSchema.extend({
   connections: z.array(privateConversationSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema).default([])});
+export type PrivateConversationSettings = z.infer<typeof privateConversationSettingsSchema>;
+export type PrivateConversationDiagnostics = z.infer<typeof privateConversationDiagnosticsSchema>;
 export type PrivateConversation = z.infer<typeof privateConversationSchema>;
 const boundConversationSourceSchema = privateConversationSchema.pick({
   binding_id: true, app_ref: true, context_kind: true, project_title: true, executor_endpoint_id: true,
@@ -3199,6 +3237,23 @@ export async function resolveBoundConversation(target: BoundConversationTarget, 
 export async function fetchPrivateConversations(signal?: AbortSignal) {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", { signal }));
 }
+
+export async function fetchPrivateConversationSettings(signal: AbortSignal) {
+  return privateConversationSettingsSchema.parse(
+    await requestJson<unknown>("/api/chat/lark/private-conversations?view=settings", {signal}));
+}
+
+export async function fetchPrivateConversationDiagnostics(settings: PrivateConversationSettings, signal: AbortSignal) {
+  const diagnostics = privateConversationDiagnosticsSchema.parse(await requestJson<unknown>(
+    `/api/chat/lark/private-conversations?view=diagnostics&revision=${settings.revision}`, {signal}));
+  const observedBindingIds = new Set(diagnostics.connections.map(row => row.binding_id));
+  if (diagnostics.revision !== settings.revision || diagnostics.connections.length !== settings.connections.length
+    || observedBindingIds.size !== diagnostics.connections.length
+    || !settings.connections.every(row => observedBindingIds.has(row.binding_id))) {
+    throw new Error("Conversation bindings changed during the read");
+  }
+  return diagnostics;
+}
 const appStewardTargetSchema = z.union([
   z.object({ok: z.literal(true), binding_id: z.null(), session_id: z.null()}),
   z.object({ok: z.literal(true), binding_id: z.string().regex(/^[a-f0-9]{24}$/),
@@ -3216,7 +3271,7 @@ export async function selectAppSteward(bindingId: string | null, revision: numbe
   return result;
 }
 export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write", groupIds?: string[]) {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+  return z.object({ok: z.literal(true)}).parse(await requestJson<unknown>("/api/chat/lark/private-conversations?response=minimal", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant,
       ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {}),
@@ -3224,7 +3279,7 @@ export async function connectPrivateConversation(appRef: string, projectRef: str
   }));
 }
 export async function disconnectPrivateConversation(bindingId: string, revision: number) {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+  return z.object({ok: z.literal(true)}).parse(await requestJson<unknown>("/api/chat/lark/private-conversations?response=minimal", {
     method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
   }));
 }
