@@ -16,6 +16,7 @@ from loopx.capabilities.manager_context import execution
 from loopx.chat import normalize_agent_response
 from loopx.chat_agent import _turn_prompt
 from loopx.chat_store import ChatSessionStore
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.capabilities.manager_context.inspection import manager_index
 from test_local_delegation import brief, wait, service as delegation_service  # noqa: F401
 from test_independent_delegation_validation import independent_binding
@@ -247,7 +248,11 @@ def test_no_launch_after_source_or_registration_changes(flow, change):
         if change == "requester":
             data["goals"][0]["coordination"]["registered_agents"] = ["worker"]
         else:
-            data["goals"][0]["activation_state"] = "stopped"
+            data["goals"][0]["activation"] = build_goal_activation(
+                state="stopped",
+                updated_at="2026-04-01T00:00:00Z",
+                reason="Fixture goal stopped.",
+            )
         registry.write_text(json.dumps(data))
     _write(_root(root) / "policy.json", policy)
     assert not dispatch(flow)["submitted"]

@@ -14,6 +14,7 @@ from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService, ProtectedActionGate
 from loopx.control_plane.collaboration.operation_handoff import agent_operation_action
 from loopx.control_plane.collaboration.inbox import pending
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.capabilities.manager_context import turn_start_hook
 from examples.operation_action_fixtures import (
     GOAL_ID,
@@ -286,7 +287,11 @@ def test_managed_pending_reuses_registered_agent_and_goal_instance_scope(
     )
 
     registry = json.loads(service.registry_path.read_text())
-    registry["goals"][0]["activation_state"] = "stopped"
+    registry["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-04-01T00:00:00Z",
+        reason="Fixture goal stopped.",
+    )
     service.registry_path.write_text(json.dumps(registry))
     # Stopping execution does not erase the original evidence-reconciliation locator.
     historical = handler("loopx_operation", args, native)
@@ -682,7 +687,11 @@ def test_agent_handoff_fails_closed_on_expiry_binding_activation_or_terms_drift(
         elif change == "archived":
             registry["goals"][0]["status"] = "archived"
         else:
-            registry["goals"][0]["activation_state"] = "stopped"
+            registry["goals"][0]["activation"] = build_goal_activation(
+                state="stopped",
+                updated_at="2026-04-01T00:00:00Z",
+                reason="Fixture goal stopped.",
+            )
         service.registry_path.write_text(json.dumps(registry))
     else:
         data = json.loads(store.path.read_text())
@@ -849,7 +858,11 @@ def test_unknown_result_never_grants_resubmission_and_late_evidence_does_not_req
         **args,
     )
     registry = json.loads(service.registry_path.read_text())
-    registry["goals"][0]["activation_state"] = "stopped"
+    registry["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-04-01T00:00:00Z",
+        reason="Fixture goal stopped.",
+    )
     registry["goals"][0]["coordination"]["thread_agent_bindings"][0]["thread_id"] = (
         "thread-replacement"
     )
@@ -1022,7 +1035,11 @@ def test_replacement_session_reconciles_under_its_current_binding_without_recons
     )
     if historical:
         registry = json.loads(service.registry_path.read_text())
-        registry["goals"][0]["activation_state"] = "stopped"
+        registry["goals"][0]["activation"] = build_goal_activation(
+            state="stopped",
+            updated_at="2026-04-01T00:00:00Z",
+            reason="Fixture goal stopped.",
+        )
         service.registry_path.write_text(json.dumps(registry))
         after_expiry = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
         monkeypatch.setattr("loopx.chat_action_store._utc_now", lambda: after_expiry)

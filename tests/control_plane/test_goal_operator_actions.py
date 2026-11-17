@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.global_registry import sync_project_registry_to_global
 from loopx.history import load_registry
 from loopx.registry import registry_goals
@@ -58,7 +59,11 @@ def _write_registry(
         "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
     }
     if activation_state == "stopped":
-        goal["activation_state"] = "stopped"
+        goal["activation"] = build_goal_activation(
+            state="stopped",
+            updated_at="2026-04-01T00:00:00Z",
+            reason="Fixture goal stopped.",
+        )
     if goal_instance_id is not None:
         goal["goal_instance_id"] = goal_instance_id
     registry_path.write_text(

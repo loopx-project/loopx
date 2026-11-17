@@ -7,7 +7,6 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_source_fixture
 from loopx.cli_runtime import report_json_text
-from loopx.paths import display_report_text
 from loopx.contract import check_contract, display_report_value
 from loopx.control_plane.goals.contract_health import (
     contract_error_diagnostic,
