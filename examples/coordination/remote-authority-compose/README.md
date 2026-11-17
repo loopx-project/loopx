@@ -52,7 +52,7 @@ COMPOSE_PROJECT_NAME=loopx-restored LOOPX_PORT=8445 LOOPX_READ_PORT=8446 ./start
 备份会停止当前 Compose 项目，保存同一时点的数据库和凭据卷。请将含私钥及数据库凭据的备份放在加密受限的位置。恢复前校验摘要和包版本，并要求新项目的目标卷尚未创建。启动后读回任务和原操作回执，确认旧项目已停止接收请求再切换入口。
 
 - 撤权时原子替换对应网关卷中的 `policy.json`。只读策略位于 `reader-gateway` 卷，写策略位于 `gateway` 卷；撤销资源条目或凭据后下一次请求即拒绝。不能把 v0 策略放到已启动的 v1 监听器来降级权限。轮换密钥须生成新的高熵凭据，同步更新私有策略和客户端凭据。备份也含历史凭据。
-- 服务证书有效期 397 天。可在到期前用 `pg-admin` 中的 CA 签发保留原 SAN 的证书，更新网关卷中的 `cert.pem`、`key.pem`，重启网关并读回两个客户端。更换 CA 时需提前分发新信任。
+- 自动生成的服务叶证书有效期为 397 天。到期前用 `pg-admin` 中的 CA 续签，保留原 SAN。切换前在客户端用原 CA 校验新证书，确认各客户端时钟已到新证书的 `notBefore` 时间。将配对的 `cert.pem` 和 `key.pem` 更新到 `gateway` 与 `reader-gateway` 两个卷中。沿用同一 Compose 项目配置运行 `docker compose restart gateway reader-gateway`。用 `docker compose ps gateway reader-gateway` 确认两个服务均已就绪（`healthy`），再校验两个 TLS 入口，再用 `./client.sh a read`、`./client.sh b read` 和 `./client.sh reader read` 读回任务。更换 CA 时提前分发新信任。
 - 更新 PostgreSQL 口令或版本前先备份，在隔离项目演练迁移和回退。同步修改数据库角色与对应凭据文件。PostgreSQL 跨大版本需使用其正式迁移流程。
 
 [English](README.en.md)
