@@ -144,9 +144,8 @@
       "dict_any_count": 0
     },
     "loopx/extensions/lark/presentation/kanban.py": {
-      "any_count": 100,
-      "dict_any_count": 0,
-      "lines": 2760
+      "any_count": 62,
+      "dict_any_count": 0
     },
     "loopx/extensions/lark/private_conversations.py": {
       "lines": 2654
