@@ -99,6 +99,28 @@
 `selected_candidate`，仍核对来源修订、Todo 关联和后续实际工作。未带测量的手动笔记
 保持既有摘要/审计路径。读取或选择某条成绩不认证实际采用或执行。
 
+开启 work Yardstick 后，详情读取通过既有 `previous_decision_followthrough`，
+把 confirmed 的 `execution_observation` 关联到当前或显式前驱决策。普通结果可以
+省略 `work_yardstick_decision`，也可以没有量化测量；原选择继续有效。后续选择
+保留此前执行的原始 finding 引用。关联要求相同 Goal/Agent/Todo、问题和测试输入，
+并核对原始提交时间及证据可见的工作窗口；其他归属、tentative、过时或迟到的
+记录不能成为该选择的执行。复用现有 finding 与回读入口；关联本身不独立认证
+方法采用或收益。已验证的后继历史前缀决定此前执行是否已可见，后继时钟回拨
+不再否决前缀内的结果；缺少此前缀的旧 capture 保留严格时间上界，迟到投递仍被排除。
+
+普通 `turn run-once` 接受 Host 既有 `agent_vision_json` 内的同一
+`explore_result`，保留一个解码后的 Vision packet，再复用原附件解析及交付 owner。
+交付失败时不扣额，在同一 Turn 从原 Run 恢复；已提交重放不重复 Host 工作、
+finding 写入或扣额。关闭且省略附件时不产生 finding；非法或未启用的附件在
+Todo 完成及主写回前被拒绝。完成路径在生命周期效果前复用原能力预检，主写回
+提交时仍再次检查；省略附件时不增加能力预检，恢复保留已提交的完成记录。
+`turn run-once` 和 `refresh-state` 都在请求的附件交付完成后才发布 quota 所需的
+写回回执。该回执缺失时，公开 quota CLI 拒绝扣额。普通 refresh 与
+`refresh-state --settle-turn` 恢复先交付已验证的原 Run，再修复回执；附件失败时
+保留同一恢复状态，不扣额。
+关闭 Yardstick 后，回执修复仍保留原已提交捕获的重放语义。
+先完成该交付和结算，再开始下一 Turn。
+
 ## 概览
 
 LoopX Explore 是面向长程探索目标（软件研究、安全攻击面测绘、领域调研）的受支持、默认关闭的可选能力。它把“到处看看”变成有界、可观测、有门控的流程，包含三根支柱：

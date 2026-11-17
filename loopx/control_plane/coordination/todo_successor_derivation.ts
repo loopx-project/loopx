@@ -1,17 +1,28 @@
+import {createHash} from "node:crypto";
 import {planTodoPriority} from "../todos/priority.ts";
 import type { JsonObject } from "../effect_program.ts";
-import {AGENT_TODO_TASK_CLASSES as AGENT_TASK_CLASSES, USER_TODO_TASK_CLASSES as USER_TASK_CLASSES} from "../todos/authoring_scope.ts";
+import {AGENT_TODO_TASK_CLASSES as AGENT_TASK_CLASSES, USER_TODO_TASK_CLASSES as USER_TASK_CLASSES, userTodoScopeConflict} from "../todos/authoring_scope.ts";
 import {
   AuthorityStoreProtocolError,
   canonicalAuthorityObject,
+  optionalAuthorityBoolean,
+  optionalAuthorityString,
+  requireAuthorityLiteral,
   requireAuthorityStoreId,
 } from "./authority_store_codec.ts";
+import {
+  TODO_CANONICAL_READ_RECORD_SCHEMA,
+  TODO_DOMAIN_ITEM_SCHEMA,
+  canonicalTodoDomainRecord,
+} from "./coordination_state_contract.ts";
 import {
   compactPythonWhitespace,
   normalizeRegisteredTodoAgents,
   normalizeTodoAgent,
+  optionalRegisteredTodoAgent,
   stripPythonWhitespace,
 } from "./todo_agents.ts";
+import {canonicalTodoRecord, materializeTodoRecordForSchema} from "./todo_presentation.ts";
 
 export const TODO_SUCCESSOR_DERIVATION_REQUEST_SCHEMA =
   "loopx_todo_successor_derivation_request_v0";
@@ -42,41 +53,6 @@ interface NormalizedSuccessorIntent extends JsonObject {
   role: TodoRole;
   text: string;
   task_class: string;
-}
-
-function requireLiteral<T extends string>(
-  value: unknown,
-  allowed: readonly T[],
-  label: string,
-): T {
-  if (typeof value !== "string" || !allowed.includes(value as T)) {
-    throw new AuthorityStoreProtocolError(
-      `${label} must be one of: ${allowed.join(", ")}`,
-    );
-  }
-  return value as T;
-}
-
-function optionalString(value: unknown, label: string): string | null {
-  if (value === null || value === undefined || value === "") return null;
-  if (typeof value !== "string") {
-    throw new AuthorityStoreProtocolError(`${label} must be a string or null`);
-  }
-  return value;
-}
-
-function optionalRegisteredAgent(
-  value: unknown,
-  label: string,
-  registeredAgents: readonly string[],
-): string | null {
-  const raw = optionalString(value, label);
-  if (raw === null) return null;
-  const agent = normalizeTodoAgent(raw, label);
-  if (!registeredAgents.includes(agent)) {
-    throw new AuthorityStoreProtocolError(`${label} is not a registered agent`);
-  }
-  return agent;
 }
 
 function optionalStringArray(value: unknown, label: string): string[] {
@@ -116,8 +92,8 @@ function normalizeIntent(
   registeredAgents: readonly string[],
 ): NormalizedSuccessorIntent {
   const raw = canonicalAuthorityObject(value, `successor_intents[${index}]`);
-  const role = requireLiteral(raw.role, TODO_ROLES, `successor_intents[${index}].role`);
-  const rawTaskClass = optionalString(
+  const role = requireAuthorityLiteral(raw.role, TODO_ROLES, `successor_intents[${index}].role`);
+  const rawTaskClass = optionalAuthorityString(
     raw.task_class,
     `successor_intents[${index}].task_class`,
   );
@@ -134,7 +110,7 @@ function normalizeIntent(
       "User successor task_class must be user_action or user_gate",
     );
   }
-  const claimedBy = optionalRegisteredAgent(
+  const claimedBy = optionalRegisteredTodoAgent(
     raw.claimed_by,
     `successor_intents[${index}].claimed_by`,
     registeredAgents,
@@ -149,7 +125,7 @@ function normalizeIntent(
       "successor claimed_by cannot also appear in excluded_agents",
     );
   }
-  const rawContinuationPolicy = optionalString(
+  const rawContinuationPolicy = optionalAuthorityString(
     raw.continuation_policy,
     `successor_intents[${index}].continuation_policy`,
   );
@@ -165,7 +141,7 @@ function normalizeIntent(
     raw.required_capabilities,
     `successor_intents[${index}].required_capabilities`,
   );
-  const rawActionKind = optionalString(
+  const rawActionKind = optionalAuthorityString(
     raw.action_kind,
     `successor_intents[${index}].action_kind`,
   );
@@ -180,7 +156,7 @@ function normalizeIntent(
   return {
     ...raw,
     role,
-    text: optionalString(raw.text, `successor_intents[${index}].text`) ?? "",
+    text: optionalAuthorityString(raw.text, `successor_intents[${index}].text`) ?? "",
     task_class: taskClass,
     ...(claimedBy === null ? {} : {claimed_by: claimedBy}),
     excluded_agents: excludedAgents,
@@ -206,7 +182,7 @@ function completionPolicyAgent(
   field: "effective_claimed_by" | "effective_next_claimed_by",
   registeredAgents: readonly string[],
 ): string | null {
-  return optionalRegisteredAgent(policy[field], `completion_policy.${field}`, registeredAgents);
+  return optionalRegisteredTodoAgent(policy[field], `completion_policy.${field}`, registeredAgents);
 }
 
 /**
@@ -222,7 +198,7 @@ export function deriveCoordinationTodoSuccessorProposals(
   if (rawInput.schema_version !== TODO_SUCCESSOR_DERIVATION_REQUEST_SCHEMA) {
     throw new AuthorityStoreProtocolError("Todo successor derivation schema mismatch");
   }
-  const command = requireLiteral(rawInput.command, TERMINAL_COMMANDS, "command");
+  const command = requireAuthorityLiteral(rawInput.command, TERMINAL_COMMANDS, "command");
   if (!Array.isArray(rawInput.successor_intents)) {
     throw new AuthorityStoreProtocolError("successor_intents must be an array");
   }
@@ -232,7 +208,7 @@ export function deriveCoordinationTodoSuccessorProposals(
   const predecessor = canonicalAuthorityObject(rawInput.predecessor, "predecessor");
   const predecessorId = requireAuthorityStoreId(predecessor.todo_id, "predecessor.todo_id");
   const registeredAgents = normalizeRegisteredTodoAgents(rawInput.registered_agents);
-  const actor = optionalRegisteredAgent(
+  const actor = optionalRegisteredTodoAgent(
     rawInput.actor_agent_id,
     "actor_agent_id",
     registeredAgents,
@@ -269,7 +245,7 @@ export function deriveCoordinationTodoSuccessorProposals(
     };
     compactOptionalField(proposal, "created_by", actor);
     if (intent.role === "agent") {
-      let claimedBy = optionalRegisteredAgent(
+      let claimedBy = optionalRegisteredTodoAgent(
         intent.claimed_by,
         "successor_intent.claimed_by",
         registeredAgents,
@@ -292,7 +268,7 @@ export function deriveCoordinationTodoSuccessorProposals(
         );
       } else if (claimedBy === null &&
           intent.continuation_policy === "same_agent_non_delivery") {
-        claimedBy = optionalRegisteredAgent(
+        claimedBy = optionalRegisteredTodoAgent(
           predecessor.claimed_by,
           "predecessor.claimed_by",
           registeredAgents,
@@ -343,7 +319,7 @@ export function deriveCoordinationTodoSuccessorProposals(
           }
         }
       } else {
-        boundAgent = optionalRegisteredAgent(
+        boundAgent = optionalRegisteredTodoAgent(
           predecessor.bound_agent ?? predecessor.blocks_agent ??
             predecessor.claimed_by ?? intents.find((candidate) =>
               candidate.role === "agent")?.claimed_by,
@@ -389,4 +365,248 @@ export function evaluateCoordinationTodoSuccessorDerivation(
       reason: error instanceof Error ? error.message : "invalid Todo successor derivation",
     };
   }
+}
+
+function validateSuccessorSemantics(
+  successors: readonly JsonObject[],
+  registeredAgents: readonly string[],
+): void {
+  for (const role of TODO_ROLES) {
+    if (successors.filter((successor) => successor.role === role).length > 1) {
+      throw new AuthorityStoreProtocolError(
+        `terminal lifecycle permits at most one generated ${role} successor`,
+      );
+    }
+  }
+  for (const successor of successors) {
+    const role = requireAuthorityLiteral(successor.role, TODO_ROLES, "successor.role");
+    const taskClass = optionalAuthorityString(successor.task_class, "successor.task_class");
+    const claimedBy = optionalRegisteredTodoAgent(successor.claimed_by, "successor.claimed_by", registeredAgents);
+    const boundAgent = optionalRegisteredTodoAgent(successor.bound_agent, "successor.bound_agent", registeredAgents);
+    const blocksAgent = optionalRegisteredTodoAgent(successor.blocks_agent, "successor.blocks_agent", registeredAgents);
+    const goalBound = optionalAuthorityBoolean(successor.goal_bound, "successor.goal_bound");
+    const globalGate = optionalAuthorityBoolean(successor.global_gate, "successor.global_gate");
+    if (role === "agent") {
+      if (USER_TASK_CLASSES.has(taskClass ?? "") || boundAgent !== null ||
+          blocksAgent !== null || goalBound === true || globalGate === true) {
+        throw new AuthorityStoreProtocolError(
+          "generated Agent successor carries user-only task or binding semantics",
+        );
+      }
+      continue;
+    }
+    if (!USER_TASK_CLASSES.has(taskClass ?? "")) {
+      throw new AuthorityStoreProtocolError(
+        "generated User successor requires task_class user_action or user_gate",
+      );
+    }
+    if (claimedBy !== null) {
+      throw new AuthorityStoreProtocolError(
+        "generated User successor cannot carry claimed_by ownership",
+      );
+    }
+    const scopeConflict = userTodoScopeConflict(taskClass, {
+      bound_agent: boundAgent, goal_bound: goalBound, blocks_agent: blocksAgent, global_gate: globalGate,
+    }, registeredAgents.length);
+    if (scopeConflict === "binding_conflict") {
+      throw new AuthorityStoreProtocolError("generated User successor cannot be both agent-bound and goal-bound");
+    }
+    if (taskClass === "user_action" && (blocksAgent !== null || globalGate === true)) {
+      throw new AuthorityStoreProtocolError("generated user_action successor cannot carry blocking gate scope");
+    }
+    if (scopeConflict) {
+      throw new AuthorityStoreProtocolError({
+        gate_scope_conflict: "goal-wide User gate successor requires goal_bound and no Agent binding",
+        global_binding_conflict: "goal-wide User gate successor requires goal_bound and no Agent binding",
+        agent_binding_conflict: "Agent-scoped User gate successor must bind to its blocks_agent",
+        gate_scope_missing: "multi-agent User gate successor requires an explicit blocking scope",
+        binding_missing: "multi-agent User successor requires an explicit Agent or Goal binding",
+      }[scopeConflict]);
+    }
+  }
+}
+
+function generatedSuccessorId(predecessorId: string, successor: JsonObject, offset: number): string {
+  const role = String(successor.role);
+  const section = role === "agent" ? "Agent Todo" : "User Todo";
+  const identity = [role, section, `${predecessorId}:${offset}`, compactPythonWhitespace(String(successor.text ?? ""))].join("|");
+  return `todo_${createHash("sha1").update(identity, "utf8").digest("hex").slice(0, 12)}`;
+}
+
+function materializeSuccessorProposals(predecessorId: string, proposals: readonly JsonObject[]): JsonObject[] {
+  const successors = proposals.map((proposal, index) => canonicalTodoDomainRecord({
+    ...proposal,
+    schema_version: TODO_DOMAIN_ITEM_SCHEMA,
+    todo_id: generatedSuccessorId(predecessorId, proposal, index + 1),
+    status: "open",
+    done: false,
+    archive_state: "active",
+  }, `derived successors[${index}]`));
+  const successorIds = successors.map((successor) => String(successor.todo_id));
+  if (new Set(successorIds).size !== successorIds.length) {
+    throw new AuthorityStoreProtocolError("derived successors must contain unique Todo ids");
+  }
+  return successors;
+}
+
+function successorCandidate(
+  todo: JsonObject,
+  actor: string | null,
+  now: Date,
+  domainReadModel: boolean,
+  completionPolicy: JsonObject | null,
+): JsonObject {
+  const policyOwned: JsonObject = todo.role === "agent" && completionPolicy !== null ? {
+    ...(completionPolicy.effective_next_claimed_by === null ? {} : {claimed_by: completionPolicy.effective_next_claimed_by}),
+    excluded_agents: completionPolicy.effective_next_excluded_agents,
+  } : {};
+  const candidate: JsonObject = {
+    ...todo,
+    ...policyOwned,
+    schema_version: TODO_DOMAIN_ITEM_SCHEMA,
+    created_by: todo.created_by ?? actor,
+    last_actor_agent_id: actor,
+    updated_at: now.toISOString().replace(/\.\d{3}Z$/u, "Z"),
+  };
+  if (todo.role === "agent" && completionPolicy !== null && completionPolicy.effective_next_claimed_by === null) {
+    delete candidate.claimed_by;
+  }
+  const created = canonicalTodoDomainRecord(candidate, "terminal successor");
+  return domainReadModel ? created : materializeTodoRecordForSchema(
+    created,
+    TODO_CANONICAL_READ_RECORD_SCHEMA,
+    "terminal successor compatibility record",
+  );
+}
+
+function semanticDuplicate(
+  todos: Iterable<JsonObject>,
+  successor: JsonObject,
+  retiringTodoId: string | null = null,
+): JsonObject | undefined {
+  for (const todo of todos) {
+    if (todo.todo_id !== retiringTodoId && todo.role === successor.role &&
+        todo.archive_state === "active" && todo.status !== "done" &&
+        todo.status !== "deferred" && todo.text === successor.text) return todo;
+  }
+  return undefined;
+}
+
+export type TerminalSuccessorsPreparation =
+  | {
+      readonly status: "ready";
+      readonly successorCandidates: JsonObject[];
+      readonly successorIds: string[];
+      readonly generatedSuccessorIds: string[];
+    }
+  | {
+      readonly status: "failed";
+      readonly failureKind: "decision_rejection" | "protocol_failure";
+      readonly reasonCode: string;
+      readonly reason: string;
+      readonly detail?: JsonObject;
+    };
+
+export function prepareCoordinationTodoTerminalSuccessors(params: {
+  readonly command: TerminalCommand;
+  readonly todoId: string;
+  readonly todo: JsonObject;
+  readonly todos: ReadonlyMap<string, JsonObject>;
+  readonly registeredAgents: readonly string[];
+  readonly actorAgentId: string | null;
+  readonly linkedSuccessorTodoIds: readonly string[];
+  readonly successorIntents: readonly JsonObject[];
+  readonly completionPolicy: JsonObject | null;
+  readonly completionPolicyRequest: JsonObject | null;
+  readonly domainReadModel: boolean;
+  readonly now: Date;
+}): TerminalSuccessorsPreparation {
+  const {
+    command, todoId, todo, todos, registeredAgents, actorAgentId, linkedSuccessorTodoIds,
+    successorIntents, completionPolicy, completionPolicyRequest, domainReadModel, now,
+  } = params;
+  const fail = (
+    reasonCode: string,
+    reason: string,
+    detail?: JsonObject,
+    failureKind: "decision_rejection" | "protocol_failure" = "protocol_failure",
+  ): TerminalSuccessorsPreparation => ({
+    status: "failed",
+    failureKind,
+    reasonCode,
+    reason,
+    ...(detail === undefined ? {} : {detail}),
+  });
+  let successors: JsonObject[];
+  try {
+    const proposals = deriveCoordinationTodoSuccessorProposals({
+      schema_version: TODO_SUCCESSOR_DERIVATION_REQUEST_SCHEMA,
+      command,
+      predecessor: todo,
+      registered_agents: registeredAgents,
+      actor_agent_id: actorAgentId,
+      completion_policy: completionPolicy,
+      successor_intents: successorIntents,
+    });
+    successors = materializeSuccessorProposals(todoId, proposals);
+    validateSuccessorSemantics(successors, registeredAgents);
+  } catch (error) {
+    return fail(
+      "invalid_todo_successor_derivation",
+      error instanceof Error ? error.message : "invalid Todo successor derivation",
+      undefined,
+      "decision_rejection",
+    );
+  }
+  const generatedSuccessorIds = successors.map((successor) => String(successor.todo_id));
+  const successorIds = [...new Set([...linkedSuccessorTodoIds, ...generatedSuccessorIds])];
+  if (successorIds.includes(todoId)) {
+    return fail("todo_successor_cycle", "Todo cannot name itself as a successor");
+  }
+  if (completionPolicy !== null) {
+    const agentSuccessorIntents = successorIntents.filter((successor) => successor.role === "agent");
+    if (agentSuccessorIntents.length > 1) {
+      return fail(
+        "completion_policy_successor_ambiguity",
+        "completion policy currently permits at most one generated Agent successor",
+      );
+    }
+    const requestedNextAgentTodo = completionPolicyRequest?.next_agent_todo;
+    if ((requestedNextAgentTodo === null || requestedNextAgentTodo === undefined) !==
+          (agentSuccessorIntents.length === 0) ||
+        (agentSuccessorIntents.length === 1 && requestedNextAgentTodo !== agentSuccessorIntents[0]!.text)) {
+      return fail(
+        "completion_policy_successor_mismatch",
+        "completion policy next_agent_todo must identify the generated Agent successor",
+      );
+    }
+  }
+  const userSuccessor = successors.find((successor) => successor.role === "user");
+  if (command === "complete" && registeredAgents.length > 1 && userSuccessor !== undefined) {
+    const completingAgent = completionPolicy?.effective_claimed_by;
+    if (typeof completingAgent !== "string" || userSuccessor.bound_agent !== completingAgent ||
+        (userSuccessor.task_class === "user_gate" && userSuccessor.blocks_agent !== completingAgent)) {
+      return fail(
+        "completion_user_successor_binding_mismatch",
+        "multi-agent completion must bind its User successor to the effective completing Agent",
+      );
+    }
+  }
+  const successorCandidates: JsonObject[] = [];
+  for (const successor of successors) {
+    const successorId = String(successor.todo_id);
+    if (todos.has(successorId)) {
+      return fail("todo_already_exists", "terminal successor Todo id already exists", {todo_id: successorId});
+    }
+    const duplicate = semanticDuplicate(todos.values(), successor, todoId);
+    if (duplicate !== undefined) {
+      return fail(
+        "todo_semantic_duplicate_conflict",
+        "an active Todo with the same role/text already exists",
+        {todo_id: duplicate.todo_id},
+      );
+    }
+    successorCandidates.push(successorCandidate(successor, actorAgentId, now, domainReadModel, completionPolicy));
+  }
+  return {status: "ready", successorCandidates, successorIds, generatedSuccessorIds};
 }

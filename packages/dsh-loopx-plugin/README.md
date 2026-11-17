@@ -83,8 +83,10 @@ qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
 RPC registration remains available to explicit callers, but plugin startup
 always uses the shared API.
 
-The source candidate additionally qualifies DSH 0.2.1-rc.2. Its frozen source
-host uses MCP client 2.3.0 and SDK 1.32.0 to address
+The beta.7 source candidate adds DSH 0.2.2-rc.1 and 0.2.2-rc.3 qualification,
+with Cordis 4.1.0 as the pinned development host. The earlier 0.2.1-rc.2
+combination remains covered. Its frozen source host uses MCP client 2.3.0 and
+SDK 1.32.0 to address
 [GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw).
 These dependency overrides do not patch an independently installed DSH binary;
 that host's owner must update its affected MCP dependencies separately.
@@ -550,9 +552,21 @@ pre-step revalidation order remains authoritative.
 DSH's LLM retry plugin owns provider-request retries. For CLI calls, this Driver
 retries only safe fixed-argv LoopX reads and an idempotent `quota should-run`
 receipt, at most twice beyond the first attempt. Every retry uses the same
-`--turn-instance-id`. Typed authority denials, incompatible schemas,
-cancellation, and human input are never retried. There is no cumulative
-eight-failure breaker or plugin-owned durable activation state. The small
+`--turn-instance-id`. If a saved quota page loses its CLI response, retry
+only that page with the same reference, selection and offset. This also
+applies during pre-step revalidation. Typed authority denials, incompatible schemas,
+cancellation, and human input are never retried.
+
+On macOS and Linux, the plugin cancels commands in the process group it started
+and waits for that group and its output pipes before retrying a timed-out read.
+If cleanup cannot be confirmed, it stops the attempt. This does not guarantee
+cleanup of a process that starts its own session, or of descendants on Windows.
+
+GoalBar never retries a lifecycle write. If no result can be verified, refresh
+to read the Goal's current state before trying the action again.
+
+There is no cumulative eight-failure breaker or plugin-owned durable activation
+state. The small
 process-local activation projection is bound to one exact Session and is
 reconstructed only from its typed event history. Exhausting the three attempts
 stops that evaluation; it does not create a periodic error-retry loop. Only a
@@ -561,6 +575,21 @@ cadence from `scheduler_hint.cold_path_detail.local_scheduler` with
 `--include-detail scheduler`, caps the wait by `recheck_after_seconds` when
 present, and enforces `unchanged_poll.limits.local_scheduler`. A changed
 `reset_policy.reset_token` resets the unchanged-poll streak.
+
+When Core's recovery allowance is exhausted, the GoalBar for that exact
+Session shows **Prior turn needs recovery**. An owner can repair the original
+Turn or pause and start the Goal to renew the existing allowance. The label
+reflects the Driver's last verified quota decision and updates with the existing
+GoalBar watch. In-flight activity and an explicit Pause keep their usual labels.
+
+A normal DSH completion can also leave the original Turn awaiting required
+Todo selection. For guarded Turns with that explicit requirement, the Driver
+reads the exact receipt before scheduling another automatic Turn. If selection
+is still owed, the Driver retries once with the original Turn identity. A second
+completed attempt that still owes selection shows the recovery status and waits.
+Pause and Start requests another attempt on the same Turn. A committed selection
+lets the Driver follow the ordinary scheduling path. Interactive human messages
+continue to use the native Session.
 
 If DSH refuses the maintenance slot before admission starts, the Driver waits
 for `Agent.whenIdle()` and re-requests evaluation for that same Session. This
@@ -581,26 +610,80 @@ writeback, spend, or void receipt.
 The Driver resolves the current project registry with
 `resolve-agent-thread`, requires one exact Goal/Agent match for the live DSH
 session, and rechecks binding plus quota before and after downstream pre-step
-listeners. A human message removes an unclaimed automatic reservation; a
-mixed batch rejects the automatic message and restores the human work.
+listeners. A human message removes an unclaimed automatic reservation. A
+mixed batch detected before downstream approval returns independent work to
+the inbox. When the downstream decision already accepts independent user input,
+the current step can enter with that input and its allowed companion messages.
+The Driver removes its continuation and leaves already-queued messages in
+their original inbox position.
 DSH's built-in `runtime-context`, `time-context`, and `skill-catalog` producers
 may share the step with that continuation, including after downstream listeners.
 The source's `kind` identifies those producers; a plugin's snapshot or catalog
 `form` alone does not make its message host-owned context.
+If a downstream pre-step listener removes or rewrites the reserved continuation
+and leaves no competing input, the Driver holds automatic admission until the
+next human message or an explicit GoalBar Pause and Start. A rejected batch's
+host context is restored only alongside independent input.
 The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.
+
+## Driver replacement boundary
+
+Plugin-tree recomposition is not user disposal. When the host replaces the
+plugin inside a live process — a watched module changed and the host evicts
+and re-imports it, or a fiber restart reloads its config — a claimed or
+admitted continuation Turn keeps its Session-owned execution and its single
+settlement identity. The unloading Driver retires its own future work only:
+timers, evaluations, and queued-but-unclaimed reservations. It does not
+cancel the running Turn and does not block the replacement until idle. The
+successor Driver re-attaches to the same live Agents, admits nothing while
+the drained Turn still runs, and after the Turn settles and the Agent is idle
+it evaluates freshly under new admission authority and a new receipt; the
+drained Turn settles through its own already-admitted plan. A Turn that ends
+aborted or at max-tokens after the successor attached still latches the
+error pause through the same `turn/end` contract.
+
+User disable or uninstall of the plugin, removal of its loader entry, and
+host cascade disposal keep the original semantics: a claimed or admitted
+running automatic Turn is cancelled and the disposal awaits idle. The two
+cases are distinguished from the host's own disposal mechanics, not from a
+typed reason: a restart keeps the fiber identity, and a module replacement
+deletes the plugin runtime from the registry before disposing its fibers,
+while user removal disposes the fiber first. Anything not identifiable as
+replacement keeps the cancellation semantics, including older hosts.
+
+The successor retains process-local cancellation ownership for the exact live
+Agent and Session, including a second replacement followed by user removal.
+An error pause survives replacement and is reconstructed from typed Session
+history on reopen; only new human input or explicit Start releases it. A pending host-context message cannot release a rejected
+continuation. Verified Core recovery decisions update the GoalBar even if the
+subsequent heartbeat body read fails.
+
+Start and Pause carry the fresh Core source fingerprint into the existing
+lifecycle mutation. Core checks it again under its source lock. A delayed old
+Pause cannot overwrite a newer Start, including when process cleanup was
+unconfirmed. Snapshot revisions include the Session's safe admission category,
+so a read in one page cannot acknowledge another page's stale watch anchor.
+
+The Linux 0.1.5 regression host freezes the complete published rc.2 SDK
+family and its Cordis dependencies. Pinning only the top-level CLI allows
+caret ranges to mix rc.2 with rc.3 components, whose boot graph requests a
+sandbox provider absent from the old CLI. The qualification keeps the native
+sandbox configuration and the PEP 668 guard intact.
 
 ## Installation and upgrade recovery
 
 Check `dsh --version` before choosing an artifact. The current source accepts
 DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
-qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2 candidates. It
-excludes earlier 0.2 candidates, stable 0.2.1, and other unqualified prerelease
+qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1, 0.2.1-rc.2, 0.2.2-rc.1 and
+0.2.2-rc.3 candidates. It excludes earlier 0.2 candidates, stable 0.2.1 and
+0.2.2, and other unqualified prerelease
 tuples. A stable-version range alone does not admit every prerelease.
 The immutable beta.6 download above is the published package. Building this
-checkout also produces version beta.6, but the local artifact is not the
-published release asset.
+checkout produces the separate beta.7 candidate; it never replaces the
+immutable beta.6 asset. Candidate qualification is separate from publishing
+and public npm/Hub adoption.
 
 If a marketplace reports `loopx-repository: entry file missing: index.js`, it
 selected the monorepo root instead of this plugin package. Installing
@@ -636,7 +719,6 @@ cd packages/dsh-loopx-plugin
 DSH_BIN="$(command -v dsh)" ./install.sh
 dsh --profile web --dump-config
 ```
-
 The installer rejects an incompatible host before changing its profile. A
 successful profile contains `loopx-goalbar`, `loopx-init-command`, `loopx-driver`,
 and the passive `loopx-shadow-observer` in that order. The installer also reads

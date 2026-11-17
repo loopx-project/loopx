@@ -256,6 +256,12 @@ export function todoResumeDependencyId(value: unknown): string | null {
   return spec?.kind === "todo_done" || spec?.kind === "monitor_changed" ? spec.target : null;
 }
 
+/** The Todo whose completion this condition awaits, in any stored spelling. */
+export function todoDoneResumeTargetId(value: unknown): string | null {
+  const spec = parseResumeWhen(value);
+  return spec?.kind === "todo_done" ? spec.target : null;
+}
+
 export function normalizeTodoResumeWhen(value: unknown): string | null {
   const request = requireJsonObject(value, "todo_resume_normalize_request");
   if (request.schema_version !== TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION) {

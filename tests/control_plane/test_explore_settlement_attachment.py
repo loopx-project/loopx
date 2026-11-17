@@ -133,6 +133,337 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
     assert any(h.get("capability_id") == "explore" for h in hooks) == (mode != "off")
 
 
+def _write_attachment_turn_fixture(tmp_path, provider, kind):
+    from tests.test_loopx_turn_driver import _write_live_fixture
+
+    extra = {}
+    if kind == "terminal":
+        extra = {"todo_metadata_extra": "no_followup=true"}
+    elif kind == "successor":
+        extra = {
+            "todo_metadata_extra": "successor_todo_ids=todo_fixture0002",
+            "extra_agent_todo_lines": (
+                "- [ ] [P2] Continue the public fixture.",
+                "  <!-- loopx:todo todo_id=todo_fixture0002 status=open task_class=advancement_task priority=P2 -->",
+            ),
+        }
+    return _write_live_fixture(tmp_path, provider=provider, **extra)
+
+
+@pytest.mark.parametrize("kind", ["progress", "completion", "terminal", "successor"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("mode,attachment", [("evidence", "valid"), ("off", "omitted"),
+                                           ("off", "valid"), ("evidence", "invalid")])
+def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mode, attachment, kind):
+    import hashlib
+    import subprocess
+    import sys
+    from tests.control_plane.test_quota_settlement_cli import _spend_run_count
+    from loopx.configure_goal import configure_goal
+    from loopx.control_plane.todos.list_readback import list_goal_todos
+    from loopx.capabilities.explore.result_log import (
+        build_explore_result_projection, load_explore_result_events_strict,
+    )
+    from tests.test_loopx_turn_driver import (
+        _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
+    )
+
+    project, runtime, registry = _write_attachment_turn_fixture(tmp_path, provider, kind)
+    configure_goal(registry_path=registry, goal_id="loopx-turn-fixture", execute=True, explore_mode=mode)
+    workspace = project / "host-workspace"
+    workspace.mkdir()
+    digest = hashlib.sha256(b"completed").hexdigest()
+    vision = {
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "One artifact is validated; method benefit remains unqualified."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "continue",
+                       "prior_assumption": "Use the original writeback owner.",
+                       "observed_reality": "One independently checked artifact was produced.",
+                       "retained": ["Original task and acceptance"],
+                       "evidence_refs": ["result:inline-execution"]},
+    }
+    if attachment != "omitted":
+        vision["explore_result"] = {
+            "schema_version": "explore_result_attachment_v0",
+            "question": "Did the declared check produce the validated artifact?",
+            "applicability": "This fixture and artifact only.", "input_revision": "fixture-v1",
+            "observation": "The original artifact validator accepted the completed file.",
+            "interpretation": "Execution correspondence is observed; method benefit is unqualified.",
+            "status": "confirmed", "evidence_refs": ["result:inline-execution"],
+            "execution_observation": {
+                "schema_version": "explore_execution_observation_v0", "candidate_sha256": digest,
+                "result_candidate_sha256": digest, "input_revision": "fixture-v1",
+                "planned_method_id": "method:artifact-check", "executed_method_id": "method:artifact-check",
+                "change_reason": None, "elapsed_seconds": None, "limit_seconds": None,
+                "search_iterations": 1, "stop_reason": "artifact validated", "exit_code": 0,
+                "evidence_refs": ["result:inline-execution"], "result_ref": "result:inline-execution",
+            },
+        }
+        if attachment == "invalid":
+            vision["explore_result"]["input_revision"] = ""
+    host, validator = _completion_host_and_validation_scripts()
+    if kind == "progress":
+        host = host.replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"')
+    host = host.replace('"vision_unchanged_reason": "The active goal may have further work.",',
+        '"vision_unchanged_reason": "", "path_delta_mode": "unchanged",\n'
+        f'    "agent_vision_json": {json.dumps(vision)!r},\n'
+        '    "work_evidence": ["completion-artifact.txt"],\n'
+        '    "validation_evidence": ["check:completion-artifact"],')
+    argv = _turn_run_once_completion_argv(workspace, runtime, registry, host, validator)
+    host_path = workspace / "host.py"
+    host_path.write_text(host)
+    command = argv.index("--host-adapter-command-json") + 1
+    argv[command] = json.dumps([sys.executable, str(host_path)])
+    state = project / ".codex/goals/loopx-turn-fixture/ACTIVE_GOAL_STATE.md"
+    before_state = state.read_bytes()
+    result = subprocess.run([sys.executable, "-m", "loopx.cli", *argv],
+                            capture_output=True, text=True, timeout=120)
+    packet = json.loads(result.stdout)
+    log = explore_result_log_path(runtime, "loopx-turn-fixture")
+    todo = list_goal_todos(
+        registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="loopx-turn-fixture", todo_id="todo_fixture0001",
+    )["todo"]
+    if attachment == "invalid" or mode == "off" and attachment != "omitted":
+        assert result.returncode != 0, packet
+        assert isinstance(packet.get("error"), str) and packet["error"]
+        assert state.read_bytes() == before_state
+        assert todo["status"] == "open" and todo["claimed_by"] == "codex-fixture"
+        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 0
+        runs = runtime / "goals/loopx-turn-fixture/runs"
+        assert not any(json.loads(path.read_text()).get("classification") == "fixture_completion"
+                       for path in runs.glob("*.json"))
+        assert not log.exists()
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert packet["status"] == "committed" and packet["quota_slot_spend_count"] == 1
+    assert todo["status"] == ("open" if kind == "progress" else "done")
+    if attachment == "omitted":
+        assert not log.exists()
+        return
+    events = load_explore_result_events_strict(log, goal_id="loopx-turn-fixture")
+    findings = build_explore_result_projection(events, goal_id="loopx-turn-fixture")["findings"]
+    assert len(findings) == 1
+    observation = findings[0]["execution_observation"]
+    assert observation["candidate_sha256"] == hashlib.sha256((workspace / "completion-artifact.txt").read_bytes()).hexdigest()
+    assert observation["executed_method_id"] == "method:artifact-check"
+    before = log.read_bytes()
+    replay = subprocess.run([sys.executable, "-m", "loopx.cli", *argv,
+                             "--resume-turn-key", packet["resume_turn_key"]],
+                            capture_output=True, text=True, timeout=120)
+    recovered = json.loads(replay.stdout)
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert not any(recovered["effects"].values()) and log.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["progress", "completion", "terminal", "successor"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("recovery", ["turn", "refresh", "combined_refresh"])
+def test_turn_recovers_requested_delivery_from_original_run(
+    tmp_path, monkeypatch, provider, kind, recovery, *, with_yardstick=False,
+):
+    import contextlib
+    import io
+    import sys
+    from loopx.cli import main
+    from loopx.configure_goal import configure_goal
+    from loopx.control_plane.todos.list_readback import list_goal_todos
+    from loopx.capabilities.explore import result_writeback
+    from loopx.capabilities.explore.result_log import (
+        build_explore_result_projection, load_explore_result_events_strict,
+    )
+    from loopx.rollout_event_log import rollout_event_log_path
+    from tests.control_plane.test_quota_settlement_cli import _spend_run_count
+    from tests.test_loopx_turn_driver import (
+        _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
+    )
+
+    project, runtime, registry = _write_attachment_turn_fixture(tmp_path, provider, kind)
+    configure_goal(registry_path=registry, goal_id="loopx-turn-fixture", execute=True, explore_mode="evidence")
+    if with_yardstick:
+        configure_goal(registry_path=registry, goal_id="loopx-turn-fixture",
+                       execute=True, execution_yardstick_enabled=True)
+    workspace = project / "host-workspace"
+    workspace.mkdir()
+    vision = {
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The artifact passes; requested evidence delivery is required."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "continue",
+                       "prior_assumption": "The original result can be delivered.",
+                       "observed_reality": "The original artifact was checked.", "retained": ["Original work"],
+                       "evidence_refs": ["result:original-attachment"]},
+        "explore_result": {"schema_version": "explore_result_attachment_v0",
+                           "question": "Can this original result recover its requested delivery?",
+                           "applicability": "This fixture only.", "input_revision": "fixture-v1",
+                           "observation": "The artifact passed its independent validator.",
+                           "interpretation": "Recover the original evidence; method benefit is unqualified.",
+                           "status": "confirmed", "evidence_refs": ["result:original-attachment"]},
+    }
+    if with_yardstick:
+        import hashlib
+        from tests.control_plane.test_work_yardstick_cli import decision
+
+        digest = hashlib.sha256(b"completed").hexdigest()
+        attachment = vision["explore_result"]
+        attachment["execution_observation"] = {
+            "schema_version": "explore_execution_observation_v0", "candidate_sha256": digest,
+            "result_candidate_sha256": digest, "input_revision": "fixture-v1",
+            "planned_method_id": "method:artifact-check", "executed_method_id": "method:artifact-check",
+            "change_reason": None, "elapsed_seconds": None, "limit_seconds": None,
+            "search_iterations": 1, "stop_reason": "artifact validated", "exit_code": 0,
+            "evidence_refs": ["result:original-attachment"], "result_ref": "result:original-attachment",
+        }
+        attachment["work_yardstick_decision"] = choice = decision()
+        choice["counterevidence_refs"] = ["result:original-attachment"]
+        for role in ("authoritative", "proxy"):
+            choice[role]["input_revision"] = "fixture-v1"
+        choice["next_action"]["method_id"] = "method:artifact-check"
+    host, validator = _completion_host_and_validation_scripts()
+    if kind == "progress":
+        host = host.replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"')
+    host = host.replace('request = json.load(sys.stdin)',
+        'request = json.load(sys.stdin)\n'
+        'counter = pathlib.Path("host-count.txt")\n'
+        'counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))')
+    host = host.replace('"vision_unchanged_reason": "The active goal may have further work.",',
+        f'"vision_unchanged_reason": "", "path_delta_mode": "unchanged", "agent_vision_json": {json.dumps(vision)!r},\n'
+        '    "work_evidence": ["completion-artifact.txt"], "validation_evidence": ["check:artifact"],')
+    host_path = workspace / "host.py"
+    host_path.write_text(host)
+    argv = _turn_run_once_completion_argv(workspace, runtime, registry, host, validator)
+    argv[argv.index("--host-adapter-command-json") + 1] = json.dumps([sys.executable, str(host_path)])
+    original_delivery = result_writeback.deliver_result_attachment
+    available = False
+    deliveries = []
+
+    def deliver(**kwargs):
+        if not available:
+            return {"ok": False, "error": "Fixture delivery is unavailable"}
+        result = original_delivery(**kwargs)
+        deliveries.append(result)
+        return result
+
+    monkeypatch.setattr(result_writeback, "deliver_result_attachment", deliver)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        rc = main(argv)
+    failed = json.loads(output.getvalue())
+    assert rc != 0 and failed["status"] == "failed", failed
+    assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 0
+    runs = runtime / "goals/loopx-turn-fixture/runs"
+    original, = [path for path in runs.glob("*.json")
+                 if json.loads(path.read_text()).get("classification") == "fixture_completion"]
+    original_bytes = original.read_bytes()
+    assert json.loads(original_bytes)["explore_result"]["evidence_refs"] == ["result:original-attachment"]
+    assert not explore_result_log_path(runtime, "loopx-turn-fixture").exists()
+    # The public quota entrypoint must observe the same pending delivery as
+    # the Turn driver, rather than treating its primary Run as settled.
+    from tests.control_plane.test_quota_settlement_cli import _run_cli
+    original_run = json.loads(original_bytes)
+    identity = original_run["settlement_identity"]
+    spend_rc, premature = _run_cli(registry, runtime, "quota", "spend-slot",
+        "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
+        "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
+        "--source", "heartbeat", "--slots", "1", "--execute", cwd=workspace)
+    assert spend_rc != 0 and not premature.get("appended"), premature
+    assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 0
+    assert original.read_bytes() == original_bytes
+    event_log = rollout_event_log_path(runtime, identity["goal_id"])
+
+    def writeback_receipts():
+        return [row for line in event_log.read_text().splitlines()
+                if (row := json.loads(line))["event_kind"] == "refresh_state"]
+
+    assert writeback_receipts() == []
+    refresh_argv = ["--registry", str(registry), "--runtime-root", str(runtime),
+                    "--format", "json", "refresh-state",
+                    "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
+                    "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
+                    "--classification", original_run["classification"],
+                    "--delivery-outcome", original_run["delivery_outcome"],
+                    "--delivery-batch-scale", original_run["delivery_batch_scale"]]
+    if recovery == "combined_refresh":
+        refresh_argv.append("--settle-turn")
+    if recovery != "turn":
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(refresh_argv)
+        failed_refresh = json.loads(output.getvalue())
+        assert rc != 0 and not failed_refresh["ok"], json.dumps(failed_refresh, indent=2)
+        assert failed_refresh.get("refresh_recovery", {}).get("decision") == "repair_receipt", json.dumps(failed_refresh, indent=2)
+        assert not failed_refresh.get("receipt_repaired"), failed_refresh
+        assert writeback_receipts() == []
+        assert _spend_run_count(runtime, goal_id=identity["goal_id"]) == 0
+        assert not explore_result_log_path(runtime, identity["goal_id"]).exists()
+        assert original.read_bytes() == original_bytes
+        assert (workspace / "host-count.txt").read_text() == "1"
+    if with_yardstick:
+        configure_goal(registry_path=registry, goal_id="loopx-turn-fixture",
+                       execute=True, execution_yardstick_enabled=False)
+    available = True
+    if recovery != "turn":
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(refresh_argv)
+        repaired = json.loads(output.getvalue())
+        assert rc == 0 and repaired["ok"] and repaired["receipt_repaired"], json.dumps(repaired, indent=2)
+        assert len(writeback_receipts()) == 1
+        assert original.read_bytes() == original_bytes
+        if recovery == "refresh":
+            spend_rc, spent = _run_cli(registry, runtime, "quota", "spend-slot",
+                "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
+                "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
+                "--source", "heartbeat", "--slots", "1", "--execute", cwd=workspace)
+            assert spend_rc == 0 and spent["settlement_progress"]["state"] == "settled", spent
+        assert _spend_run_count(runtime, goal_id=identity["goal_id"]) == 1
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        rc = main([*argv, "--resume-turn-key", failed["resume_turn_key"], "--retry-failed-turn"])
+    recovered = json.loads(output.getvalue())
+    assert rc == 0 and recovered["status"] == "committed", json.dumps({"turn": recovered, "deliveries": deliveries}, indent=2)
+    assert (workspace / "host-count.txt").read_text() == "1"
+    assert original.read_bytes() == original_bytes
+    assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+    todo = list_goal_todos(
+        registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="loopx-turn-fixture", todo_id="todo_fixture0001",
+    )["todo"]
+    assert todo["status"] == ("open" if kind == "progress" else "done")
+    log = explore_result_log_path(runtime, "loopx-turn-fixture")
+    events = load_explore_result_events_strict(log, goal_id="loopx-turn-fixture")
+    findings = build_explore_result_projection(events, goal_id="loopx-turn-fixture")["findings"]
+    assert len(findings) == 1 and findings[0]["evidence_refs"] == ["result:original-attachment"]
+
+    if with_yardstick:
+        assert len(writeback_receipts()) == 1
+        original_log = log.read_bytes()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            replay_rc = main([*argv, "--resume-turn-key", failed["resume_turn_key"]])
+        replay = json.loads(output.getvalue())
+        assert replay_rc == 0 and not any(replay["effects"].values()), replay
+        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
+        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+        # A separate new capture stays subject to disabled configuration.
+        new_workspace = project / "new-disabled-workspace"
+        new_workspace.mkdir()
+        new_host = new_workspace / "host.py"
+        new_host.write_text(host)
+        new_argv = list(argv)
+        new_argv[new_argv.index("--project") + 1] = str(new_workspace)
+        new_argv[new_argv.index("--host-adapter-command-json") + 1] = json.dumps([sys.executable, str(new_host)])
+        new_argv += ["--turn-instance-id", "new-disabled-yardstick"]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            new_rc = main(new_argv)
+        rejected = json.loads(output.getvalue())
+        assert new_rc != 0, rejected
+        assert rejected["error"] == "work yardstick capture requires explicit yardstick_enabled configuration"
+        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
+        assert len(writeback_receipts()) == 1
+        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+
+
 @pytest.mark.parametrize("mode", ["evidence", "planning"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path, monkeypatch, mode, provider):
@@ -162,3 +493,11 @@ def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path
     assert rc == 0, spent
     assert _spend_run_count(runtime) == 1
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
+
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_turn_recovers_committed_yardstick_after_disable(tmp_path, monkeypatch, provider):
+    test_turn_recovers_requested_delivery_from_original_run(
+        tmp_path, monkeypatch, provider, "progress", "turn", with_yardstick=True,
+    )

@@ -1,0 +1,147 @@
+name: loopx-authority
+x-app: &app
+  image: loopx/remote-authority:${LOOPX_IMAGE_ID:?unpack a generated bundle}
+  pull_policy: never
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  cpus: "0.50"
+  mem_limit: 512m
+  pids_limit: 128
+  logging: &bounded-logs
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "3"
+services:
+  secrets:
+    <<: *app
+    build:
+      context: .
+      args:
+        LOOPX_REVISION: ${LOOPX_REVISION:?unpack a generated bundle}
+        LOOPX_SOURCE_SHA256: ${LOOPX_SOURCE_SHA256:?unpack a generated bundle}
+    user: "0:0"
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    network_mode: none
+    tmpfs: [/tmp]
+    command: [node, --experimental-strip-types, provision.mjs, secrets]
+    volumes:
+      - pg-admin:/secrets/admin
+      - pg-auth:/secrets/pg-auth
+      - pg-data:/secrets/database:ro
+      - gateway:/secrets/gateway
+      - reader-gateway:/secrets/reader-gateway
+      - client-a:/secrets/client-a
+      - client-b:/secrets/client-b
+      - reader:/secrets/reader
+      - health:/secrets/health
+  db:
+    image: public.ecr.aws/docker/library/postgres:16.16-bookworm@sha256:a49f7438ba03589f9b1ca062f2da82e899b48ea1dc50d2449fa09a70be83ebca
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: authority
+      POSTGRES_USER: bootstrap
+      POSTGRES_PASSWORD_FILE: /secrets/pg-auth/postgres-password
+    volumes:
+      - pg-auth:/secrets/pg-auth:ro
+      - pg-data:/var/lib/postgresql/data
+    networks: [backend]
+    cpus: "0.75"
+    mem_limit: 768m
+    pids_limit: 128
+    logging: *bounded-logs
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, bootstrap, -d, authority]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+  setup:
+    <<: *app
+    user: "0:0"
+    cap_add: [DAC_OVERRIDE]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: [node, --experimental-strip-types, provision.mjs, database]
+    volumes:
+      - pg-admin:/secrets/admin
+      - pg-auth:/secrets/pg-auth:ro
+      - gateway:/secrets/gateway:ro
+    networks: [backend]
+  gateway:
+    <<: *app
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    command: [node, --experimental-strip-types, launch.mjs, gateway]
+    volumes:
+      - gateway:/secrets/gateway:ro
+      - health:/secrets/health:ro
+    networks: [frontend, backend]
+    ports:
+      - "127.0.0.1:${LOOPX_PORT:-8443}:8443"
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, --experimental-strip-types, launch.mjs, health]
+      interval: 3s
+      timeout: 4s
+      retries: 25
+  client-a:
+    <<: *app
+    profiles: [clients]
+    entrypoint: [node, --experimental-strip-types, launch.mjs, client]
+    volumes:
+      - client-a:/secrets/client:ro
+    networks: [frontend]
+  client-b:
+    <<: *app
+    profiles: [clients]
+    entrypoint: [node, --experimental-strip-types, launch.mjs, client]
+    volumes:
+      - client-b:/secrets/client:ro
+    networks: [frontend]
+  reader-gateway:
+    <<: *app
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    command: [node, --experimental-strip-types, launch.mjs, reader-gateway]
+    volumes:
+      - reader-gateway:/secrets/reader-gateway:ro
+      - reader:/secrets/client:ro
+    networks: [frontend, backend]
+    ports:
+      - "127.0.0.1:${LOOPX_READ_PORT:-8444}:8443"
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, --experimental-strip-types, launch.mjs, reader-health]
+      interval: 3s
+      timeout: 4s
+      retries: 25
+  client-reader:
+    <<: *app
+    profiles: [clients]
+    entrypoint: [node, --experimental-strip-types, launch.mjs, client]
+    environment:
+      LOOPX_SERVICE_HOST: reader-gateway
+    volumes:
+      - reader:/secrets/client:ro
+    networks: [frontend]
+networks:
+  backend:
+    internal: true
+  frontend:
+volumes:
+  pg-admin:
+  pg-auth:
+  pg-data:
+  gateway:
+  reader-gateway:
+  client-a:
+  client-b:
+  reader:
+  health:

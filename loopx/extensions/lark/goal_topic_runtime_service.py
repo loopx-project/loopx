@@ -24,6 +24,7 @@ from .goal_channel_contracts import bindings_for_goal
 from .manager_context import session_turn_effect
 from .private_steward_triage import TRIAGE_CARD_ACTION, capture_callback, profile_supports_cards
 from .team_plan_confirmation import (
+    TeamPlanReviewCallbackStream,
     active_profile_chat_ids,
     deliver_team_plan_review_cards_from_runtime,
     handle_lark_review_callback_for_profile,
@@ -228,10 +229,17 @@ class LarkGoalTopicRuntimeService:
                     # full. Attempts retain fairness within each class. This
                     # local hint never admits/replays a request or skips its
                     # original grant and provider-attempt checks.
-                    recovering = {path: recovery_path(path) for path in ready}
+                    recovering: dict[Path, bool] = {}
+                    for path in ready:
+                        try:
+                            recovering[path] = recovery_path(path)
+                        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                            # Keep an already discovered request eligible for the next
+                            # scan. Its historical discovery may be backed off.
+                            continue
                     due_background = sum((reports_ready, attention_ready, ingress_ready, discovery_ready))
                     scheduled_body = False
-                    for path in sorted(ready, key=lambda path: (recovering[path], attempted.get(path, 0))):
+                    for path in sorted(recovering, key=lambda path: (recovering[path], attempted.get(path, 0))):
                         occupied = len(pending) + active_background
                         if occupied >= 4 or self._closed.is_set():
                             break
@@ -372,11 +380,11 @@ class LarkGoalTopicRuntimeService:
                 if not stop.is_set() and profile in snapshot
             ]
         if self.private_conversations is not None:
-            readiness = self.private_conversations.steward_callback_readiness
+            streams = self.private_conversations.steward_callback_streams
             for profile, app_id in workers:
-                probe = readiness.get((profile, app_id))
-                if probe is not None and not probe():
-                    snapshot[profile]["callback_error_code"] = "lark_review_callback_source_disconnected"
+                stream = streams.get((profile, app_id))
+                if stream is not None and (error := stream.readiness_error()):
+                    snapshot[profile]["callback_error_code"] = error
         return snapshot
 
     @staticmethod
@@ -695,11 +703,11 @@ class LarkGoalTopicRuntimeService:
                                 route, self.runtime_controller
                             )
 
-                        def register_callback_probe(probe: Callable[[], bool]) -> None:
-                            readiness = self.private_conversations.steward_callback_readiness
+                        def register_callback_stream(stream: TeamPlanReviewCallbackStream) -> None:
+                            streams = self.private_conversations.steward_callback_streams
                             key = (profile, app_id)
-                            readiness[key] = probe
-                            leases.callback(readiness.pop, key, None)
+                            streams[key] = stream
+                            leases.callback(streams.pop, key, None)
 
                         process_options = {"process_factory": start_consumer} if self.private_conversations is not None else {}
                         try:
@@ -714,7 +722,7 @@ class LarkGoalTopicRuntimeService:
                                 capture_mention=capture,
                                 private_admitter=private_admitter,
                                 proposal_deliverer=deliver_proposals,
-                                callback_availability_sink=register_callback_probe if private_steward_callbacks else None,
+                                callback_availability_sink=register_callback_stream if private_steward_callbacks else None,
                                 review_callback_handler=(
                                     handle_review_callback
                                     if private_steward_callbacks or (

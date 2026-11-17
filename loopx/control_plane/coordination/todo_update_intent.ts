@@ -7,7 +7,7 @@ import {isDeferredReopen} from "./todo_deferred_lifecycle.ts";
 import {planTodoPriority} from "../todos/priority.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorityBytes,
-  requireAuthorityStoreId} from "./authority_store_codec.ts";
+  requireAuthorityBoolean, requireAuthorityDate, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {canonicalTodoRecord} from "./todo_presentation.ts";
 import {planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
@@ -146,12 +146,8 @@ export function normalizeTodoUpdateEnvelope(
   if (raw.expected_role !== null && !["agent", "user"].includes(raw.expected_role)) {
     throw new AuthorityStoreProtocolError("expected_role must be agent or user");
   }
-  if (typeof raw.dry_run !== "boolean") {
-    throw new AuthorityStoreProtocolError("dry_run must be a boolean");
-  }
-  if (!(raw.now instanceof Date) || Number.isNaN(raw.now.valueOf())) {
-    throw new AuthorityStoreProtocolError("now must be a valid Date");
-  }
+  requireAuthorityBoolean(raw.dry_run, "dry_run");
+  requireAuthorityDate(raw.now, "now");
   return {...raw, ...(completion === undefined ? {} : {completion}),
     ...(observation === undefined ? {} : {monitor_observation: observation}),
     ...(validationRevision === undefined ? {} : {completion_validation_revision: validationRevision}),

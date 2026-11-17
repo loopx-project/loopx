@@ -59,6 +59,15 @@ baseline. Changes outside the list may still be valid Agent work. `no_delta`
 means no change in the observed material, not no progress on the whole task.
 Reading a test report does not run the test or independently certify its claim.
 
+Git metadata (`.git` at any path component) is excluded. On Windows this rule
+also applies to the normalized, workspace-relative path obtained from the opened
+file handle, so case variants and 8.3 aliases cannot bypass it. Before accepting
+a missing file or parent directory, capture applies the same rules to the
+deepest existing, identity-checked ancestor's canonical path plus the remaining
+components. Windows scope paths reject trailing dots/spaces, drive-relative
+names and alternate-stream syntax, whose absent components cannot be normalized
+by a handle. Capture fails closed if the canonical handle path cannot be obtained.
+
 For example, selecting only a function's file may omit the helper it calls and
 the test that exercises it. A judgment from that packet cannot certify the full
 behavior. Include relevant tests, results and dependencies deliberately; if the
@@ -112,9 +121,13 @@ certify model correctness or grant mutation authority.
 
 ## Run it
 
-Use Python 3.11+ and the Node runtime required by the LoopX checkout. This
-scoped collector targets POSIX file handling on Linux/macOS; Windows capture is
-not qualified and unsupported file primitives produce an unavailable observation.
+Use Python 3.11+ and the Node runtime required by the LoopX checkout. The
+scoped collector uses POSIX no-follow file handling on Linux/macOS and native
+handle, reparse-point, identity and canonical-path checks on Windows. Native
+Windows tests cover local NTFS capture; ACL-restricted and network-share
+behavior is not qualified. Unavailable file primitives or canonical paths
+produce an unavailable observation. Directory handles stay pinned during capture
+and can conflict with concurrent write/rename operations.
 The optional distribution is not part of the default LoopX wheel. Install from
 the source root into a fresh environment, then run the no-key checks:
 
@@ -124,6 +137,9 @@ uv pip install --python .venv-jev/bin/python -e '.[test]' -e packages/loopx-jev
 .venv-jev/bin/python -m pytest packages/loopx-jev/tests/test_drift.py packages/loopx-jev/tests/test_drift_cli.py -q
 .venv-jev/bin/loopx-jev drift --help
 ```
+
+On Windows, use `.venv-jev/Scripts/python.exe` and
+`.venv-jev/Scripts/loopx-jev.exe` in place of the `bin` entrypoints above.
 
 This implementation only observes task progress; other assessment directions
 and ranking code are not provided. Use `loopx_jev_drift_config_v0` and `minimum_label_probability`; old

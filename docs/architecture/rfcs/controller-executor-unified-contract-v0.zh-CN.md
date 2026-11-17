@@ -7,8 +7,8 @@
 - **交付成熟度：** 单 Worker 的 EdgeBench 入口已合入。#8484 在 C1 上验收通用双角色 Turn；跨准入延续、多题效果与成本、对话产品接入待验证。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-11-13
-- **源码版本：** main `9508f4de93`、C1 `9d283862e3`。§11 区分实现 PR 的实测、原始对照及待验收边界。
+- **最近规范性修订：** 2026-11-17
+- **源码版本：** main `f15ebdd16b`（§4–10 基线 `9508f4de93`，C1 `9d283862e3`）。§11 区分实现 PR 的实测、原始对照、减法治理及待验收边界。
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
 
@@ -52,7 +52,7 @@ flowchart TB
 | Controller 如何了解 worker、在哪里读写 | [会话发现与证据读取](#worker-session-discovery)、[共享工作环境与读写](#shared-workspace-and-tools) |
 | 没有用户新消息时，工作怎么持续推进 | [执行主循环](#controller-worker-main-loop) |
 | 干活时怎么交流、停止、恢复 | [异步时序](#asynchronous-control)、[注意力与插队](#controller-attention-and-preemption)、[故障隔离](#router-failure-recovery) |
-| 怎么交付、验证和删代码 | [依赖与切片](#delivery-path-from-current-state)、[产品验收](#superagent-acceptance)、第 8–11 节 |
+| 怎么交付、验证和删代码 | [依赖与切片](#delivery-path-from-current-state)、[产品验收](#superagent-acceptance)、[减法门禁](#subtraction-gate)、第 8–11 节 |
 | C1 字段、上下文、wire 与基线细节 | [技术附录](controller-executor-unified-contract-v0/contract-and-context.zh-CN.md) |
 
 中英互为语义镜像。主文维护当前设计；技术附录保留迁移细节，日期 ledger 保留历史证据。
@@ -1155,6 +1155,71 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
 及 [smoke 合并规则](../../development/good-smokes.md)。内部行为保持替换需要真实调用方/
 后端证据，无需新设置页面。改变调用方操作/readback 时，仍需 C8 的打包前端失败/恢复
 旅程及首屏证据。C1/默认采用的完整成本与收益资格不变；有界重构不代表完整 RFC 验收。
+
+<a id="subtraction-gate"></a>
+
+### 减法门禁与反上下文重力规则
+
+基于 `main@f15ebdd16b` 与 C1 PR `#8266`（跨 `289` 个文件 `+26,672 / -4,561`，净增
+`+22,111` 行）的实测表明：除非设立显式的减法门禁，否则名义上的“统一”工作仍会默认导致
+代码库净膨胀。
+
+#### 1. “统一”PR 为何反而推高净代码量（四类实测驱动因素）
+
+在 `#8266` 中，所有主要目录均出现净扩张而非缩减：
+
+| `#8266` 实测驱动因素 | 变更体量 | 观测到的根因机制 |
+| --- | --- | --- |
+| 只增不减的双语 RFC 与台账日志 | `docs/` 净增 `+9,564` 行（`+9,715 / -151`，含 `14` 个 `ledger/` 文件 `+7,749` 行及 RFC/附录 `+1,218 / -35` 行；仅 `2026-10-30-c1-source-convergence.{md,zh-CN.md}` 即 `+5,874` 行） | 把数千行按时间追加的执行流水账当作收敛证据，而非紧凑的边界与实证表。 |
+| 旧 × 新模式组合矩阵测试 | `tests/` 净增 `+9,976` 行（跨 `142` 个文件 `+12,074 / -2,098`） | 在重复的端到端 fixture 上对 `loopx_turn_envelope_v0`、`--context-delivery off` 与统一 schema 做笛卡尔积扩展，而未抽提共享不变量 oracle。 |
+| 运行时与 CLI 增补兼容适配层 | `loopx/` 净增 `+2,236` 行（跨 `92` 个文件 `+4,224 / -1,988`） | 在 `loopx/cli_commands/quota.py`、`quota_presentation.py`、`quota_capture.py`、`quota_context_reader.py` 增补推导 shim（如 `raw_quota_turn_view`、`compose_turn_decision_with_raw_envelope`、`--context-delivery off` 分支），保留旧视图而非退役被替代的 producer。 |
+| 跨语言 Python ↔ TS 包装重复 | `loopx/cli_commands/`（`+1,639 / -645`）、`loopx/control_plane/*.py`（`+1,167 / -685`）、`loopx/control_plane/*.ts`（`+1,080 / -532`） | 在 TypeScript owner 旁长期保留 Python 投影与编排包装。 |
+
+相同的“门面叠加”模式也出现在开放中的统一 PR `#8484`（`+1,979 / -174`，`41` 个文件）和
+`#7568`（`+6,230 / -349`，`56` 个文件）上，与聚焦规范修订的 `#8749`（`+538 / -2`，已合入）
+以及 `#5072`、`#8787` 所跟踪的结构/CI 膨胀问题形成对照。
+
+#### 2. 上下文重力 vs. 保留伤疤的减法
+
+在 `main@f15ebdd16b` 上，仓库受跟踪代码/脚本总计约 `1.79M` 行（`1,785,239` 行，覆盖
+`loopx/`：`1,864` 文件 / 约 `658k` 行；`tests/`：`1,956` 文件 / 约 `727k` 行；`examples/`：
+`688` 文件 / 约 `204k` 行，以及 `apps/`、`packages/`、`scripts/` 与 `benchmark/`），另有
+`docs/architecture/rfcs/ledger/` 下的 `152` 个文件（约 `11.5k` 行）及[小内核 RFC](monorepo-distribution-split-v0.zh-CN.md)
+附录 A 中约 `3,990` 行历史台账。
+
+- **上下文重力：** 当强模型被置入 `1.79M` 行规模的代码树中，往往默认把既有模块、CLI 开关
+  与历史投影视作不可移除的前提，从而在旧代码外层包裹兼容适配器，而不是化简退役。
+- **保留伤疤的减法：** LoopX 的持久护城河不是包装面或代码行数，而是**四项不可替代的内核
+  不变量**——（1）排他租约与写入/代际围栏、（2）默认拒绝的权限与 ACL/受众隔离、（3）一次性
+  幂等结算回执、（4）同源反事实检查点与评估台账——以及**失败反例测试集**（负例、变异与
+  恢复反例）。合法的减法删除失效 pilot、冗余包装与无引用脚本，同时完整保留全部内核不变量
+  与失败反例。
+
+#### 3. 具名退役清单与棘轮规则
+
+所有 C1–C9 及相关收敛 PR 均执行以下门禁（与[小内核减法门禁](monorepo-distribution-split-v0.zh-CN.md#subtraction-gate)联动）：
+
+1. **退役 Turn 前置 pilot CLI 子命令与顶层模块。** 删除已被 `loopx turn`（`turn_driver/codex_cli.py`）、
+   `start-goal` 与 `codex_app` heartbeat 替代的 `codex-cli-*` pilot/证明子命令（共 `15` 个
+   pilot/证明子命令，其中 `14` 个在非 pilot 生产路径中零调用方，另有 `codex-cli-session-probe`
+   仅在 `loopx/project_prompt.py` 中作为提示字符串引用），连同 `4` 个顶层 `loopx/codex_cli_*.py`
+   模块（`3,767` 行）与 `6` 个 `loopx/cli_commands/starter_*.py` 包装（`859` 行）；保留正在使用的
+   `codex-cli-bootstrap-message` 与 `turn_driver/codex_cli.py`。
+2. **归并剩余顶层目录并严格单向下调棘轮。** 将剩余 `20` 个顶层 `loopx/chat_*.py`（`20,562` 行）
+   迁入 `loopx/chat/`，将 `9` 个 `loopx/*_goal_mode/` 目录（`59` 文件 / `17,655` 行；其中
+   `33` 个 `.py` / `7,062` 行）迁入 `loopx/hosts/`，并在删除或迁出顶层模块同一 PR 内同步下调
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json) 中的
+   `max_top_level_modules`（当前 `127`）（见[小内核 RFC 减法门禁](monorepo-distribution-split-v0.zh-CN.md#subtraction-gate)）。
+3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
+   测得 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
+   并按 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
+   CLI 行为的 `examples/cli-*-command-modularization-smoke.py`。
+4. **约束 RFC 与台账体量。** 规范文档与 `ledger/` 条目仅保留紧凑的边界、不变量、退役清单与
+   实证表，不再追加数千行时间流水账。
+5. **所有兼容视图必须自带退出门禁（C1/C9 完成硬门槛）。** 任何过渡性 `v0` 投影
+   （`loopx_turn_envelope_v0`、`raw_quota_turn_view`）、`legacy_fallback` 路径或关闭模式开关
+   （`--context-delivery off`）都必须具名活跃消费者、运行时可观测计数与确切删除里程碑。
+   在被替代的重复 producer 与组合开关真正删除前，C1/C9 收敛均未完成。
 
 ## 12. 待决事项
 
