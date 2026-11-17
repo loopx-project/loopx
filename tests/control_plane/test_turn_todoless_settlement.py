@@ -16,7 +16,7 @@ from loopx.control_plane.todos.active_state_todo_parser import parse_active_stat
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope, turn_envelope_action_signature_document
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
-from tests.control_plane.host_process_fixture import write_python_host_fixture
+from tests.control_plane.host_process_fixture import assert_host_task_context, write_python_host_fixture
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, _classification_count, _configure_autonomous_replan_fixture,
     _initialize_git_checkout, _run_cli, _write_fixture,
@@ -146,30 +146,32 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
     assert identity["replan_obligation_id"] in prompt
     # Inspect the actual model input, not only the saved complete fixture.
     request = json.loads(prompt.split("Turn request:\n", 1)[1])
-    authority = request["task_context"]
-    assert authority["replan_action_packet"]["obligation_id"] == identity["replan_obligation_id"]
-    packet = request["detail_ref"]["replan_action_packet"]
+    detail = request["detail_ref"]
+    assert journal["plan"]["detail_ref"] == detail
+    # Recover the original signed source from the reader the Host received,
+    # without re-entering quota or requiring the model to carry a second copy.
+    captured = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True)
+    source = json.loads(captured.stdout)
+    assert source == journal["plan"]["work_contract"]
+    context = assert_host_task_context(request, source)
+    assert context["replan_action_packet"]["obligation_id"] == identity["replan_obligation_id"]
+    assert "core_goal" not in context  # The mandatory review owns its model copy.
+    assert source["replan_action_packet"]["obligation_id"] == identity["replan_obligation_id"]
+    assert source["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+    packet = detail["replan_action_packet"]
     assert "read autonomous_replan_obligation.replan_context" not in prompt
     assert "Read detail_ref.replan_action_packet.review" in prompt
-    assert "core_goal" not in authority  # The mandatory review owns its only model copy.
     stages = {}
     for stage in ("review", "writeback"):
         command = shlex.split(packet[stage])
         read = subprocess.run(command, capture_output=True, text=True, check=True)
         stages[stage] = json.loads(read.stdout)
         assert stages[stage]["obligation_id"] == identity["replan_obligation_id"]
+        assert stages[stage]["source_hash"] == request["source_decision_hash"]
     assert stages["review"]["core_goal"]["objective"] == guard["autonomous_replan_obligation"]["replan_context"]["core_goal"]["objective"]
     assert stages["review"]["context_id"] == stages["writeback"]["context_id"]
     assert stages["writeback"]["writeback"]["settlement_plan"]["identity"] == identity
     assert _classification_count(runtime, "quota_slot_spent") == 1
-    # Read the actual source referenced in the Host prompt, preserving the
-    # original observation instead of re-entering quota to reconstruct it.
-    detail = request["detail_ref"]
-    assert journal["plan"]["detail_ref"] == detail
-    captured = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True)
-    source = json.loads(captured.stdout)
-    assert source["replan_action_packet"]["obligation_id"] == identity["replan_obligation_id"]
-    assert source["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
     code, replay = _run_turn(project, runtime, registry, host, resume=result["resume_turn_key"])
     assert code == 0 and not any(replay["effects"].values()), replay
     assert (project / "host-count.txt").read_text() == "1"
