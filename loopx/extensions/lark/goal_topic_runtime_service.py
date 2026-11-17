@@ -207,6 +207,15 @@ class LarkGoalTopicRuntimeService:
                     for path in paths:
                         if path not in pending:
                             ready.setdefault(path, None)
+                    active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
+                    # A due scan can discover a newly committed App reply before
+                    # it has an outbox entry. Reserve one slot in the existing pool
+                    # before recurring delivery attempts can fill every slot.
+                    if (callable(body_paths) and discovery is None and time.monotonic() >= discovery_due
+                            and len(pending) + active_background < 4 and not self._closed.is_set()):
+                        discovery = pool.submit(transport.pending_delivery_paths)
+                        discovery.add_done_callback(lambda _: self._delivery_wakeup.set())
+                        active_background += 1
                     owner_attention = getattr(transport, "owner_attention", None)
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())
@@ -225,7 +234,6 @@ class LarkGoalTopicRuntimeService:
                     # local hint never admits/replays a request or skips its
                     # original grant and provider-attempt checks.
                     recovering = {path: recovery_path(path) for path in ready}
-                    active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
                     due_background = sum((reports_ready, attention_ready, ingress_ready))
                     scheduled_body = False
                     for path in sorted(ready, key=lambda path: (recovering[path], attempted.get(path, 0))):
@@ -253,14 +261,6 @@ class LarkGoalTopicRuntimeService:
                             and len(pending) + int(reports is not None) + int(attention is not None)
                             + int(ingress is not None) + int(discovery is not None) < 3 and not self._closed.is_set()):
                         feedback = pool.submit(app_feedback)
-                    # One discovery pass uses this same bounded pool. Its slow
-                    # native/history observations cannot hold the scanner that
-                    # discovers fresh captures and already generated answers.
-                    if (callable(body_paths) and discovery is None and time.monotonic() >= discovery_due
-                            and len(pending) + int(feedback is not None) + int(reports is not None)
-                            + int(attention is not None) + int(ingress is not None) < 4 and not self._closed.is_set()):
-                        discovery = pool.submit(transport.pending_delivery_paths)
-                        discovery.add_done_callback(lambda _: self._delivery_wakeup.set())
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
 

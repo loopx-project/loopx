@@ -8456,7 +8456,8 @@ def test_original_reply_gets_free_worker_when_background_checks_are_due(ordinary
         runtime.close()
 
 
-def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path):
+@pytest.mark.parametrize("bodies_already_pending", [False, True])
+def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path, bodies_already_pending):
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
     scanning, release_scan, full, release_bodies = (threading.Event() for _ in range(4))
@@ -8482,15 +8483,22 @@ def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog
 
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
         runtime_controller=None, private_conversations=Pending())
-    service.start()
-    closer = None
-    try:
-        assert scanning.wait(5)
+
+    def queue_original_requests():
         for index in range(9):
             path = tmp_path / str(index)
             path.write_text("durable original request")
             bodies.append(path)
-        service._delivery_wakeup.set()
+
+    if bodies_already_pending:
+        queue_original_requests()
+    service.start()
+    closer = None
+    try:
+        assert scanning.wait(5), "Pending bodies starved discovery of new App replies"
+        if not bodies_already_pending:
+            queue_original_requests()
+            service._delivery_wakeup.set()
         assert full.wait(4)
         assert len(calls) == 3 and len(set(calls)) == 3  # One scan plus three replies, total four.
         closer = threading.Thread(target=service.close)
