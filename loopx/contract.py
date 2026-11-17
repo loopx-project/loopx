@@ -1831,13 +1831,27 @@ def check_contract(
     return project_contract_health_for_goal(payload, goal_id=goal_id_filter)
 
 
+# Report members that name a Goal, Agent or Turn are identities, not prose.
+# Rewriting them would fold two distinct identities into one spelling - a Goal
+# whose id holds an undecodable byte and a Goal literally named like its escape
+# would share a key and one set of errors.  Identities keep their own spelling;
+# the JSON writer escapes only the code points a UTF-8 stream cannot carry.
+REPORT_IDENTITY_MEMBERS = frozenset(
+    {"goal_id", "goal_ids", "agent_id", "turn_instance_id", "goal_ref"}
+)
+
+
 def display_report_value(value: Any) -> Any:
-    """Project every string a check report can carry onto a UTF-8 spelling.
+    """Project the display strings of a check report onto a UTF-8 spelling.
 
     Findings name Git paths, warnings quote the registry and runtime roots, and
     the boundary scan carries its own path strings.  One report boundary keeps
     all of them decodable without changing ordinary text; see
     :func:`loopx.paths.display_report_text`.
+
+    Identity members and mapping keys are left exactly as the producer wrote
+    them: a display label is not an identity, and recovering the original Goal
+    id has to stay possible from the structured report.
     """
 
     if isinstance(value, str):
@@ -1848,8 +1862,11 @@ def display_report_value(value: Any) -> Any:
         return [display_report_value(item) for item in value]
     if isinstance(value, dict):
         return {
-            (display_report_text(key) if isinstance(key, str) else key):
-                display_report_value(item)
+            key: (
+                item
+                if isinstance(key, str) and key in REPORT_IDENTITY_MEMBERS
+                else display_report_value(item)
+            )
             for key, item in value.items()
         }
     return value
