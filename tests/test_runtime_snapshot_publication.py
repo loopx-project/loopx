@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -88,10 +89,18 @@ def publication(tmp_path):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     for stem, suffix in (("loopx-runtime", ".tar.gz"), ("loopx-resources", ".tar.gz"),
-                         ("runtime-inventory", ".json"), ("qualification", ".json")):
+                         ("runtime-inventory", ".json")):
         (runtime / f"{stem}-{REVISION}{suffix}").write_bytes(f"{stem}:immutable".encode())
-    manifest = json.dumps({"source_revision": REVISION, "urls": [
+    archive = runtime / f"loopx-runtime-{REVISION}.tar.gz"
+    manifest = json.dumps({"source_revision": REVISION, "channel": "main",
+        "size": archive.stat().st_size, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "urls": [
         f"https://github.com/example/loopx/releases/download/{SNAPSHOT}/loopx-runtime-{REVISION}.tar.gz"]})
+    qualification = {"ok": True, "source_revision": REVISION, "channel": "main",
+        "bytes": archive.stat().st_size, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "clean_install": True, "upgrade": True, "doctor": True, "skills": True,
+        "frontend_bundle_contract": True, "frontend_http": True,
+        "no_frontend_build_tools": True, "license_notices": True, "activation_failure_restored": True}
+    (runtime / f"qualification-{REVISION}.json").write_text(json.dumps(qualification), encoding="utf-8")
     (runtime / "loopx-runtime.json").write_text(manifest, encoding="utf-8")
     (runtime / f"loopx-runtime-{REVISION}.json").write_text(manifest, encoding="utf-8")
     assets = {f"historical-{i}": b"historical".hex() for i in range(999)}
@@ -119,6 +128,42 @@ def publish(root):
     return subprocess.run(["bash", "-c", functions + PUBLISH], cwd=root,
         env={**os.environ, "GITHUB_REPOSITORY": "example/loopx", "FAKE_GITHUB_STATE": str(root / "github.json")},
         capture_output=True, text=True, encoding="utf-8", timeout=30, check=False)
+
+
+@pytest.mark.parametrize("failure", [
+    "missing", "invalid_json", "failed", "incomplete", "wrong_revision", "wrong_channel",
+    "wrong_size", "wrong_digest", "archive_changed", "manifest_changed", "frozen_manifest_changed", "truthy_status",
+])
+def test_unqualified_runtime_never_changes_remote_state(publication, failure):
+    qualification = publication / "runtime" / f"qualification-{REVISION}.json"
+    record = json.loads(qualification.read_text(encoding="utf-8"))
+    if failure == "missing":
+        qualification.unlink()
+    elif failure == "invalid_json":
+        qualification.write_text("{", encoding="utf-8")
+    elif failure == "frozen_manifest_changed":
+        (publication / "runtime" / f"loopx-runtime-{REVISION}.json").write_text("{}", encoding="utf-8")
+    elif failure in {"archive_changed", "manifest_changed"}:
+        if failure == "archive_changed":
+            (publication / "runtime" / f"loopx-runtime-{REVISION}.tar.gz").write_bytes(b"unqualified bytes")
+        else:
+            manifest = publication / "runtime/loopx-runtime.json"
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data["channel"] = "stable"
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+    else:
+        if failure == "incomplete":
+            del record["activation_failure_restored"]
+        else:
+            field, value = {"failed": ("ok", False), "wrong_revision": ("source_revision", PREVIOUS),
+                "wrong_channel": ("channel", "stable"), "wrong_size": ("bytes", 1),
+                "wrong_digest": ("sha256", "0" * 64), "truthy_status": ("clean_install", "true")}[failure]
+            record[field] = value
+        qualification.write_text(json.dumps(record), encoding="utf-8")
+    before = read_state(publication)
+    result = publish(publication)
+    assert result.returncode != 0
+    assert read_state(publication) == before
 
 
 def test_full_legacy_release_keeps_history_and_publishes_then_retries(publication):

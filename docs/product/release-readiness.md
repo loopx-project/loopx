@@ -261,6 +261,18 @@ Reserve `qualification.json` for the workflow's attested runtime qualification.
 Use `RELEASE-QUALIFICATION.json` for a separately maintained release overview;
 GitHub Release asset names must also be unique when compared ignoring case.
 
+The main runtime publisher verifies its downloaded installation qualification
+against the source revision, channel, archive digest and byte count before any
+remote write. Every installation/recovery check must pass, and immutable metadata
+must match the candidate channel metadata. Missing, failed or mismatched evidence
+leaves the existing releases and channel untouched. This engineering qualification
+does not establish model outcomes, complete-cost benefit or C1 default adoption.
+
+main 运行时发布器在任何远端写入前，将下载的安装资格与源码提交、渠道、归档摘要及
+字节数逐项核对。安装和恢复检查必须全部通过，不可变元数据必须与候选渠道元数据一致。
+证据缺失、失败或不匹配时，保留已有发布及渠道。此工程资格不证明模型结果、完整成本收益
+或 C1 默认采用资格。
+
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,
