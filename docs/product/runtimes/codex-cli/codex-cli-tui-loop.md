@@ -102,18 +102,6 @@ generate the thin heartbeat body, set Codex CLI goal mode to `/goal <thin
 task_body>`, run the quota/status guard for the first snapshot, obey
 `interaction_contract`, preserve the visible TUI, and stop before longer work.
 
-Transcript-free first-run smoke packet:
-
-```bash
-loopx codex-cli-tui-bootstrap-smoke-bundle --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-This packet is for product and release validation, not an extra user step. It
-checks the PyPI-first install repair path, the copy-only paste block, the quota
-guard command, and the bounded writeback/spend commands without launching
-Codex, reading transcripts, inspecting session files, mutating a session, or
-spending quota.
-
 The first useful TUI response should be a control-plane snapshot, not a lecture
 about internals:
 
@@ -124,33 +112,8 @@ about internals:
 - next safe action.
 
 Registry paths, runtime roots, JSON payloads, local-driver plans,
-clone/canary setup, and visible-session proof fixtures are follow-up
-diagnostics. They should not be required before a first-time user sees the
-current goal/gate/todo state.
-
-Current pilot packet:
-
-```bash
-loopx codex-cli-one-message-loop-pilot --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-This command does not run Codex. It packages the first TUI paste message and
-the safe scheduler/executor bridge into one reviewable packet:
-
-- first turn: paste one LoopX message into the visible Codex CLI TUI;
-- first response: show goal id, concrete user gate or none, top user todo or
-  none, top agent todo, and next safe action;
-- first work segment: if the guard permits work, claim or choose one runnable
-  agent todo and complete one bounded validated segment in that same visible
-  TUI turn;
-- later scheduler: use `codex-cli-local-scheduler-exec` in dry-run mode by
-  default;
-- bridge side effects: require a fresh guard plus explicit candidate prefix or
-  blocker-writeback opt-in.
-
-The pilot is a contract check for the user experience. It is not a prerequisite
-for a first-time user; the first-time path remains "paste one message and watch
-the TUI."
+and clone/canary setup are follow-up diagnostics. They should not be required
+before a first-time user sees the current goal/gate/todo state.
 
 ### 2. Session-Attached Automation
 
@@ -168,210 +131,19 @@ A valid attachment needs:
 
 If Codex CLI cannot expose a safe session attachment primitive, LoopX
 should not fake it by writing hidden state. It should fall back to a transparent
-mode.
-
-Current probe:
-
-```bash
-loopx codex-cli-session-probe
-```
-
-The probe is help-only by default: it checks public Codex CLI command surfaces
-such as `codex --help`, `codex exec --help`, and `codex resume --help`. It does
-not read raw transcripts, credentials, local session files, or mutate a Codex
-session. The key distinction is deliberate: `exec` or `resume` support can be a
-useful fallback, but it is not evidence that LoopX can inject a visible
-turn into the same open TUI. Same-session automation requires an explicit
-visible attach/inject primitive plus an idle guard. A visible `resume [PROMPT]`
-or experimental `remote-control` surface is stronger than plain headless
-fallback, but it still belongs in a separate spike until LoopX proves the
-turn is visible, idle-guarded, interruptible, and not racing a human-typed TUI
-message.
-
-Current driver-plan prototype:
-
-```bash
-loopx codex-cli-visible-driver-plan --project . --goal-id <goal-id>
-```
-
-This command turns the probe result into a dry-run driver plan. It does not run
-Codex, read raw transcripts, read session files, mutate a Codex session, or
-spend LoopX quota. Its job is to choose one of three next modes:
-
-- `session_attached_visible_turn`: a future local driver may try the detected
-  visible attach primitive, but only behind quota guard and idle guard.
-- `visible_resume_or_remote_control_spike`: `resume [PROMPT]` or
-  `remote-control` exists, but it must prove that the turn is visible and
-  interruptible before LoopX treats it as session-attached automation.
-- `tui_bootstrap_only`: ask the user to start inside Codex CLI TUI. If the
-  probe only exposes `codex exec`, LoopX still stays in this mode
-  because headless fallback is disabled for the default `/goal` product path.
-
-Current local-driver planner:
-
-```bash
-loopx codex-cli-local-driver-plan --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-This command is the conservative MVP for automation setup. It composes the
-quota guard, visible-driver plan, TUI bootstrap command, headless-disabled
-boundary, and idle-guard requirement into a single dry-run packet. It
-does not run Codex, read transcripts, read session files, mutate a session, or
-spend quota.
-
-Current local-scheduler execution wrapper:
-
-```bash
-loopx codex-cli-local-scheduler-exec --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-Without explicit execution flags, this command is still a no-execution packet.
-For a later visible Codex CLI turn, it must also receive public-safe runtime
-idle evidence through `--observe-local-runtime ...` or `--idle-fixture
-<public-runtime-idle.json>`. A visible-session proof says the route is visible
-and interruptible; the runtime-idle detector says this exact later turn is not
-racing human typing or an already-running Codex turn. Missing runtime-idle
-evidence produces a precise blocker instead of a candidate command.
-
-With runtime-idle evidence and `--guard-checked`, a local scheduler may choose
-exactly one opt-in side effect:
-
-- `--execute-candidate --candidate-command-prefix <prefix>`: run a proven
-  visible candidate whose command starts with an allowed prefix.
-- `--execute-blocker-writeback`: run the precise LoopX blocker writeback
-  command when the tick says proof is missing.
-
-The wrapper reports only whether it ran, return code, timeout, and the selected
-kind. It discards stdout/stderr, does not read transcripts, does not inspect
-session files, does not mutate hidden Codex state, and does not spend Goal
-Harness quota. This keeps the first executable bridge narrow enough to test
-without turning the user's TUI into an opaque background daemon.
-
-Current visible local-driver pilot:
-
-```bash
-loopx codex-cli-visible-local-driver-pilot --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-This command still does not run Codex. It binds the first one-message TUI start
-to later scheduler ticks and makes the returning-user contract explicit:
-
-- later turns must remain visible to the user;
-- the user must be able to interrupt or take over;
-- a public-safe visible proof is required before resume, remote-control, or
-  same-TUI prompt candidates can run;
-- every later tick needs quota guard and idle guard;
-- candidate execution still requires `--guard-checked` plus an allowed command
-  prefix;
-- blocker writeback still requires `--guard-checked`;
-- the pilot never reads transcripts, session files, credentials, stdout, or
-  stderr, and never spends quota by itself.
-
-Current visible-session proof harness:
-
-```bash
-loopx codex-cli-visible-session-proof \
-  --project . \
-  --goal-id <goal-id> \
-  --agent-id <agent-id> \
-  --proof-fixture visible-proof.public.json
-```
-
-The proof fixture must be public-safe. It records booleans for user opt-in,
-quota guard, idle guard, turn visibility, interruptibility, private-data
-boundaries, and compact writeback planning. Passing this proof only means a
-future local driver may try that visible surface behind the same guards; it
-does not mean LoopX may read transcripts, read session files, mutate
-hidden session state, or bypass user gates.
-
-Current runtime-idle detector:
-
-```bash
-loopx codex-cli-runtime-idle-detector \
-  --project . \
-  --goal-id <goal-id> \
-  --agent-id <agent-id> \
-  --observe-local-runtime \
-  --observed-surface visible_resume_prompt \
-  --turn-state idle \
-  --probe-human-input-idle \
-  --checked-before-prompt \
-  --visible-to-user \
-  --user-can-interrupt \
-  --manual-takeover-available
-```
-
-This detector accepts either a public-safe fixture or a narrow local
-observation adapter. The local adapter may probe a coarse platform idle counter
-for "no recent human input" and requires an explicit visible `--turn-state
-idle`; unknown or running turn state fails closed. It is deliberately separate
-from the visible-session proof: the proof says "this route can create a
-visible, interruptible turn"; the idle detector says "this exact later turn is
-not racing human typing or an already-running Codex turn." It must prove no
-active human typing, no running turn, and no
-transcript/session/stdout/stderr/credential reads before LoopX treats a
-later visible prompt as executable.
-
-For reproducible tests or external sensors, the fixture path remains:
-
-```bash
-loopx codex-cli-runtime-idle-detector \
-  --project . \
-  --goal-id <goal-id> \
-  --agent-id <agent-id> \
-  --idle-fixture runtime-idle.public.json
-```
-
-Current same-TUI acceptance packet:
-
-```bash
-loopx codex-cli-visible-attach-acceptance \
-  --project . \
-  --goal-id <goal-id> \
-  --agent-id <agent-id> \
-  --proof-fixture visible-proof.public.json \
-  --idle-fixture runtime-idle.public.json
-```
-
-This packet is the promotion gate before LoopX treats later Codex CLI
-automation as safe same-TUI attach. It composes the help-only probe,
-visible-session proof, and runtime-idle detector. `remote-control` or `resume
-[PROMPT]` can pass as a visible spike candidate, but they are not accepted as
-same-TUI automation unless the proof surface is `same_tui_visible_attach` and
-the idle detector passes. If either proof or idle evidence is missing, the
-packet returns a precise blocker and keeps the one-message setup bootstrap as the
-primary path.
-
-The first public-safe proof pilot is recorded in
-[Codex CLI Visible Attach Proof Pilot](codex-cli-visible-attach-proof-pilot.md):
-current `resume` / `remote-control` evidence is promising, but still blocked
-until a visible same-TUI proof and runtime-idle evidence exist.
-
-The repeatable capture path is defined in
-[Codex CLI Visible Proof Capture Protocol](codex-cli-visible-proof-capture-protocol.md).
-It treats `resume` / `remote-control` as proof targets, keeps fixtures
-public-safe, and records blocker-first stop conditions before any later visible
-turn is promoted.
+mode. Explicit non-TUI isolated headless execution is handled by `loopx turn`
+(`turn_driver/codex_cli.py`), see [LoopX Turn quickstart](loopx-turn-codex-cli-quickstart.md)
+and [Automation driver audit](codex-cli-automation-driver.md).
 
 ### 3. Headless Disabled Boundary
 
-`codex exec` remains useful for scheduled or CI-like work, but it is not the
-primary product experience for interactive users. The default Codex CLI
-LoopX setup-then-`/goal` path does not expose a headless fallback, even
-as an opt-in, so a first-run packet cannot accidentally move work into hidden
-execution.
-
-Compatibility boundary:
-
-```bash
-loopx codex-cli-exec-handoff --project . --goal-id <goal-id>
-```
-
-This command no longer prints a runnable `codex exec` handoff script. It
-reports the disabled boundary and points back to
-`codex-cli-bootstrap-message --message-only` for use inside the visible TUI.
-It does not run Codex, read transcripts, read credentials, read session files,
-mutate a session, or spend quota.
+`codex exec` remains useful for scheduled or CI-like work via `loopx turn`, but
+it is not the primary product experience for interactive users. The default
+Codex CLI LoopX setup-then-`/goal` path does not expose a headless fallback,
+even as an opt-in, so a first-run packet cannot accidentally move work into
+hidden execution. The older pre-Turn pilot and probe subcommands have been
+retired in favor of `loopx codex-cli-bootstrap-message`, `loopx start-goal`,
+and `loopx turn`.
 
 ## Session-Attached Turn Algorithm
 
@@ -411,62 +183,18 @@ projects runnable candidates; it should not over-specify the model's local plan.
 1. **Bootstrap prompt**: ship a concise Codex CLI TUI paste message in README
    and getting-started docs.
 2. **No-clone install repair**: make the first-run agent path able to install
-   the CLI and reusable skills from a GitHub archive, while reserving
+   the CLI and reusable skills from PyPI or a GitHub archive, while reserving
    clone-plus-canary setup for contributors.
-3. **Bootstrap command**: add a LoopX command that prints a tailored
+3. **Bootstrap command**: `loopx codex-cli-bootstrap-message` prints a tailored
    Codex CLI bootstrap message for the current repo.
-4. **One-message loop pilot**: ship
-   `loopx codex-cli-one-message-loop-pilot` to bind the first TUI paste
-   message and the later scheduler/executor bridge into one public-safe packet.
-5. **Session probe**: document whether current Codex CLI exposes a stable
-   session id, resume handle, or safe injection primitive. The current
-   implementation is `loopx codex-cli-session-probe`; it separates
-   headless-disabled execution support, visible resume / remote-control spike
-   surfaces, and true same-open-TUI visible injection.
-6. **Visible driver plan**: generate a dry-run plan with
-   `loopx codex-cli-visible-driver-plan` so the next local driver knows
-   whether to attempt visible attach, run a resume/remote-control proof, or
-   keep the one-message setup bootstrap as the product path.
-7. **Local driver planner**: ship
-   `loopx codex-cli-local-driver-plan` as the dry-run command that
-   composes quota, visible-driver, TUI bootstrap, headless-disabled boundary,
-   and idle-guard requirements.
-8. **Visible-session proof harness**: validate public-safe observations with
-   `loopx codex-cli-visible-session-proof` before promoting
-   resume/remote-control into any same-session automation path.
-9. **Visible driver run packet**: add
-   `loopx codex-cli-visible-driver-run` as the no-execution packet that
-   decides whether the next turn needs visible proof, TUI bootstrap, or a
-   proven visible-session candidate.
-10. **Local scheduler tick**: add
-   `loopx codex-cli-local-scheduler-tick` as the first executor-facing
-   one-shot packet. It emits either an external command candidate or a precise
-   blocker writeback command, but does not run Codex, read session files, or
-   write LoopX state itself. Visible candidates require both
-   visible-session proof and runtime-idle detector approval; headless fallback
-   remains disabled for the default `/goal` path.
-11. **Local scheduler executor wrapper**: add
-   `loopx codex-cli-local-scheduler-exec` as the explicit opt-in bridge
-   that can run one tick result only after guard confirmation, runtime-idle
-   approval for visible candidates, and an allowed command prefix.
-12. **Visible local driver pilot**: ship
-   `loopx codex-cli-visible-local-driver-pilot` to bind the one-message
-   TUI start, scheduler executor, visible proof, idle guard, and no-transcript
-   boundary into one public-safe packet.
-13. **Runtime idle detector**: validate public-safe idle evidence with
-   `loopx codex-cli-runtime-idle-detector` before a visible later turn;
-   the command now supports fixture replay and a narrow local observation
-   adapter that can prove coarse human-input idle plus explicit visible
-   turn-state without reading transcripts, stdout/stderr, credentials, or
-   hidden session files.
-14. **Visible attach acceptance**: promote only a proven `same_tui_visible_attach`
-   route with passing runtime-idle evidence; keep `resume [PROMPT]` and
-   `remote-control` as visible spike candidates until they prove same-TUI
-   semantics.
-15. **Validation harness**: add a public-safe fixture that proves the driver
-   never stores raw transcript text and never spends quota before writeback.
-16. **Claude Code follow-up**: port the same product contract only after the
-   Codex CLI path is credible.
+4. **LoopX Turn driver**: `loopx turn plan` and `loopx turn run-once`
+   (`turn_driver/codex_cli.py`) replace the older pre-Turn pilot and probe
+   commands for bounded isolated-headless execution, validation, durable
+   writeback, and quota spend.
+5. **Same-open-TUI attach**: `interactive-visible` remains gated until Codex CLI
+   exposes a verified safe attach primitive with idle and interruption guarantees.
+6. **Claude Code follow-up**: port the same product contract across hosts via the
+   shared `start-goal` and `agent-onboard` surfaces.
 
 ## Success Criteria
 

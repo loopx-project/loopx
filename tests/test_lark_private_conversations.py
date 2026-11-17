@@ -8540,7 +8540,8 @@ def test_original_reply_gets_free_worker_when_background_checks_are_due(ordinary
         runtime.close()
 
 
-def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path):
+@pytest.mark.parametrize("bodies_already_pending", [False, True])
+def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path, bodies_already_pending):
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
     scanning, release_scan, full, release_bodies = (threading.Event() for _ in range(4))
@@ -8566,15 +8567,22 @@ def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog
 
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
         runtime_controller=None, private_conversations=Pending())
-    service.start()
-    closer = None
-    try:
-        assert scanning.wait(5)
+
+    def queue_original_requests():
         for index in range(9):
             path = tmp_path / str(index)
             path.write_text("durable original request")
             bodies.append(path)
-        service._delivery_wakeup.set()
+
+    if bodies_already_pending:
+        queue_original_requests()
+    service.start()
+    closer = None
+    try:
+        assert scanning.wait(5), "Pending bodies starved discovery of new App replies"
+        if not bodies_already_pending:
+            queue_original_requests()
+            service._delivery_wakeup.set()
         assert full.wait(4)
         assert len(calls) == 3 and len(set(calls)) == 3  # One scan plus three replies, total four.
         closer = threading.Thread(target=service.close)
@@ -8589,3 +8597,120 @@ def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog
         service._delivery_thread.join(5)
     assert not service._delivery_thread.is_alive()
     assert len(calls) == 3  # The other six durable requests were never submitted to the executor.
+
+
+def test_completed_original_reply_uses_only_free_slot_before_due_discovery(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_store import _read_json
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    store, runtime, provider, transport = connect(ordinary)
+    held, release, scan, delivered = (threading.Event() for _ in range(4))
+    clock, active, scans = [0.0], [], []
+    lock = threading.Lock()
+    blockers = [transport.root.parent / f"held-{i}.json" for i in range(3)]
+    for path in blockers:
+        path.write_text("durable historical fixture")
+    body_paths, reconcile = transport.pending_body_paths, transport.reconcile_request
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(transport, "pending_body_paths", lambda: [*blockers, *body_paths()])
+    monkeypatch.setattr(transport, "is_recovery_path", lambda path: path in blockers)
+    monkeypatch.setattr(transport, "reconcile_app_feedback", None)
+    monkeypatch.setattr(transport.owner_attention, "has_enabled", lambda: False)
+    monkeypatch.setattr(transport.steward_reports, "pending", lambda: False)
+
+    def discover():
+        scans.append(clock[0])
+        if len(scans) > 1:
+            scan.set()
+            assert release.wait(12)
+        return []
+
+    def deliver(path):
+        if path in blockers:
+            with lock:
+                active.append(path)
+                if len(active) == 3:
+                    held.set()
+            assert release.wait(12)
+            return 0
+        result = reconcile(path)
+        if _read_json(path).get("deliveries", {}).get("terminal", {}).get("verified"):
+            delivered.set()
+        return result
+
+    monkeypatch.setattr(transport, "pending_delivery_paths", discover)
+    monkeypatch.setattr(transport, "reconcile_request", deliver)
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport,
+        profile_poller=lambda _profile, stop: stop.wait(12))
+    service.start()
+    try:
+        assert held.wait(4)
+        event = provider.event("notes-app", "only-free-slot", "Answer the original question")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        ref = identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"])
+        request = transport.core.read_request(ref)
+        turn = runtime.wait_for_turn(session_id=request["session_id"], turn_id=request["turn_id"], timeout_sec=5)
+        assert turn["status"] == "completed"
+        clock[0] = 10.0
+        service._delivery_wakeup.set()
+        assert delivered.wait(3), "Due discovery took the only free slot ahead of the completed original reply"
+        assert scan.wait(3), "Discovery did not progress after the original reply released its slot"
+        assert not release.is_set()
+        terminal = _read_json(transport.root / f"{ref}.json")["deliveries"]["terminal"]
+        assert terminal["verified"] and terminal["text"] == turn["response"]["message"]
+        assert provider.messages[terminal["attempt"]["message_ref"]]["chat_id"] == event["chat_id"]
+        assert len(store.list_sessions()) == 1
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)
+        runtime.close()
+
+
+def test_due_discovery_progresses_when_only_free_slot_keeps_retrying_a_body(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    held, release, discovered = (threading.Event() for _ in range(3))
+    clock, calls, scans = [0.0], [], []
+    lock = threading.Lock()
+    paths = [tmp_path / str(i) for i in range(4)]
+    for path in paths:
+        path.write_text("durable request")
+
+    class Pending:
+        def pending_body_paths(self):
+            return paths
+
+        def pending_delivery_paths(self):
+            scans.append(clock[0])
+            if len(scans) > 1:
+                discovered.set()
+                assert release.wait(12)
+            return []
+
+        def reconcile_request(self, path):
+            with lock:
+                calls.append(path)
+                if all(item in calls for item in paths):
+                    held.set()
+            if path != paths[-1]:
+                assert release.wait(12)
+            return 0  # The unsent fourth body remains durably pending.
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=Pending())
+    service.start()
+    try:
+        assert held.wait(4)
+        clock[0] = 10.0
+        service._delivery_wakeup.set()
+        assert discovered.wait(4), "Repeated unsent-body attempts starved due App reply discovery"
+        assert not release.is_set()
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)

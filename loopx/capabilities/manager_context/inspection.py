@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from copy import deepcopy
@@ -487,6 +488,7 @@ class ManagerInspection:
         from ...control_plane.goals.activation import goal_activation_state
         from ...chat_manager_context import manager_turn_context
         try:
+            inventory_bytes = self.registry_path.read_bytes()
             inventory = self._registered_goals()
             permitted = sorted({g["id"] for g in inventory if ids is None or g["id"] in ids})
             if goal_id is not None:
@@ -503,22 +505,51 @@ class ManagerInspection:
                         pass  # Unknown activation stays visible as a source gap.
                 permitted = [gid for gid in permitted if gid not in stopped]
             selected = permitted[offset:offset + limit]
-            context = manager_turn_context(
-                self.registry_path,
-                {"channel_id": self.channel_id or ("manager" if self.owner_scope else "manager.external.inspection")},
-                self.runtime_root, authorized_goal_ids=ids, requested_goal_ids=selected,
-                include_stopped=include_stopped or goal_id is not None, include_details=False,
-            ) if selected else {"goals": [], "coverage": {"complete": True}}
+            page, contexts, collected = [], [], []
+            for selected_id in selected:
+                context = manager_turn_context(
+                    self.registry_path,
+                    {"channel_id": self.channel_id or ("manager" if self.owner_scope else "manager.external.inspection")},
+                    self.runtime_root, authorized_goal_ids=ids, requested_goal_ids=[selected_id],
+                    include_stopped=include_stopped or goal_id is not None, include_details=False,
+                )
+                if not self.scope_valid():
+                    return {"ok": False, "error": "authorization_changed"}
+                rows = context.get("goals", [])
+                if len(rows) != 1 or rows[0].get("goal_id") != selected_id:
+                    raise ValueError("requested portfolio row is unavailable")
+                contexts.append(context)
+                collected.extend(rows)
+                bounded = effect_runtime_result("presentation.goal_attention.bound", {"goals": collected})["goals"]
+                # Apply the existing encoded-row budget while collecting. At
+                # most one lookahead row is read again on the next page; do not
+                # collect every later Goal only to discard it in read(). A lone
+                # oversized row keeps the existing explicit gap/continuation.
+                if len(json.dumps(bounded, ensure_ascii=False)) > 24000 and page:
+                    break
+                page = bounded
+                if len(json.dumps(page, ensure_ascii=False)) > 24000:
+                    break
+            if self.registry_path.read_bytes() != inventory_bytes:
+                raise ValueError("Goal inventory changed during collection")
+            coverages = [context.get("coverage", {}) for context in contexts]
+            coverage = {"complete": all(c.get("complete") is True for c in coverages)}
+            for key in set().union(*(c.keys() for c in coverages)) - {"complete"}:
+                values = [c.get(key, 0) for c in coverages]
+                coverage[key] = ((max(values) if key == "invalid_registry_entries" else sum(values))
+                                 if all(type(v) is int for v in values) else None)
+            snapshot_id = ("sha256:" + hashlib.sha256(json.dumps(
+                contexts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                if contexts else None)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             return {"ok": False, "view": "portfolio", "error": "goal_inventory_unavailable"}
-        page = context.get("goals", [])
-        end = offset + len(selected)
+        end = offset + len(page)
         return {"ok": True, "view": "portfolio", "goal_id": goal_id, "rows": page,
                 "offset": offset, "included": len(page), "matched": len(permitted),
                 "next_offset": end if end < len(permitted) else None,
-                "source": {"source": "goal_portfolio", "snapshot_id": context.get("snapshot_id"),
-                           "coverage": context.get("coverage")},
-                "unknown": bool(context.get("warnings")) or len(page) != len(selected),
+                "source": {"source": "goal_portfolio", "snapshot_id": snapshot_id,
+                           "coverage": coverage},
+                "unknown": any(context.get("warnings") for context in contexts),
                 "initial_snapshot_id": self.context.get("snapshot_id"),
                 "source_id": "local", "source_host": "local"}
 

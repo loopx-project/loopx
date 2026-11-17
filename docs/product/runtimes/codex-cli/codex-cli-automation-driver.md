@@ -41,9 +41,10 @@ The remaining parity gaps are narrower:
   and scheduler hint without overlapping a live host turn; and
 - benchmark promotion still requires matched, countable comparative evidence.
 
-The older `codex-cli-local-scheduler-*` commands remain diagnostics and
-compatibility probes. They are not the default orchestration narrative and must
-not be composed manually as a second control plane.
+The older pre-Turn `codex-cli-local-scheduler-*` and pilot probe commands
+have been retired in favor of `loopx turn` (`turn_driver/codex_cli.py`).
+Callers should use `loopx turn plan` and `loopx turn run-once` rather than
+composing manual probe chains.
 
 ## Codex App Parity Matrix
 
@@ -200,9 +201,7 @@ or local artifact paths.
 ## Rollback And Non-goals
 
 The adapter must be disableable without changing LoopX goal state, normal CLI
-commands, or Codex App heartbeat operation. Old probe commands may remain as
-diagnostics until the consolidated driver covers their durable boundaries; they
-must not be the default product narrative.
+commands, or Codex App heartbeat operation.
 
 This route does not:
 
