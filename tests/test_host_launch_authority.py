@@ -468,12 +468,28 @@ def test_bound_host_cannot_dispatch_after_lease_expires(
     monkeypatch.setattr(owner, "prepare_codex_cli_input", renew_before_dispatch)
     if dispatch == "bridge":
         send = host_process_transport.GuardedHostBridge.send
+        cancel = host_process_transport.GuardedHostBridge.cancel
+        acknowledged_processes = []
+        terminated_processes = []
 
         def deliver_after_expiry(bridge, frame):
             wait_past_expiry(json.loads(frame)["lease_expires_at_ms"])
             return send(bridge, frame)
 
+        def observe_rejected_bridge_close(bridge):
+            if bridge.not_launched:
+                acknowledged_processes.append(bridge.process)
+                terminate = bridge.process.terminate
+
+                def observe_terminate():
+                    terminated_processes.append(bridge.process)
+                    terminate()
+
+                monkeypatch.setattr(bridge.process, "terminate", observe_terminate)
+            return cancel(bridge)
+
         monkeypatch.setattr(host_process_transport.GuardedHostBridge, "send", deliver_after_expiry)
+        monkeypatch.setattr(host_process_transport.GuardedHostBridge, "cancel", observe_rejected_bridge_close)
     else:
         launch_lifetime = FirstPartyHostGoalAdmission.launch_lifetime
         target = "codex_operation_turn_start" if operation_tools else "codex_cli_host_launch"
@@ -487,9 +503,12 @@ def test_bound_host_cannot_dispatch_after_lease_expires(
 
         monkeypatch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", pause_before_dispatch)
     code, result = _run(registry, runtime, project, arguments)
-    assert code == 1 and result["error_code"] == "task_lease_expired", result
+    assert code == 1 and result.get("error_code") == "task_lease_expired", result
     assert not turn_start.exists() and result["effects"]["host_invoked"] is False, result
     _assert_no_settlement(runtime, result)
+    if dispatch == "bridge":
+        assert len(acknowledged_processes) == 1 and acknowledged_processes[0].poll() == 0
+        assert not terminated_processes
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

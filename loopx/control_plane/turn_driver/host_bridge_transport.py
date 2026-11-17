@@ -121,7 +121,7 @@ class GuardedHostBridge:
                 # Host. This also handles suspension before JS handlers exist.
                 _export("force_terminate_process")(self.process, process_tree_owned=True)
                 self.not_launched = True
-            elif self.process.poll() is None:
+            elif not self.not_launched and self.process.poll() is None:
                 self.process.terminate()
                 if os.name == "posix":
                     # An owned suspended bridge must run its abort handler and

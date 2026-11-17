@@ -3069,6 +3069,11 @@ the Host after it receives the frame. An expired lease refuses dispatch before
 task work, work writeback or spending, including when the adapter has already
 bound a session for the original Turn.
 
+After the bridge acknowledges that no Host was launched, the parent drains its
+normal exit without sending a termination signal. This preserves the original
+lease-expiry refusal while still requiring confirmed cleanup. File/SQLite
+regressions check the refusal, the clean bridge exit and zero termination calls.
+
 File/SQLite cases exercise unchanged retries, capability and task changes,
 recovery in the original session, historical formats, and subprocess stdin.
 Visible Codex CLI JSON follows the complete source through the generated
