@@ -82,6 +82,11 @@
     "loopx/extensions/lark/private_conversations.py": {
       "lines": 2654
     },
+    "loopx/global_registry.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 954
+    },
     "loopx/heartbeat_prompt.py": {
       "any_count": 17,
       "dict_any_count": 0,
