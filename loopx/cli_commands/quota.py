@@ -887,6 +887,84 @@ def _can_upgrade_recovery_wait(
     return True
 
 
+def _execute_non_guard_quota_command(
+    args: argparse.Namespace,
+    context: QuotaCommandContext,
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+    goal_ref: dict[str, str] | None,
+) -> dict[str, object]:
+    status_payload = context.status_payload
+    runtime_root = context.runtime_root
+    if args.quota_command == "monitor-poll":
+        return _export("record_quota_monitor_poll_for_cli")(
+            args,
+            status_payload=status_payload,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            turn_instance_id=context.heartbeat_turn_id,
+            scheduler_execution_context=context.scheduler_context,
+            operator_inbox_urgency_projector=context.operator_inbox_urgency_projector,
+            goal_ref=goal_ref,
+            monitor_poll_recorder=_export("record_quota_monitor_poll"),
+            status_reloader=lambda: _export("collect_status")(
+                registry_path=registry_path,
+                runtime_root_override=runtime_root_arg,
+                limit=context.status_limit,
+                goal_id=context.status_goal_id,
+                available_capabilities=args.available_capabilities,
+                include_presentation_projections=False,
+            ),
+        )
+    if args.quota_command in {
+        "scheduler-ack",
+        "scheduler-ack-current",
+        "scheduler-fail-current",
+    }:
+        return _export("build_scheduler_followup_payload")(
+            status_payload,
+            args,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            turn_instance_id=context.heartbeat_turn_id,
+            scheduler_context=context.scheduler_context,
+            operator_inbox_urgency_projector=context.operator_inbox_urgency_projector,
+            goal_ref=goal_ref,
+        )
+    if args.quota_command == "spend-slot":
+        return _export("spend_quota_slot")(
+            status_payload,
+            goal_id=args.goal_id,
+            slots=args.slots,
+            execute=bool(args.execute),
+            source=args.source,
+            agent_id=args.agent_id,
+            available_capabilities=args.available_capabilities,
+            scheduler_execution_context=context.scheduler_context,
+            operator_inbox_urgency_projector=context.operator_inbox_urgency_projector,
+            todo_id=args.todo_id,
+            turn_instance_id=context.heartbeat_turn_id,
+            replan_obligation_id=args.replan_obligation_id,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
+        )
+    if args.quota_command == "void-slot":
+        return _export("void_quota_slot")(
+            status_payload,
+            goal_id=args.goal_id,
+            voided_run_generated_at=args.void_generated_at,
+            execute=bool(args.execute),
+            source=args.source,
+            reason_summary=args.reason_summary,
+            agent_id=args.agent_id,
+            operator_inbox_urgency_projector=context.operator_inbox_urgency_projector,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
+        )
+    return _export("build_quota_plan")(status_payload, mode=args.quota_command)
+
+
 def _execute_quota_command(
     args: argparse.Namespace,
     *,
@@ -928,8 +1006,6 @@ def _execute_quota_command(
             heartbeat_turn_id,
             detail_sections,
             runtime_root,
-            status_limit,
-            status_goal_id,
             status_payload,
             cache_metadata,
             scheduler_context,
@@ -938,8 +1014,6 @@ def _execute_quota_command(
             context.heartbeat_turn_id,
             context.detail_sections,
             context.runtime_root,
-            context.status_limit,
-            context.status_goal_id,
             context.status_payload,
             context.cache_metadata,
             context.scheduler_context,
@@ -1092,73 +1166,10 @@ def _execute_quota_command(
                             host_observation_resolver=_export("resolve_codex_app_automation_rrule"),
                         )
                         heartbeat_receipt_ready = True
-        elif args.quota_command == "monitor-poll":
-            payload = _export("record_quota_monitor_poll_for_cli")(
-                args,
-                status_payload=status_payload,
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                turn_instance_id=heartbeat_turn_id,
-                scheduler_execution_context=scheduler_context,
-                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                goal_ref=goal_ref,
-                monitor_poll_recorder=_export("record_quota_monitor_poll"),
-                status_reloader=lambda: _export("collect_status")(
-                    registry_path=registry_path,
-                    runtime_root_override=runtime_root_arg,
-                    limit=status_limit,
-                    goal_id=status_goal_id,
-                    available_capabilities=args.available_capabilities,
-                    include_presentation_projections=False,
-                ),
-            )
-        elif args.quota_command in {
-            "scheduler-ack",
-            "scheduler-ack-current",
-            "scheduler-fail-current",
-        }:
-            payload = _export("build_scheduler_followup_payload")(
-                status_payload,
-                args,
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                turn_instance_id=heartbeat_turn_id,
-                scheduler_context=scheduler_context,
-                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                goal_ref=goal_ref,
-            )
-        elif args.quota_command == "spend-slot":
-            payload = _export("spend_quota_slot")(
-                status_payload,
-                goal_id=args.goal_id,
-                slots=args.slots,
-                execute=bool(args.execute),
-                source=args.source,
-                agent_id=args.agent_id,
-                available_capabilities=args.available_capabilities,
-                scheduler_execution_context=scheduler_context,
-                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                todo_id=args.todo_id,
-                turn_instance_id=heartbeat_turn_id,
-                replan_obligation_id=args.replan_obligation_id,
-                registry_path=registry_path,
-                goal_ref=goal_ref,
-            )
-        elif args.quota_command == "void-slot":
-            payload = _export("void_quota_slot")(
-                status_payload,
-                goal_id=args.goal_id,
-                voided_run_generated_at=args.void_generated_at,
-                execute=bool(args.execute),
-                source=args.source,
-                reason_summary=args.reason_summary,
-                agent_id=args.agent_id,
-                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                registry_path=registry_path,
-                goal_ref=goal_ref,
-            )
         else:
-            payload = _export("build_quota_plan")(status_payload, mode=args.quota_command)
+            payload = _execute_non_guard_quota_command(
+                args, context, registry_path=registry_path, runtime_root_arg=runtime_root_arg, goal_ref=goal_ref,
+            )
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
     except CanonicalAuthorityRequired as exc:
