@@ -7,8 +7,8 @@
 - **Delivery maturity:** The single-worker EdgeBench entry is merged. #8484 qualifies a generic dual-role Turn on C1. Cross-admission continuity, multi-case benefit and conversation adoption remain open.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-11-13
-- **Source revisions:** main `9508f4de93`, C1 `9d283862e3`. Section 11 distinguishes implementation-PR evidence, original controls and open qualification.
+- **Last normative revision:** 2026-11-17
+- **Source revisions:** main `f15ebdd16b` (`9508f4de93` for §4–10 baseline, C1 `9d283862e3`). Section 11 distinguishes implementation-PR evidence, original controls, subtraction governance and open qualification.
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
 
@@ -55,7 +55,7 @@ flowchart TB
 | How does the controller inspect workers and read/write their environment? | [Session discovery and evidence](#worker-session-discovery), [shared workspace and tools](#shared-workspace-and-tools) |
 | What keeps work advancing without another user message? | [Primary execution loop](#controller-worker-main-loop) |
 | How do conversation, Stop and recovery work during execution? | [Asynchronous sequence](#asynchronous-control), [attention / preemption](#controller-attention-and-preemption), [failure isolation](#router-failure-recovery) |
-| What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), sections 8–11 |
+| What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), [Subtraction Gate](#subtraction-gate), sections 8–11 |
 | Where are C1 field, context, wire and baseline details? | [Technical annex](controller-executor-unified-contract-v0/contract-and-context.md) |
 
 English and Chinese are semantic mirrors. This main document owns current design;
@@ -1468,6 +1468,87 @@ settings screens. Changed caller-facing operations/readback retain C8's packaged
 frontend failure/recovery journey and first-screen evidence. C1/default-adoption
 complete-cost and benefit qualification remain unchanged; a bounded refactor is
 not full RFC acceptance.
+
+<a id="subtraction-gate"></a>
+
+### Subtraction Gate & Anti-Context-Gravity Rules
+
+Empirical audits on `main@f15ebdd16b` and C1 PR `#8266` (`+26,672 / -4,561`
+across `289` files, net `+22,111` LOC) show that nominal "unification" work
+defaults to net codebase growth unless bounded by an explicit subtraction gate.
+
+#### 1. Why "unification" PRs grew net LOC (four measured drivers)
+
+In `#8266`, every major tree expanded instead of shrinking:
+
+| Measured driver in `#8266` | Diff footprint | Observed root mechanism |
+| --- | --- | --- |
+| Append-only bilingual RFC & ledger logs | `+9,564` net in `docs/` (`+9,715 / -151`, incl. `+7,749` across `14` `ledger/` files and `+1,218 / -35` in RFC/annex diffs; `+5,874` in `2026-10-30-c1-source-convergence.{md,zh-CN.md}` alone) | Treating multi-thousand-line chronological execution diaries as convergence proof instead of compact boundary tables. |
+| Combinatorial old × new mode matrix tests | `+9,976` net in `tests/` (`+12,074 / -2,098` across `142` files) | Multiplying full end-to-end fixtures over `loopx_turn_envelope_v0`, `--context-delivery off`, and the unified schema instead of sharing invariant oracles. |
+| Additive compatibility adapters in runtime/CLI | `+2,236` net in `loopx/` (`+4,224 / -1,988` across `92` files) | Adding derivation shims (`raw_quota_turn_view`, `compose_turn_decision_with_raw_envelope`, `--context-delivery off` branches across `loopx/cli_commands/quota.py`, `quota_presentation.py`, `quota_capture.py`, `quota_context_reader.py`) instead of retiring replaced producers. |
+| Cross-language Python ↔ TS wrapper retention | `loopx/cli_commands/` (`+1,639 / -645`), `loopx/control_plane/*.py` (`+1,167 / -685`), `loopx/control_plane/*.ts` (`+1,080 / -532`) | Preserving Python projection/orchestration wrappers beside TypeScript owners. |
+
+The same additive-facade dynamics appear in open unification PRs `#8484`
+(`+1,979 / -174`, `41` files) and `#7568` (`+6,230 / -349`, `56` files), in
+contrast to concise normative changes such as `#8749` (`+538 / -2`, merged) and
+the structural hygiene tracked under `#5072` and `#8787`.
+
+#### 2. Context gravity vs. scar-preserving subtraction
+
+On `main@f15ebdd16b`, tracked code/script files total `~1.79M` LOC (`1,785,239`
+lines across `loopx/`: `1,864` files / `~658k` LOC; `tests/`: `1,956` files /
+`~727k` LOC; `examples/`: `688` files / `~204k` LOC; plus `apps/`, `packages/`,
+`scripts/`, and `benchmark/`), alongside `152` files (`~11.5k` LOC) under
+`docs/architecture/rfcs/ledger/` and `~3,990` lines of historical Appendix A logs
+in [the small-kernel RFC](monorepo-distribution-split-v0.md).
+
+- **Context gravity:** Frontier models operating inside a `1.79M`-LOC tree infer
+  that existing modules, CLI flags, and legacy projections are immutable
+  prerequisites, so they layer unified facades and compatibility shims on top
+  of old paths rather than simplifying.
+- **Scar-preserving subtraction:** LoopX's durable moat is not its wrapper
+  surface or raw line count; it is **four irreplaceable kernel invariants** —
+  (1) exclusive leases and writer/generation fencing, (2) default-deny authority
+  and ACL/scope isolation, (3) once-only idempotent settlement receipts, and
+  (4) same-origin counterfactual checkpoints and evaluation ledgers — together
+  with its **failure-counterexample test corpus** (negative, mutation, and
+  recovery cases). Valid subtraction deletes dead pilots, redundant wrappers,
+  and unreferenced scripts while keeping every kernel invariant and failure
+  counterexample intact.
+
+#### 3. Normative retirement backlog and ratchet rules
+
+All C1–C9 and related convergence PRs enforce the following gates (paired with
+[the small-kernel subtraction gate](monorepo-distribution-split-v0.md#subtraction-gate)):
+
+1. **Retire pre-Turn pilot CLI subcommands and top-level modules.** Delete the
+   superseded pre-Turn `codex-cli-*` pilot/proof subcommands (`15` pilot/proof
+   commands superseded by `loopx turn` via `turn_driver/codex_cli.py`,
+   `start-goal`, and `codex_app` heartbeat — `14` with zero non-pilot production
+   callers plus `codex-cli-session-probe` referenced only as a prompt hint in
+   `loopx/project_prompt.py`), the `4` top-level `loopx/codex_cli_*.py` modules
+   (`3,767` LOC), and their `6` `loopx/cli_commands/starter_*.py` wrappers (`859`
+   LOC), keeping live `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py`.
+2. **Consolidate remaining top-level packages and ratchet strictly downward.**
+   Migrate the remaining `20` top-level `loopx/chat_*.py` modules (`20,562` LOC)
+   into `loopx/chat/` and `9` `loopx/*_goal_mode/` packages (`59` files /
+   `17,655` lines; `33` `.py` / `7,062` LOC) into `loopx/hosts/`, decrementing
+   `max_top_level_modules` in [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   (currently `127`) in the same PR as every deleted or moved top-level module.
+3. **Prune unreferenced `examples/` and source-text-pinning smokes.** Remove
+   unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
+   `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on
+   `main@f15ebdd16b`) and retire the `14` source-text-pinning
+   `examples/cli-*-command-modularization-smoke.py` checks that assert internal
+   Python names instead of shipped CLI behavior per [good-smokes](../../development/good-smokes.md).
+4. **Bound RFC and ledger growth.** Record changes as compact normative
+   boundary, invariant, retirement, and evidence tables rather than
+   multi-thousand-line chronological diaries.
+5. **Exit-gate every compatibility view.** Any transitional `v0` projection
+   (`loopx_turn_envelope_v0`, `raw_quota_turn_view`), `legacy_fallback` path, or
+   off-mode flag (`--context-delivery off`) MUST name its active consumer,
+   observability counter, and deletion milestone. C1/C9 convergence is incomplete
+   until duplicate normal producers and combinatorial flags are deleted.
 
 ## 12. Open decisions
 
