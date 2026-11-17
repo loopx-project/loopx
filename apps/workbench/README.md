@@ -79,20 +79,32 @@ skills 和 MCP 属于 agent 资源，通过各自的管理页操作，与 LooCha
 需要 Linux 或 macOS、git 和 Node.js 22 或更高版本。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/maxliux5/calli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/loopx-project/loopx/main/apps/workbench/install.sh | bash
 ```
 
-脚本把代码装到 `~/.local/share/loochat` 并构建，生成 `~/.config/loochat/.env`（随机 token；线程数据放在 `~/.local/state/loochat`；agent 默认在家目录工作），在 Linux 上装成 systemd 用户服务，最后打印地址和 token。打开地址，点「连接 hub」粘贴 token 即可；没连接时先显示一套示例数据，可以随便点开看。
+脚本从 `loopx-project/loopx` 浅克隆，按需下载文件内容，仅检出 `apps/workbench`（及其父目录文件），在 `~/.local/share/loochat/apps/workbench` 安装依赖并构建，生成 `~/.config/loochat/.env`（随机 token；线程数据放在 `~/.local/state/loochat`；agent 默认在家目录工作），在 Linux 上装成 systemd 用户服务，最后打印地址和 token。打开地址，点「连接 hub」粘贴 token 即可；没连接时先显示一套示例数据，可以随便点开看。
 
 - 先看会做什么：`… | bash -s -- --dry-run`
-- 更新：再运行一次。设置、token 和线程数据都保留，等正在跑的线程结束后才重启。
+- 更新：再运行一次，获取所选 ref 的最新提交（默认 `main`）。设置、token 和线程数据都保留，等正在跑的线程结束后才重启。固定提交不会自动升级。
 - 卸载：`… | bash -s -- --uninstall`。只删服务和代码，设置和数据保留。
 - 不装服务：`--no-service`，脚本打印手动启动的命令。没有 systemd（如 macOS）时也是这样。
+
+安装结束会打印完整提交 SHA。可用 `LOOCHAT_REF` 指定分支、tag 或完整提交 SHA；`LOOCHAT_REPO` 可指定镜像或本地 Git 仓库，`LOOCHAT_HOME` 指定克隆目录。重跑时使用相同的仓库和目录设置。例如固定版本时，下载的脚本和所装源码使用同一个 ref：
+
+```bash
+ref=main  # 固定版本时替换为 tag 或完整提交 SHA
+curl -fsSL "https://raw.githubusercontent.com/loopx-project/loopx/$ref/apps/workbench/install.sh" |
+  LOOCHAT_REF="$ref" bash -s -- --no-service
+```
+
+**Core 单独安装。** 上述稀疏检出不包含 Python Core，安装器不会启动或升级 Core。普通 agent 会话可独立使用；Goal 功能需要运行中的 Core，以及对应注册表的 LoopX CLI。安装器会检查 Core 的 `/healthz`，不可达时打印地址和配置提示。在生成的 `.env` 中配置 `LOOCHAT_LOOPX_CORE_URL`（默认 `http://127.0.0.1:8792`）；源码 Core 还需设置 `LOOCHAT_LOOPX_CMD`、`LOOCHAT_LOOPX_CWD`，具体见 [安装与 Core 连接](docs/install-agent.md#连接-loopx-core)。
+
+以上 `main` 安装链接在本次变更合入 `main` 后生效；合入前请使用包含本安装器的提交 SHA。
 
 **让 agent 帮你装**：把这句话发给这台机器上的 Claude Code、Codex 等：
 
 ```text
-按 https://raw.githubusercontent.com/maxliux5/calli/main/docs/install-agent.md 在这台机器上安装 LooChat
+按 https://raw.githubusercontent.com/loopx-project/loopx/main/apps/workbench/docs/install-agent.md 在这台机器上安装 LooChat
 ```
 
 它会先预览、再安装、确认服务在运行，最后告诉你地址和 token；装 Node.js、编译工具这类改系统的事会先问你。
@@ -102,6 +114,7 @@ curl -fsSL https://raw.githubusercontent.com/maxliux5/calli/main/install.sh | ba
 ### 从源码开发
 
 ```bash
+cd apps/workbench        # 从 LoopX 仓库根目录进入
 npm install
 npm run setup               # 生成仓库根目录的 .env 和随机 LOOCHAT_TOKEN，并打印出来
 npm run build
