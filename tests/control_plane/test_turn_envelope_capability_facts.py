@@ -12,7 +12,14 @@ import sys
 import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.quota.turn_envelope import (
+    assert_complete_turn_decision, build_turn_envelope, turn_envelope_action_signature_document,
+)
+from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decision_capture
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+from loopx.control_plane.turn_driver.executor import (
+    build_loopx_turn_host_request, validate_loopx_turn_host_result,
+)
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos,
 )
@@ -25,10 +32,10 @@ from tests.control_plane.test_quota_settlement_cli import (
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("mode", ["off", "recall_only", "ingest_only", "stale"])
 @pytest.mark.parametrize("network_available", [False, True])
-@pytest.mark.parametrize("bounded_view", [False, True], ids=["complete", "bounded-v0"])
+@pytest.mark.parametrize("format_flag", ["--complete-turn", "--turn-envelope"], ids=["complete", "legacy-flag"])
 def test_real_captured_guard_preserves_required_and_missing_capabilities(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
-    mode: str, network_available: bool, bounded_view: bool,
+    mode: str, network_available: bool, format_flag: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path, required_capability="network")
@@ -51,23 +58,19 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
     if network_available:
         capabilities.extend(["--available-capability", "network"])
     capture = tmp_path / "capture"
-    code, envelope = _run_cli(registry, runtime, "quota", "should-run",
+    code, delivered = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "turn-capability-facts", "--codex-app", *capabilities,
-        "--turn-envelope" if bounded_view else "--complete-turn",
+        format_flag,
         "--context-delivery", "off", "--delta-delivery", "off",
         "--decision-output-dir", str(capture), cwd=project)
-    assert code == (0 if network_available else 1), envelope
+    assert code == (0 if network_available else 1), delivered
     full = json.loads((capture / "decision.json").read_text())
-    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, build_turn_envelope
     assert_complete_turn_decision(full)
-    if bounded_view:
-        assert envelope["schema_version"] == "loopx_turn_envelope_v0"
-        assert envelope["action_signature"]["source_decision_hash"] == full["contract_binding"]["content_hash"]
-    else:
-        assert envelope == full and envelope["schema_version"] == "loopx_turn_envelope_v1"
-        # Keep the recorded decoder checks in addition to the current caller.
-        envelope = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"))
+    assert delivered == full and "context_delivery" not in delivered
+    envelope = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"))
+    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
+    assert envelope["action_signature"]["source_decision_hash"] == full["contract_binding"]["content_hash"]
     gate = full["capability_gate"]
     assert "network" in gate["required"]
     assert ("network" in gate["missing"]) is (not network_available)
@@ -79,9 +82,6 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
     assert envelope["action"]["delivery_allowed"] is network_available
     assert envelope["action_signature"]["matches"] is True
     # The source remains one full observation, not another admission evaluation.
-    from loopx.control_plane.quota.turn_envelope import (
-        build_turn_envelope, turn_envelope_action_signature_document,
-    )
     before = {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
     assert build_turn_envelope(full)["boundary"]["capability_gate"] == compact
     assert {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == before
@@ -94,9 +94,9 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("replan", [False, True], ids=["continuing-work", "missing-outcome"])
-@pytest.mark.parametrize("bounded_view", [False, True], ids=["complete", "bounded-v0"])
+@pytest.mark.parametrize("format_flag", ["--complete-turn", "--turn-envelope"], ids=["complete", "legacy-flag"])
 def test_captured_vision_contract_preserves_closeout_and_original_observation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, replan: bool, bounded_view: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, replan: bool, format_flag: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
@@ -136,23 +136,22 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
         assert code == 0 and initial["decision"] == "autonomous_replan_required", initial
         _bind_selected_replan_guard(registry, runtime, project, "vision-contract-turn", todo_id=TODO_ID)
     capture = tmp_path / "vision-capture"
-    code, envelope = _run_cli(registry, runtime, "quota", "should-run",
+    code, delivered = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "vision-contract-turn", "--codex-app",
         "--available-capability", "filesystem_read",
-        "--turn-envelope" if bounded_view else "--complete-turn",
+        format_flag,
         "--context-delivery", "off", "--delta-delivery", "off",
         "--decision-output-dir", str(capture), cwd=project)
-    assert code == 0, envelope
-    full = json.loads((capture / "decision.json").read_text())
-    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, build_turn_envelope
+    assert code == 0, delivered
+    decision_path = capture / "decision.json"
+    original = decision_path.read_bytes()
+    full = json.loads(original)
     assert_complete_turn_decision(full)
-    if bounded_view:
-        assert envelope["schema_version"] == "loopx_turn_envelope_v0"
-        assert envelope["action_signature"]["source_decision_hash"] == full["contract_binding"]["content_hash"]
-    else:
-        assert envelope == full and envelope["schema_version"] == "loopx_turn_envelope_v1"
-        envelope = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"))
+    assert delivered == full and "context_delivery" not in delivered
+    envelope = build_turn_envelope(full, captured_decision_path=str(decision_path))
+    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
+    assert envelope["action_signature"]["source_decision_hash"] == full["contract_binding"]["content_hash"]
     audit = full["vision_continuation_audit"]
     assert audit["required"] and audit["required_before_closeout"]
     assert audit["vision_gap_judge"]["done"] is False
@@ -163,10 +162,6 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
         assert projected[field] == audit[field]
     assert envelope["action_signature"]["matches"] is True
     assert "reward_memory" not in envelope["boundary"].get("capabilities", {})
-
-    from loopx.control_plane.quota.turn_envelope import (
-        build_turn_envelope, turn_envelope_action_signature_document,
-    )
 
     # Consume the saved source without reentering quota or appending a receipt.
     before = {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
@@ -188,7 +183,6 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
 
     # Exercise the shared host's real stdio boundary, rather than only proving
     # that the envelope and Codex's full-request prompt retain the audit.
-    original = (capture / "decision.json").read_bytes()
     runner = tmp_path / "runner.py"
     runner.write_text(
         "import json\nfrom pathlib import Path\n"
@@ -209,6 +203,57 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     )
     command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
+
+    current_plan = build_loopx_turn_plan(full, host="dsh", execution_mode="isolated-headless",
+                                        turn_instance_id="vision-contract-turn")
+    current_plan = prepare_turn_decision_capture(
+        current_plan, journal_path=tmp_path / "current-turn" / "journal.json",
+        decision=full, existing_journal=False,
+    )
+    current_request = build_loopx_turn_host_request(current_plan)
+    current_result = subprocess.run(command, input=json.dumps(current_request), text=True,
+                                    capture_output=True, timeout=30)
+    prompt_path = project / "received.txt"
+    if replan:
+        assert current_result.returncode == 0, current_result.stdout + current_result.stderr
+        current_verdict = validate_loopx_turn_host_result(current_plan, json.loads(current_result.stdout))
+        assert current_verdict["ok"], current_verdict["errors"]
+        current_prompt = prompt_path.read_text()
+        actual, _ = json.JSONDecoder().raw_decode(current_prompt.split("Turn request:\n", 1)[1])
+        assert actual["source_schema_version"] == "loopx_turn_host_request_v1"
+        assert actual["source_decision_hash"] == full["contract_binding"]["content_hash"]
+        task_context = actual["task_context"]
+        assert "work_contract" not in actual and "cli_channel" not in task_context["interaction_contract"]
+        assert task_context["vision_continuation_audit"] == audit
+        assert task_context["execution_profile"] == full["execution_profile"]
+        packet = full["replan_action_packet"]
+        writeback = dict(packet["writeback_contract"])
+        assert writeback.pop("vision_authoring_ref")
+        steps = full["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+        writeback["vision_authoring"] = next(step["vision_authoring"] for step in steps
+                                             if step["kind"] == "durable_writeback")
+        assert task_context["replan_action_packet"] == {**packet, "writeback_contract": writeback}
+        read = subprocess.run(shlex.split(actual["detail_ref"]["full_decision"]),
+                              capture_output=True, check=True).stdout
+        assert read == original
+        for field, key, value in (
+            ("vision_continuation_audit", "required_before_closeout", []),
+            ("execution_profile", "minimum_scale", "any_operation"),
+        ):
+            invalid = deepcopy(current_request)
+            invalid["work_contract"][field][key] = value
+            refused = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
+            assert refused.returncode != 0 and "complete Turn contract rejected" in refused.stderr
+            assert prompt_path.read_text() == current_prompt
+    else:
+        # Off still advertises the required Goal read. Admission and capture
+        # cannot authorize a current Host before that source is available.
+        required_reads = full["interaction_contract"]["agent_channel"]["required_reads"]
+        assert any(read["source"] == "goal_state" for read in required_reads)
+        assert current_result.returncode != 0 and "complete Turn contract rejected" in current_result.stderr
+        assert not prompt_path.exists()
+
+    # Historical requests use the recorded layout and signature.
     plan = build_loopx_turn_plan(envelope, host="dsh", execution_mode="isolated-headless",
                                  turn_instance_id="vision-contract-turn")
     assert plan["route"]["would_invoke_host"] is True
@@ -226,17 +271,12 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     assert host_result["validation_evidence"] == [
         "check:profile-targeted-validation"
     ]
-    from loopx.control_plane.turn_driver.executor import (
-        validate_loopx_turn_host_result,
-    )
-
     verdict = validate_loopx_turn_host_result(plan, host_result)
     assert verdict["ok"], verdict["errors"]
     assert verdict["result"]["delivery_batch_scale"] == "implementation"
     assert verdict["result"]["delivery_outcome"] == "primary_goal_outcome"
     assert verdict["result"]["work_evidence"] == host_result["work_evidence"]
     assert verdict["result"]["validation_evidence"] == host_result["validation_evidence"]
-    prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
     assert authority["vision_continuation_audit"] == projected
