@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { coreUrl } from './proxy.js';
+import type { LoopxCli } from './status.js';
 
 /** The core refused or failed; `status` is the core's own, `code` its error_code when it gave one. */
 export class CoreError extends Error {
@@ -43,10 +45,16 @@ export async function grantedWorkspaces(core?: URL): Promise<{ ref: string; titl
   return res.projects.flatMap((p) => p.goal_workspace_ref ? [{ ref: p.goal_workspace_ref, title: p.title }] : []);
 }
 
-/** The project root a Goal is registered under, read from the registry the status CLI reads. Null when it is not listed. */
-export async function registeredGoalRoot(goalId: string, registry: string): Promise<string | null> {
-  const raw = JSON.parse(await readFile(registry, 'utf8')) as { goals?: { id?: unknown; repo?: unknown }[] };
-  const goal = (raw.goals ?? []).find((g) => g?.id === goalId);
+/** Core's registry command owns decoding and validation, including strict envelopes and their digest. */
+export async function registeredGoalRoot(goalId: string, cli: LoopxCli): Promise<string | null> {
+  if (!cli.registry) return null;
+  const [exe, ...prefix] = cli.command;
+  const { stdout } = await promisify(execFile)(exe, [...prefix, '--registry', cli.registry, '--format', 'json', 'registry'], {
+    cwd: cli.cwd, timeout: 20000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LOOPX_USAGE_PING: '0' },
+  });
+  const result = JSON.parse(stdout);
+  if (result?.ok !== true || !Array.isArray(result.goals)) return null;
+  const goal = result.goals.find((g: { id?: unknown; repo?: unknown } | null) => g?.id === goalId);
   return goal && typeof goal.repo === 'string' && goal.repo ? goal.repo : null;
 }
 

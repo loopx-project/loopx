@@ -156,7 +156,7 @@ export class LoopxService implements LoopxHooks {
       // The core's grant is read from an earlier conversation of the Goal; a Goal with none joins read-only.
       const permission: LoopxPermission = earlier?.permission === 'workspace_auto' && permissionAvailable(adapter.id, 'workspace_auto').ok ? 'workspace_auto' : 'read_only';
       let workspace = thread.cwd;
-      const root = this.cli.registry ? await registeredGoalRoot(info.goalId, this.cli.registry).catch(() => null) : null;
+      const root = await registeredGoalRoot(info.goalId, this.cli).catch(() => null);
       try { if (root) workspace = realpathSync(root); } catch { /* the root is gone; the thread's own directory stands */ }
       if (!isWithinWorkdirs(workspace, this.deps.dirs.all())) workspace = thread.cwd;
       this.bindings.set(thread.id, {
@@ -379,7 +379,7 @@ export class LoopxService implements LoopxHooks {
     catch (err) { throw new HttpError(404, err instanceof Error && err.message === 'goal_not_found' ? 'LoopX 核心里没有这个 Goal' : `读不到这个 Goal：${err instanceof Error ? err.message : err}`, { code: 'goal_not_found' }); }
     if (state.activation && state.activation !== 'active') throw new HttpError(409, `这个 Goal 当前不是活跃状态（${state.activation}）`, { code: 'goal_not_active' });
     if (!this.cli.registry) throw new HttpError(503, '没有配置 LoopX registry，读不到这个 Goal 的工作目录', { code: 'goal_root_unknown' });
-    const root = await registeredGoalRoot(goalId, this.cli.registry).catch(() => null);
+    const root = await registeredGoalRoot(goalId, this.cli).catch(() => null);
     if (!root) throw new HttpError(409, 'registry 里读不到这个 Goal 的工作目录', { code: 'goal_root_unknown' });
     let workspace: string;
     try { workspace = realpathSync(root); } catch { throw new HttpError(409, `这个 Goal 的工作目录不存在：${root}`, { code: 'goal_root_unknown' }); }

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (args.includes('--version')) console.log('loopx ' + (process.env.FAKE_LOOPX_VERSION || '1.4.2'));
+else if (args.at(-1) === 'registry') console.log(JSON.stringify({ ok: true, goals: JSON.parse(readFileSync(args[args.indexOf('--registry') + 1], 'utf8')).goals }));
 else {
   const goal = args[args.indexOf('--goal-id') + 1];
   if (goal === 'slow') await new Promise(r => setTimeout(r, 60000));
