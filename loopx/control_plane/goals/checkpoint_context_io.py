@@ -110,12 +110,15 @@ def checkpoint_continuation_required(readback: Any) -> bool:
     })["required"] is True
 
 
-def replan_checkpoint_cli_actions(actions: list[str], readback: Any, *, command_prefix: str) -> list[str]:
+def replan_checkpoint_cli_actions(
+    actions: list[str], readback: Any, *, command_prefix: str, reread_delivery_result: bool = False,
+) -> list[str]:
     """Render the admitted checkpoint phases; the typed receipt owns policy.
 
     The generic replan command describes semantic authoring, but a default Turn
-    must retain its result before reading and authoring that direction. Historical
-    receipts and lifecycle reentry commands keep their original projection.
+    must retain its result before reading and authoring that direction. A later
+    matching ACK can identify the original Turn without refreshing its result
+    basis. Read that basis separately when projecting historical ACK recovery.
     """
     if not actions:
         return actions
@@ -126,8 +129,7 @@ def replan_checkpoint_cli_actions(actions: list[str], readback: Any, *, command_
         return actions
     arguments = tokens[command_at + 1:]
     initial = []
-    context = [*prefix, "checkpoint-context", "--purpose", "supplement_checkpoint",
-               "--max-page-output-bytes", "64000"]
+    context_args = ["--max-page-output-bytes", "64000"]
     context_options = {"--goal-id", "--goal-instance-id", "--agent-id", "--todo-id",
                        "--replan-obligation-id", "--turn-instance-id", "--project", "--state-file"}
     decision_options = {"--agent-vision-json", "--vision-unchanged-reason"}
@@ -139,7 +141,7 @@ def replan_checkpoint_cli_actions(actions: list[str], readback: Any, *, command_
                 raise ValueError(f"checkpoint command requires a value for {option}")
             pair = arguments[at:at + 2]
             if option in context_options:
-                context.extend(pair)
+                context_args.extend(pair)
                 initial.extend(pair)
             at += 2
         else:
@@ -149,8 +151,13 @@ def replan_checkpoint_cli_actions(actions: list[str], readback: Any, *, command_
     if not any(option in arguments for option in decision_options):
         direction.extend(["--agent-vision-json",
                           "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>"])
-    return [shlex.join([*prefix, "refresh-state", *initial]), shlex.join(context),
-            shlex.join(direction), *actions[1:]]
+    context = [*prefix, "checkpoint-context", "--purpose"]
+    preparation = []
+    if reread_delivery_result:
+        preparation.append(shlex.join([*context, "delivery_result", *context_args]))
+        initial.extend(["--delivery-read-context", "<delivery-result-read-context-id>"])
+    return [*preparation, shlex.join([*prefix, "refresh-state", *initial]),
+            shlex.join([*context, "supplement_checkpoint", *context_args]), shlex.join(direction), *actions[1:]]
 
 
 def _render_checkpoint_host_command(argv: list[str]) -> str:

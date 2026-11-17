@@ -1291,6 +1291,7 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
             result_work_context, result_work_context_exists, result_work_required,
         )
         from ..control_plane.quota.settlement import read_heartbeat_settlement, render_owed_host_command
+        from ..control_plane.quota.live_decision import historical_ack_writeback_required
         from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
         from ..control_plane.work_items.action_selection_contract import render_cli_command_prefix
 
@@ -1374,10 +1375,18 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                     interaction = payload.get("interaction_contract", {})
                     if interaction.get("mode") == "autonomous_replan":
                         channel = interaction["cli_channel"]
-                        channel["next_cli_actions"] = replan_checkpoint_cli_actions(
-                            channel["next_cli_actions"], work_readback,
+                        actions = channel["next_cli_actions"]
+                        historical_ack = historical_ack_writeback_required(payload)
+                        staged_actions = replan_checkpoint_cli_actions(
+                            actions, work_readback, reread_delivery_result=historical_ack,
                             command_prefix=render_cli_command_prefix(
                                 registry_path=str(registry_path), runtime_root=str(runtime_root)))
+                        channel["next_cli_actions"] = staged_actions
+                        if historical_ack and staged_actions is not actions:
+                            action = ("Reread the original Turn's result basis and recheck its candidate. "
+                                      "Use the returned delivery read ID to retain the result from its producing workspace, "
+                                      "then read and judge the direction before spending.")
+                            interaction["agent_channel"]["primary_action"] = payload["recommended_action"] = action
                     recovery = payload.get("unsettled_host_turn_recovery")
                     identity = work_readback.identity.value
                     if (isinstance(recovery, dict)

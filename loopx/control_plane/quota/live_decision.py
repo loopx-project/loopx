@@ -79,7 +79,7 @@ def _receipt_bound_guard_fields(
     }
 
 
-def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
+def historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
     """Recognize the exact historical ACK closeout before durable writeback."""
     packet = payload.get("replan_action_packet")
     return (isinstance(packet, Mapping) and packet.get("settlement_only") is True
@@ -89,7 +89,7 @@ def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
 def _original_replan_settlement_required(
     payload: Mapping[str, Any], readback: QuotaSettlementReadback | None,
 ) -> bool:
-    if _historical_ack_writeback_required(payload):
+    if historical_ack_writeback_required(payload):
         return True
     if readback is None or readback.replay_phase is not ReceiptBoundReplayPhase.SETTLEMENT_PENDING:
         return False
@@ -638,7 +638,7 @@ def _receipt_bound_recovery_todo(
     """Keep finished/replan-only Turns out of generic Todo wait recovery."""
     if (not receipt_bound_todo_id or not agent_id or not turn_instance_id
             or replay_phase is ReceiptBoundReplayPhase.SETTLED
-            or _historical_ack_writeback_required(payload)
+            or historical_ack_writeback_required(payload)
             or payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value):
         return None
     if replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING:

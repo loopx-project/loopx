@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shlex
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from operator import itemgetter
 from pathlib import Path
@@ -128,16 +128,27 @@ def _completion_settlement_error(
     settlement_readback: QuotaSettlementReadback,
     *,
     no_follow_up: bool,
+    todo: Mapping[str, object],
 ) -> str | None:
-    # Todo acceptance and Turn settlement are distinct facts. Ordinary
-    # completion can precede accounting (including controller validation).
-    # Only terminal intent requires the full chain before closing out.
-    if (not no_follow_up or settlement_readback.settlement.failure is None
-            or checkpoint_continuation_required(settlement_readback)):
+    failure = settlement_readback.settlement.failure
+    if not no_follow_up or failure is None:
         return None
+    if checkpoint_continuation_required(settlement_readback):
+        identity = settlement_readback.identity.value
+        # A new terminal intent may stage its result before settlement. An
+        # ordinary result already committed under the same Turn is in closeout.
+        upgrading_ordinary_result = (
+            identity is not None
+            and todo.get("status") == "done"
+            and todo.get("completion_continuation") == "active_goal"
+            and todo.get("completion_turn_key") in (identity.effect_id, identity.turn_instance_id)
+            and todo.get("completion_requested_continuation") != "no_followup"
+        )
+        if not upgrading_ordinary_result:
+            return None
     return (
         "terminal no-follow-up closeout requires matching writeback and quota spend receipts: "
-        + settlement_readback.settlement.failure.reason
+        + failure.reason
     )
 
 
@@ -859,6 +870,7 @@ def handle_todo_command(
                 completion_error = _completion_settlement_error(
                     settlement_readback=settlement_readback,
                     no_follow_up=bool(args.no_follow_up),
+                    todo=todo,
                 )
                 if completion_error is not None:
                     progress = settlement_readback.progress

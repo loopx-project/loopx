@@ -190,11 +190,11 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         "--turn-instance-id", "route-review")
     assert any(t["kind"] == "periodic_review_due" for t in review["autonomous_replan_obligation"]["triggers"])
     selection = review["interaction_contract"]["cli_channel"]["selection_command"]
-    execute(selection["route_prefix"] + " "
+    projected_review = execute(selection["route_prefix"] + " "
         + selection["command_args_template"].format(todo_id=fixture.TODO_ID))
     # The ordinary selection route delivers staged readers. Follow their
     # captured review/evidence/writer rather than expecting the raw guard shape.
-    reviewed = read_stage(review["replan_action_packet"]["review"])
+    reviewed = read_stage(projected_review["replan_action_packet"]["review"])
     writer = read_stage(reviewed["next"]["writeback"])
     assert writer["context_id"] == reviewed["context_id"]
     review_plan = writer["writeback"]["settlement_plan"]

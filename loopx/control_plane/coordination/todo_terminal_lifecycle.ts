@@ -24,6 +24,7 @@ import {acceptanceWorkGuard, acceptanceCompletionRequirements, acceptanceComplet
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
 
 import type { JsonObject } from "../effect_program.ts";
+import {jsonObject} from "../runtime_decode.ts";
 import type {
   AuthorityStore,
   AuthorityStoreCommit,
@@ -476,6 +477,31 @@ function terminalReceipt(
     decode: commandReceiptResult});
 }
 
+async function archivedCloseoutReplayRejection(
+  store: AuthorityStore,
+  input: ResolvedCoordinationTodoTerminalLifecycleInput,
+  replay: CoordinationTodoTerminalLifecycleResult,
+): Promise<CoordinationTodoTerminalLifecycleResult | null> {
+  if (Object.hasOwn(replay, "evidence")) return completionEvidenceRejection(input, replay.evidence);
+  if (replay.reason_code !== "coordination_operation_identity_mismatch" ||
+      input.operation_identity.kind !== "completion_turn" || !input.requested_no_followup ||
+      input.defer_no_followup === true || input.evidence === null) return null;
+  const saved = await store.readReceipt(input.operation_id);
+  if (saved.status !== "found" || saved.receipts.length !== 1) return null;
+  const acceptedEvidence = jsonObject(saved.receipts[0].result)?.evidence;
+  if (typeof acceptedEvidence !== "string" && acceptedEvidence !== null) return null;
+  const rejection = completionEvidenceRejection(input, acceptedEvidence);
+  if (rejection === null) return null;
+  // The accepted evidence may identify the mismatch, but only when the
+  // remaining request matches the committed closeout fingerprint.
+  for (const evidence of acceptedEvidence === null ? [null] : [acceptedEvidence, null]) {
+    const request = {...input, evidence};
+    const exact = await terminalReceipt(request, terminalRequestSha(request)).read(store);
+    if (exact?.status === "replayed") return rejection;
+  }
+  return null;
+}
+
 type ImplicitMonitorAttemptObservation =
   | {
       readonly kind: "result";
@@ -776,7 +802,10 @@ async function readSameTurnCompletionReceipt(
       error instanceof Error ? error.message : "Invalid original completion identity");
   }
   if (sameTurnUpgrade) {
+    const evidenceRejection = todo.archive_state !== "active"
+      ? completionEvidenceRejection(input, todo.evidence) : null;
     const originalInput = {...input,
+      ...(evidenceRejection === null ? {} : {evidence: optionalAuthorityString(todo.evidence, "original evidence")}),
       ...(normalized.claim_operation_id === undefined ? {} : {claim_operation_id: normalized.claim_operation_id,
         lease_idempotency_key: normalized.lease_idempotency_key, lease_expected_version: normalized.lease_expected_version}),
       requested_no_followup: false,
@@ -826,7 +855,7 @@ async function readSameTurnCompletionReceipt(
       return terminalFailure("terminal_completion_receipt_mismatch",
         "Original completion validation and identity must still match the completed Todo.", {}, "decision_rejection");
     }
-    return original;
+    return evidenceRejection ?? original;
   }
   return null;
 }
@@ -861,10 +890,10 @@ async function exactStoredCompletionParent(
   // reconstruction must match its entire original fingerprint; no supplied
   // actor, lease, evidence, read identity or validation is replaced.
   const recovered = {...input,
-    expected_role: input.expected_role ?? requireLiteral(todo.role, TODO_ROLES, "original Todo role"),
-    note: input.note ?? optionalString(todo.note, "original note"),
-    evidence: input.evidence ?? optionalString(todo.evidence, "original evidence"),
-    reason: input.reason ?? optionalString(todo.reason, "original reason"),
+    expected_role: input.expected_role ?? requireAuthorityLiteral(todo.role, TODO_ROLES, "original Todo role"),
+    note: input.note ?? optionalAuthorityString(todo.note, "original note"),
+    evidence: input.evidence ?? optionalAuthorityString(todo.evidence, "original evidence"),
+    reason: input.reason ?? optionalAuthorityString(todo.reason, "original reason"),
     delivery_read_context_id: input.delivery_read_context_id ?? receipt.delivery_read_context_id,
       ...(input.result_work_receipt_sha256 === undefined && receipt.result_work_receipt_sha256 !== undefined
         ? {result_work_receipt_sha256: receipt.result_work_receipt_sha256 as string} : {}),
@@ -985,12 +1014,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
       if (original?.status === "replayed") return original;
     }
     if (replay !== null) {
-      // New archived closeout receipts preserve accepted evidence separately
-      // from the historical request fingerprint. Older receipts still replay.
-      if (Object.hasOwn(replay, "evidence")) {
-        const rejection = completionEvidenceRejection(input, replay.evidence);
-        if (rejection !== null) return rejection;
-      }
+      const rejection = await archivedCloseoutReplayRejection(store, input, replay);
+      if (rejection !== null) return rejection;
       // Older accepted lifecycle receipts lack the original quota binding.
       // Add it to this response from verified history; never rewrite the receipt.
       if (replay.status === "replayed" && isLifecycleCloseout(input) &&
@@ -1019,9 +1044,9 @@ export async function executeCoordinationTodoTerminalLifecycle(
     if (!await authoritySourcesCurrent()) return terminalFailure(AUTHORITY_SOURCE_CHANGED.code,
       AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
     const observation = await receipt.observe(store);
-    if (observation.kind === "receipt") return Object.hasOwn(observation.result, "evidence")
-      ? completionEvidenceRejection(input, observation.result.evidence) ?? observation.result
-      : observation.result;
+    if (observation.kind === "receipt") {
+      return await archivedCloseoutReplayRejection(store, input, observation.result) ?? observation.result;
+    }
     if (observation.authority.status !== "loaded") {
       return {
         schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
@@ -1136,8 +1161,6 @@ export async function executeCoordinationTodoTerminalLifecycle(
         {}, "decision_rejection");
     }
     if (terminalUpgradeReceipt.status !== "replayed") return terminalUpgradeReceipt;
-    const rejection = completionEvidenceRejection(input, todo.evidence);
-    if (rejection !== null) return rejection;
   }
   const authorityTodo = todo;
   let edit: ReturnType<typeof prepareUpdatedTodo> | null = null;
