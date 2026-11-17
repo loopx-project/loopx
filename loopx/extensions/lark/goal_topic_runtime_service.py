@@ -21,6 +21,7 @@ from ...file_lock import try_exclusive_file_lock
 from ..background_runtime import HostedWorker
 from .cli_resolution import LarkCliUnavailableError
 from .goal_channel_contracts import bindings_for_goal
+from .goal_channel_operation import OPERATION_CARD_ACTION_SCHEMA_VERSION, handle_goal_channel_operation_callback
 from .manager_context import session_turn_effect
 from .private_steward_triage import TRIAGE_CARD_ACTION, capture_callback, profile_supports_cards
 from .team_plan_confirmation import (
@@ -577,13 +578,29 @@ class LarkGoalTopicRuntimeService:
                         action = event.get("action_value")
                         if isinstance(action, Mapping) and action.get("schema_version") == TRIAGE_CARD_ACTION:
                             return self._handle_private_steward_callback(profile, event, action)
+                        profile_config = runtime._active_profile_configs(
+                            self.snapshot_provider()
+                        ).get(profile)
+                        if isinstance(action, Mapping) and action.get("schema_version") == OPERATION_CARD_ACTION_SCHEMA_VERSION:
+                            if not profile_config or profile_config.get("bot_app_id") != expected_app:
+                                raise ValueError("Lark operation callback App changed")
+                            # Operation proposals belong to the coordination
+                            # owner, independently of the private Chat root.
+                            owner_root = getattr(self.runtime_controller, "coordination_runtime_root", None)
+                            if not isinstance(owner_root, Path):
+                                raise ValueError("Lark operation callback coordination owner is unavailable")
+                            return handle_goal_channel_operation_callback(
+                                event, runtime_root=owner_root,
+                                action_store_root=owner_root / "chat" / "actions",
+                                profile_app_id=expected_app, profile=profile,
+                                cli_bin=profile_config.get("cli_bin") or "lark-cli",
+                                **({"runner": self.private_conversations.runner}
+                                   if self.private_conversations is not None else {}),
+                            )
                         if self.action_service is None:
                             raise ValueError(
                                 "Lark manager review callbacks require Chat actions"
                             )
-                        profile_config = runtime._active_profile_configs(
-                            self.snapshot_provider()
-                        ).get(profile)
                         return handle_lark_review_callback_for_profile(
                             event,
                             action_service=self.action_service,

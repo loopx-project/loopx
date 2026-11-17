@@ -4,7 +4,9 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -19,9 +21,11 @@ def native_fixture(tmp_path, mode):
     pending.write_text('{"pending":true}')
     trace = tmp_path / "requests.jsonl"
     binary = tmp_path / "codex"
-    binary.write_text(f"#!{sys.executable}\n" + '''
+    binary.write_text(f"#!{sys.executable} -S\n" + '''
 import json, os, sys, time
 from pathlib import Path
+if os.environ["PROBE_MODE"] == "startup_timeout":
+    time.sleep(60)
 counter = Path(os.environ["PROBE_ATTEMPTS"])
 attempt = int(counter.read_text()) + 1 if counter.exists() else 1
 counter.write_text(str(attempt))
@@ -70,6 +74,40 @@ for line in sys.stdin:
            "PROBE_TRACE": str(trace), "PROBE_MODE": mode,
            "PROBE_ATTEMPTS": str(tmp_path / "attempts")}
     return env, trace, home, pending
+
+
+@contextmanager
+def native_python_receiver(env):
+    """Launch the stdlib fixture with the current interpreter, inside the budget."""
+    from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+
+    spawn = StdioNativeGoalTransport.spawn
+
+    @classmethod
+    def spawn_fixture(cls, command, **kwargs):
+        if command[0] == env["CODEX_BIN"]:
+            assert list(command[1:]) == [
+                "-c", "features.goals=false", "app-server", "--listen", "stdio://",
+            ]
+            # Only adapt the fake executable: retain the real transport, argv,
+            # pipes, deadlines and cleanup. No process starts before spawn.
+            # -S excludes ambient site hooks from this stdlib-only receiver.
+            command = [sys.executable, "-S", *command]
+        return spawn(command, **kwargs)
+
+    with patch.object(StdioNativeGoalTransport, "spawn", spawn_fixture):
+        yield
+
+
+def native_python_cli_command(*args):
+    """Run the actual CLI main with the same fixture launch adapter in its child."""
+    return [sys.executable, "-c", """
+import os, sys
+from benchmark.tests.test_codex_readiness import native_python_receiver
+from benchmark.runtime.codex_readiness import main
+with native_python_receiver(os.environ):
+    raise SystemExit(main(sys.argv[1:]))
+""", *args]
 
 
 @pytest.mark.parametrize("failure", [None, "initialize", "account/read", "account/rateLimits/read"])

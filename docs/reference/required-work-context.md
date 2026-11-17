@@ -736,76 +736,23 @@ transport flag does not restore the old exact Todo schema.
 
 ## Experimental compaction working memory
 
-**Default: off.** In Workbench, open **Settings → This device → Capability Center →
-Compaction working memory (experimental)** and use **Keep work context at compaction**.
-The switch saves through the existing preview/apply/readback transaction; a failed
-save keeps the confirmed setting and displays the error. Reload to inspect the
-persisted value. It is a device preference, independent of Progressive/Delta;
-Goals cannot override it. Saving installs no hooks and dispatches no work.
+This experiment is retired. The kernel no longer prepares or restores its sparse
+memory view, and Workbench no longer offers its switch. Task effectiveness and
+complete-cost benefit remained unqualified; see the [retired RFC](../architecture/rfcs/sparse-compaction-working-memory-v0.md).
 
-The initial disabled state and an enabled saved state:
+Saved `compaction_memory_machine_defaults_v0` values remain strictly readable
+for settings compatibility, including a prior `enabled: true`. They have no
+runtime effect or editor. Other device settings and their transaction rollback
+remain available; reading does not rewrite the saved configuration. Existing
+immutable memory/source files and exact capture references retain their original
+lifetime and access rules. This change performs no source cleanup. Installing an
+older release that still implements the experiment can restore its behavior;
+remove its saved namespace before such a downgrade if that behavior is unwanted.
 
-![Compaction working memory disabled in Workbench](assets/compaction-memory-off.png)
-![Compaction working memory enabled in Workbench](assets/compaction-memory-on.png)
-
-On a narrow screen the same setting appears below the capability selector:
-
-![Compaction working memory on a narrow screen](assets/compaction-memory-narrow.png)
-
-The registered machine namespace is `compaction_memory`, with the exact shape
-`{"schema_version":"compaction_memory_machine_defaults_v0","enabled":true}`.
-Absence means disabled. Existing supported native root sessions must already
-have context recovery enabled and a Goal/Agent-bound immutable source capture.
-The existing `codex_app_heartbeat`, `codex_app_ssh_goal` and
-`codex_benchmark_heartbeat` scenario restrictions remain in force. Other hosts,
-child sessions and a lone context-delivery off keep their ordinary paths.
-An explicit off/Delta-auto pair still qualifies the existing full-document native
-recovery path; the independent memory opt-in also applies there.
-The switch neither qualifies a new native version nor proves current-session use.
-
-After ordinary PreCompact/PostCompact lifecycle handling, the TypeScript context
-owner selects exact short selected-Todo title/note facts and original JSON
-pointers. Canonical matching Todo detail takes precedence over its display view.
-Titles over 512 UTF-8 bytes and notes over 1,024 bytes remain source references;
-they are not truncated into a new conclusion. Unknown material stays in the
-original capture. This first profile does not extract conversation semantics or
-make any additional model call.
-
-The private IO adapter publishes `memory-<revision>.json` with
-`schema_version:loopx_compaction_memory_v0`, original Goal/Agent/session/profile
-binding, source/recovery path and byte digest, exact inline-field `coverage`,
-optional `focus`, sourced `frontier` and `needed_reads` navigation. If an original
-Turn exists, its identity is preserved. The separate `compaction-memory.json`
-locator can change; emitted artifact references cannot. The existing exact
-capture reader opens the artifact through the command supplied with its ref.
-Pointers in the document resolve against its original `source`; they are not
-shell commands or independent evidence of reading.
-
-At SessionStart(source=compact), the adapter validates the current source,
-recovery, session and memory bytes before adding the short structure to ordinary
-recovery. Oversized views, missing/changed/unreadable sources, stale locators and
-unsafe files fall back to ordinary recovery. The artifact and restored structure
-are each bounded to 12,000 bytes; existing native delivery limits still apply.
-Memory grants no authority, read receipt, accepted result or Delta continuity.
-Current requirements, stops and original pending-read obligations remain binding.
-No original input is removed: restoration is additive, so smaller artifacts do
-not establish lower total input, better outcomes or lower total cost.
-
-**Disable / downgrade:** turn the switch off. Workbench removes the experiment
-namespace, stopping new memory preparation/restoration and restoring compatibility
-with older full-settings editors. Older scoped context readers already ignore
-this separate namespace; older full-settings editors reject it while present.
-Existing immutable files and references are retained, subject to the original
-capture lifetime and access/deletion rules. There is no cross-machine retention,
-automatic source GC or migration. See the [RFC](../architecture/rfcs/sparse-compaction-working-memory-v0.md)
-for remaining semantic, retention and outcome experiments.
-
-中文：工作台 **设置 → 本机 → 能力中心 → 压缩工作记忆（实验）** 提供独立开关，默认关闭。
-仅对已有上下文恢复的受支持原生根会话生效；保存不安装 hook、不启动工作。
-压缩时保存有来源的工作标题、短注记和引用，随后验证来源并恢复；不额外调用模型，
-不省略当前必读要求，不代表任务已完成或 Delta 连续性恢复。保存失败保持已确认状态；
-关闭会移除实验命名空间以支持旧版编辑器，已发出的文件引用仍按原来源生命周期保留。
-首版为增量恢复，任务效果与完整成本收益尚未验证。
+中文：实验已撤回，内核不再生成或恢复实验记忆，工作台开关已移除。
+旧配置只用于兼容读取，即使曾保存开启也不生效；其他本机设置仍可编辑和事务回滚。
+已有记忆文件、原始来源与精确读取路径保留，不自动清理。降级到仍实现该实验的旧版
+可能恢复其行为；若不希望恢复，应在降级前移除旧命名空间。
 
 ## Opt-in native reuse
 

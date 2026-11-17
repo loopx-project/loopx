@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (53)
+## Accepted (52)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -72,7 +72,6 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Accepted | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
 | [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [24 entries](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
-| [RFC: Sparse Working Memory at Context Compaction (v0)](sparse-compaction-working-memory-v0.md) | Accepted | none | [1 entry](ledger/sparse-compaction-working-memory-v0/) |
 | [RFC: Joint Target, Yardstick and Stride Decisions (v0)](target-yardstick-stride-decisions-v0.md) | Accepted | none | — |
 | [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [27 entries](ledger/typescript-control-plane-migration-v0/) |
 
@@ -82,6 +81,8 @@ appendix may keep dated history, but no dated log heading may precede it.
 | --- | --- | --- | --- |
 | [RFC: Personal Follow-through (v0)](personal-follow-through-v0.md) | Superseded | none; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 entry](ledger/personal-follow-through-v0/) |
 
-## Retired (0)
+## Retired (1)
 
-_none_
+| RFC | Header status | Supersedes / closes | Ledger |
+| --- | --- | --- | --- |
+| [RFC: Sparse Working Memory at Context Compaction (v0)](sparse-compaction-working-memory-v0.md) | Retired | none | [2 entries](ledger/sparse-compaction-working-memory-v0/) |
