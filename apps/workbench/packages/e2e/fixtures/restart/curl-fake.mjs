@@ -2,7 +2,7 @@
 // A stand-in for curl in restart.sh tests. It talks to the hub fake over plain TCP, so the
 // connection behaves like a real one, including being refused when the hub is down.
 //
-//   curl-fake -sf -m 5 -H "Authorization: ..." http://127.0.0.1:PORT/api/threads[?archived=1]
+//   curl-fake -sf -m 5 -H "Authorization: <placeholder>" http://127.0.0.1:PORT/api/threads[?archived=1]
 //
 // // The `mode` file (in $LOOCHAT_FAKE_STATE, shared with the hub fake) drives it:
 //   down       exit 7 before connecting (nothing is listening; a stopped hub)

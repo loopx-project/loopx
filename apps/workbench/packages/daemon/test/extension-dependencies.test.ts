@@ -377,13 +377,13 @@ test('refresh discards a manual snapshot; later caller mutations cannot silently
 test('HTTP install and enable enforce provider dependencies even without a browser UI', async () => {
   let providers: ProviderCapabilitySnapshot[] = [];
   const h = mockHost([manifest('voice', { requires: { agentCapabilities: ['realtimeVoice'] } })], () => providers);
-  const server = createHttpServer({ manager: h.manager, extensions: h.extensions, token: 'test-voice-dependency-token', webDir: null, version: 'test' });
+  const server = createHttpServer({ manager: h.manager, extensions: h.extensions, token: 'dummy-voice-dependency-token', webDir: null, version: 'test' });
   try {
     h.extensions.start();
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const request = (path: string, method: string, body: unknown) => fetch(base + path, {
-      method, headers: { Authorization: 'Bearer test-voice-dependency-token', 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      method, headers: { Authorization: 'Bearer dummy-voice-dependency-token', 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const blocked = await request('/api/extensions/voice/install', 'POST', { granted: ['events.summary'] });
     assert.equal(blocked.status, 400);

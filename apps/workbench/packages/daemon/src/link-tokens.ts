@@ -35,7 +35,7 @@ function hashToken(token: string): string {
 }
 
 /**
- * The daemon's link tokens: temporary credentials for opening a link (`#/token=…`) that can read
+ * The daemon's link tokens: temporary credentials for opening a link (`#/token=<token>`) that can read
  * and write this Workbench and nothing else. They expire (7 days by default), can be revoked one
  * by one, never reach the permanent token, and live in the data directory so a restart keeps them.
  *

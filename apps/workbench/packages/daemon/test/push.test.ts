@@ -47,7 +47,7 @@ test('push settings persist, test uses bot argv/stdin, safe links, scrubbed envi
   const h = await setup(); try {
     assert.equal((await (await h.api('settings')).json()).enabled, false);
     assert.equal((await (await h.api('settings')).json()).recipient, 'test-recipient');
-    assert.equal((await h.api('settings', 'PUT', { baseUrl: 'https://example.invalid/?token=secret' })).status, 400);
+    assert.equal((await h.api('settings', 'PUT', { baseUrl: 'https://example.invalid/?token=dummy-secret' })).status, 400);
     assert.equal((await h.api('settings', 'PUT', { enabled: true, baseUrl: 'https://example.invalid' })).status, 200);
     h.emit('turn.started'); h.emit('approval.request', { approvalId: 'a', title: 'private command' });
     await wait(() => h.sent().length === 1);

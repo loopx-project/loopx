@@ -32,13 +32,13 @@ test('preview annotations: authenticated drafts, scoped details, persistent acce
   const tools = new BorrowingService(store, manager, registry.adapters, dir, socket);
   const ipc = borrowingServer(tools);
   await listenPrivate(ipc, socket);
-  const server = createHttpServer({ manager, token: 'preview-notes-test-token', webDir: null, version: 'test' });
+  const server = createHttpServer({ manager, token: 'dummy-preview-notes-token', webDir: null, version: 'test' });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const thread = await manager.createThread({ agent: 'pi', cwd: dir });
   const other = await manager.createThread({ agent: 'pi', cwd: dir });
   const route = `/api/threads/${thread.id}/preview-notes`;
-  const request = (path: string, method = 'GET', body?: unknown, auth = true) => fetch(base + path, { method, headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: 'Bearer preview-notes-test-token' } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const request = (path: string, method = 'GET', body?: unknown, auth = true) => fetch(base + path, { method, headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: 'Bearer dummy-preview-notes-token' } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
   try {
     assert.equal((await request(route, 'POST', input, false)).status, 401);
     assert.equal((await request(route, 'POST', { ...input, comment: '' })).status, 400);

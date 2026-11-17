@@ -26,11 +26,11 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
   const socket = join(dir, 'tools.sock');
   const tools = new BorrowingService(store, manager, registry.adapters, dir, socket);
   const ipc = borrowingServer(tools);
-  const server = createHttpServer({ manager, token: 'references-test-token', webDir: null, version: 'test' });
+  const server = createHttpServer({ manager, token: 'dummy-references-token', webDir: null, version: 'test' });
   await listenPrivate(ipc, socket);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const post = (body: unknown, auth = true) => fetch(base + '/api/context-references', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: 'Bearer references-test-token' } : {}) }, body: JSON.stringify(body) });
+  const post = (body: unknown, auth = true) => fetch(base + '/api/context-references', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: 'Bearer dummy-references-token' } : {}) }, body: JSON.stringify(body) });
   try {
     const source = await manager.createThread({ agent: 'pi', cwd: dir, title: 'Design discussion' });
     const recipient = await manager.createThread({ agent: 'pi', cwd: dir });

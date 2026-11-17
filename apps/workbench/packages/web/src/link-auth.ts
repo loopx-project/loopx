@@ -1,5 +1,5 @@
 /**
- * Login through a link (`?token=…` / `#token=…`): the link carries a temporary token the daemon
+ * Login through a link (`?token=<token>` / `#token=<token>`): the link carries a temporary token the daemon
  * issued (see the daemon's LinkTokens). The page script in index.html runs `takeLinkToken` before
  * anything renders, keeps the token where the app keeps its credential, and scrubs the address bar
  * at once — the token then never reaches history, bookmarks or a copied link.
@@ -11,8 +11,8 @@
 
 import { saveToken } from './api';
 
-/** Persona's rule, kept and taught hash routing: the token sits in the real query (`?token=…`),
- * in the fragment's own query (`#/goals?token=…`), or bare in the fragment (`#token=…`, which never
+/** Persona's rule, kept and taught hash routing: the token sits in the real query (`?token=<token>`),
+ * in the fragment's own query (`#/goals?token=<token>`), or bare in the fragment (`#token=<token>`, which never
  * reaches a server). Returns the token and the link without it, for the address bar at once. */
 export function takeLinkToken(href: string): { token: string; rest: string } | null {
   const u = new URL(href);

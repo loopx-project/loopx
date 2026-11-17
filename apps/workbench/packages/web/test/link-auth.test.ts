@@ -5,20 +5,20 @@ import { sidebarGoals } from '../src/loopx/goal-picks.js';
 import type { LoopxAttention, LoopxGoal } from '../src/loopx/status.js';
 
 test('takeLinkToken reads ?token= and scrubs it from the rest', () => {
-  const found = takeLinkToken('http://x:8796/?token=abc');
-  assert.deepEqual(found, { token: 'abc', rest: '/' });
+  const found = takeLinkToken('http://x:8796/?token=dummy-a');
+  assert.deepEqual(found, { token: 'dummy-a', rest: '/' });
 });
 
 test('takeLinkToken reads the fragment (never sent to a server): bare, and the hash route query', () => {
-  assert.deepEqual(takeLinkToken('http://x:8796/#token=abc'), { token: 'abc', rest: '/' });
-  const routed = takeLinkToken('http://x:8796/#/goals?token=def');
-  assert.deepEqual(routed, { token: 'def', rest: '/#/goals' });
-  const kept = takeLinkToken('http://x:8796/#/goals?x=1&token=def');
-  assert.deepEqual(kept, { token: 'def', rest: '/#/goals?x=1' });
+  assert.deepEqual(takeLinkToken('http://x:8796/#token=dummy-a'), { token: 'dummy-a', rest: '/' });
+  const routed = takeLinkToken('http://x:8796/#/goals?token=dummy-b');
+  assert.deepEqual(routed, { token: 'dummy-b', rest: '/#/goals' });
+  const kept = takeLinkToken('http://x:8796/#/goals?x=1&token=dummy-b');
+  assert.deepEqual(kept, { token: 'dummy-b', rest: '/#/goals?x=1' });
 });
 
 test('a query token wins over a fragment one; an empty token is dropped, not kept', () => {
-  assert.equal(takeLinkToken('http://x/?token=a#token=b')?.token, 'a');
+  assert.equal(takeLinkToken('http://x/?token=dummy-a#token=dummy-b')?.token, 'dummy-a');
   // An empty token param still counts as "a token was here" (the link gets scrubbed) — the
   // capture step is what refuses to keep it.
   assert.equal(takeLinkToken('http://x/?token=')?.token, '');
