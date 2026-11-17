@@ -220,7 +220,10 @@ def test_native_code_mode_resume_requires_observed_coverage(
 
     def read_command(cmd):
         # The capture pipeline requires Bash even when the native host defaults to /bin/sh.
-        return "await tools.exec_command(" + json.dumps({"cmd": cmd, "shell": "/bin/bash", "max_output_tokens": 8000}) + ")"
+        # Login profiles may replace the isolated environment's qualified CLI path.
+        return "await tools.exec_command(" + json.dumps({
+            "cmd": cmd, "shell": "/bin/bash", "login": False, "max_output_tokens": 8000,
+        }) + ")"
 
     def resumed_response(request, number, message):
         nonlocal resume_state, first_read
