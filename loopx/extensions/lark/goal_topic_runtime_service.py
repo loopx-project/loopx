@@ -127,6 +127,7 @@ class LarkGoalTopicRuntimeService:
         feedback_due = 0.0
         discovery: Future[list[Path]] | None = None
         discovery_due = 0.0
+        discovery_yielded = False
         ingress: Future[list[str]] | None = None
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
@@ -136,7 +137,7 @@ class LarkGoalTopicRuntimeService:
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
             def step() -> None:
                 nonlocal attempted, ready, attention, attention_due, reports, reports_due
-                nonlocal ingress, ingress_due, feedback, feedback_due, discovery, discovery_due
+                nonlocal ingress, ingress_due, feedback, feedback_due, discovery, discovery_due, discovery_yielded
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
@@ -209,6 +210,9 @@ class LarkGoalTopicRuntimeService:
                     for path in paths:
                         if path not in pending:
                             ready.setdefault(path, None)
+                    active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
+                    discovery_ready = (callable(body_paths) and discovery is None
+                        and time.monotonic() >= discovery_due)
                     owner_attention = getattr(transport, "owner_attention", None)
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())
@@ -234,8 +238,7 @@ class LarkGoalTopicRuntimeService:
                             # Keep an already discovered request eligible for the next
                             # scan. Its historical discovery may be backed off.
                             continue
-                    active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
-                    due_background = sum((reports_ready, attention_ready, ingress_ready))
+                    due_background = sum((reports_ready, attention_ready, ingress_ready, discovery_ready))
                     scheduled_body = False
                     for path in sorted(recovering, key=lambda path: (recovering[path], attempted.get(path, 0))):
                         occupied = len(pending) + active_background
@@ -243,12 +246,22 @@ class LarkGoalTopicRuntimeService:
                             break
                         # Give an unsent body the next available slot when due
                         # checks would otherwise reserve every free slot.
-                        if occupied + due_background >= 4 and (recovering[path] or scheduled_body):
+                        if occupied + due_background >= 4 and (recovering[path] or scheduled_body
+                                or (discovery_ready and discovery_yielded)):
                             break
                         pending[path] = pool.submit(transport.reconcile_request, path)
                         scheduled_body = scheduled_body or not recovering[path]
                         del ready[path]
                         attempted[path] = attempted.get(path, 0) + 1
+                    # Let an unsent original reply use the only free slot first.
+                    # Once that body yields it, the due scan wins over recurring
+                    # attempts, so newly committed App replies remain discoverable.
+                    discovery_yielded = discovery_yielded or (discovery_ready and scheduled_body)
+                    if (discovery_ready and len(pending) + active_background < 4
+                            and not self._closed.is_set()):
+                        discovery = pool.submit(transport.pending_delivery_paths)
+                        discovery.add_done_callback(lambda _: self._delivery_wakeup.set())
+                        discovery_yielded = False
                     if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():
                         reports = pool.submit(report_provider.reconcile)
                     if attention_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():
@@ -262,14 +275,6 @@ class LarkGoalTopicRuntimeService:
                             and len(pending) + int(reports is not None) + int(attention is not None)
                             + int(ingress is not None) + int(discovery is not None) < 3 and not self._closed.is_set()):
                         feedback = pool.submit(app_feedback)
-                    # One discovery pass uses this same bounded pool. Its slow
-                    # native/history observations cannot hold the scanner that
-                    # discovers fresh captures and already generated answers.
-                    if (callable(body_paths) and discovery is None and time.monotonic() >= discovery_due
-                            and len(pending) + int(feedback is not None) + int(reports is not None)
-                            + int(attention is not None) + int(ingress is not None) < 4 and not self._closed.is_set()):
-                        discovery = pool.submit(transport.pending_delivery_paths)
-                        discovery.add_done_callback(lambda _: self._delivery_wakeup.set())
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
 
