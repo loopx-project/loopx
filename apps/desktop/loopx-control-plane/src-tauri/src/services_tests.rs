@@ -584,6 +584,46 @@ fn read_probe_request(stream: &mut TcpStream, path: &str) -> bool {
         .starts_with(&format!("GET {path} HTTP/1.1"))
 }
 
+fn respond_to_probe_request(stream: &mut TcpStream, path: &str, payload: &str) {
+    stream.set_nonblocking(false).unwrap();
+    assert!(read_probe_request(stream, path));
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{payload}"
+    )
+    .unwrap();
+}
+
+#[test]
+fn readiness_fixture_waits_for_complete_request_on_nonblocking_stream() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (accepted, ready) = std::sync::mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_nonblocking(true).unwrap(); // Model an inherited nonblocking listener on macOS.
+        accepted.send(()).unwrap();
+        respond_to_probe_request(&mut stream, "/ready", "{}");
+    });
+    let mut client = TcpStream::connect(address).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    client.write_all(b"GET /ready HTTP/1.1\r\nHost: ").unwrap();
+    let mut early = [0; 1];
+    assert!(matches!(client.read(&mut early), Err(error)
+        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)));
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client.write_all(b"127.0.0.1\r\n\r\n").unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    server.join().unwrap();
+}
+
 #[test]
 fn a_trickling_readiness_response_cannot_extend_the_deadline() {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -1142,10 +1182,11 @@ fn connected_runtime_requires_both_healthy_exact_identity_listeners() {
                 let deadline = Instant::now() + Duration::from_secs(2);
                 loop {
                     if let Ok((mut stream, _)) = listener.accept() {
-                        stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-                        let mut request = [0; 1024];
-                        let _ = stream.read(&mut request);
-                        let _ = write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{payload}");
+                        respond_to_probe_request(
+                            &mut stream,
+                            kind.probe_path(),
+                            &payload.to_string(),
+                        );
                         return;
                     }
                     if Instant::now() >= deadline { return; }

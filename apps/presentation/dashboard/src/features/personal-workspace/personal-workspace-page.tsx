@@ -1061,7 +1061,7 @@ export function PersonalWorkspacePage({
   }
   const conversationKey = workspaceConversations?.managed ? conversationContextKey({kind: "managed", ...workspaceConversations.managed.target}) : originalConversation ? conversationContextKey({ kind: "bound", ...originalConversation.target }) : selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
-    : selectedGoalId ?? "manager";
+    : conversationContextKey(selectedGoalId != null ? {kind: "goal", goalId: selectedGoalId} : {kind: "manager"});
   const composerDraftKey = conversationInputKey(conversationKey, selectedAgentId, managedWorkActive || Boolean(originalConversation));
   const [modelSettingsSaving, setModelSettingsSaving] = useState<Record<string, boolean>>({});
   async function saveModelSettings(change: () => void | Promise<void>) {

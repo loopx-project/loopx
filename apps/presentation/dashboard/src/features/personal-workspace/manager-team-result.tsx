@@ -171,20 +171,10 @@ async function collectManagedGoalIndex(goalId: string): Promise<ManagedGoalIndex
   // matching report that happened to sort later in the Goal's history.
   for (;;) {
     const page = await fetchManagedGoalResults(goalId, cursor);
-    if (!Array.isArray(page.items) || !Number.isInteger(page.total) || page.total < 0 ||
-      (total !== undefined && page.total !== total) ||
-      !Number.isInteger(page.unavailable_count) || page.unavailable_count < 0 ||
-      !Array.isArray(page.unavailable_todo_ids) ||
-      page.unavailable_count !== page.unavailable_todo_ids.length ||
-      (page.next_cursor !== null && (!page.next_cursor || typeof page.next_cursor !== "string"))) {
-      throw new Error("managed inventory incomplete");
-    }
+    if (total !== undefined && page.total !== total) throw new Error("managed inventory incomplete");
     total = page.total;
     rows.push(...page.items);
-    for (const todoId of page.unavailable_todo_ids) {
-      if (typeof todoId !== "string" || !todoId) throw new Error("managed inventory incomplete");
-      unavailableTodoIds.add(todoId);
-    }
+    for (const todoId of page.unavailable_todo_ids) unavailableTodoIds.add(todoId);
     if (!page.next_cursor) return {readAt: Date.now(), rows, unavailableTodoIds};
     if (page.next_cursor === cursor) throw new Error("managed cursor repeated");
     if (page.items.length === 0 && page.unavailable_count === 0) {
@@ -228,9 +218,8 @@ async function readManagedPlanResult(goalId: string, todoIds: Set<string>, force
     const row = matched.values().next().value;
     if (!row) return {kind: "waiting"};
     const read = await readManagedGoalResult(goalId, row.todo_id);
-    if (read.goal_id !== goalId || read.todo_id !== row.todo_id ||
-      read.result.sha256 !== row.sha256 || read.result.producer_agent_id !== row.producer_agent_id ||
-      read.result.content_type !== row.content_type || typeof read.text !== "string") return {kind: "unavailable"};
+    if (read.result.sha256 !== row.sha256 || read.result.producer_agent_id !== row.producer_agent_id ||
+      read.result.content_type !== row.content_type) return {kind: "unavailable"};
     return {kind: "accepted", artifact: managedReportArtifact(row.content_type, row.sha256, read.text),
       agentId: row.producer_agent_id, title: row.title};
   } catch { /* A failed inventory or exact read cannot keep an earlier report visible. */ }

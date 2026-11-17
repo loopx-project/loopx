@@ -276,6 +276,18 @@ try {
       .map(row => new URL(row.path, origin));
     child.stdin.write("history-extra\n");
     const added = await next();
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (!new URL(String(input), origin).searchParams.has("known_history")) return response;
+      const value = await response.json();
+      assert.ok(value.messages.length > 0);
+      value.messages[0].text = null;
+      return new Response(JSON.stringify(value), {status: response.status});
+    };
+    const invalidSuffix = await fetchChatHistory(options, recovered);
+    assert.deepEqual(invalidSuffix.messages, [], "An invalid suffix must not publish a partial history");
+    assert.deepEqual(invalidSuffix.unavailableSessionIds, [sessionId]);
+    globalThis.fetch = routedRead;
     calls.length = 0;
     const resumed = await fetchChatHistory(options, recovered);
     assert.equal(readRequests().length, 1, "A proven append must not download the old complete transcript");

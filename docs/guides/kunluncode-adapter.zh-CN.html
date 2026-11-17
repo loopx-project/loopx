@@ -492,7 +492,7 @@ export LOOPX_KUNLUN="$LOOPX_SOURCE/.venv/bin/loopx-kunluncode"
   --skip-mcp
 
 "$LOOPX_KUNLUN" install</code></pre></div>
-        <div class="callout warning"><strong>同名 entry 保护</strong>若 <code>loopx-kunluncode</code> 不是 LoopX 管理的 entry，安装器拒绝覆盖。先 readback，只有确认应接管时才使用 <code>--replace</code>。新 entry 添加失败时会恢复可重建的旧 command entry；无法安全恢复的 entry 会在删除前被拒绝。</div>
+        <div class="callout warning"><strong>同名 entry 保护</strong>若 <code>loopx-kunluncode</code> 不是 LoopX 管理的 entry，安装器拒绝覆盖。先回读配置，只有确认应接管时才使用 <code>--replace</code>。添加命令返回失败且没有同名 entry 时，安装器会尝试恢复旧 command entry，并核对结果。无法安全恢复的 entry 会在删除前被拒绝。超时后，安装器先回读，不自动再次写入；有旧 entry 时，错误信息会给出私有备份路径。备份可能含秘密，确认配置后再删除。替换或恢复时应协调其他配置写入方。</div>
         <p>Native <code>goal-pro</code>/<code>goal</code> 由 app-server 外层回写，本身不依赖 MCP；<code>--skip-mcp</code> 后仍可运行。MCP 用于 readback、交互使用和 <code>--mode headless</code>。</p>
       </section>
 

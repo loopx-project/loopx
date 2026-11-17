@@ -333,12 +333,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/previous-desktop
-          mapfile -t assets < <(
-            gh release view "${RELEASE_TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --json assets \
-              --jq '.assets[].name | select(. == "DESKTOP-SHA256SUMS" or (startswith("LoopX") and (endswith(".dmg") or endswith(".zip") or endswith(".exe") or endswith(".msi"))))'
-          )
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+          [[ "${release_id}" =~ ^[0-9]+$ ]]
+          asset_list="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+            --jq '.[].name | select(. == "DESKTOP-SHA256SUMS" or (startswith("LoopX") and (endswith(".dmg") or endswith(".zip") or endswith(".exe") or endswith(".msi"))))')"
+          assets=()
+          if [ -n "${asset_list}" ]; then mapfile -t assets <<<"${asset_list}"; fi
           for asset in "${assets[@]}"; do
             gh release download "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -385,18 +385,90 @@ jobs:
           cd dist/desktop
           sha256sum --check DESKTOP-SHA256SUMS
 
+      - name: Resume desktop release without replacing assets
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
+          RELEASE_VERSION: ${{ steps.identity.outputs.release-version }}
+          SOURCE_REF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          if [ "$RELEASE_TAG" != "v$RELEASE_VERSION" ] && [ "$RELEASE_TAG" != "$RELEASE_VERSION" ]; then
+            echo "::error::Desktop release version does not match its tag" >&2
+            exit 1
+          fi
+          python scripts/desktop_release_artifacts.py verify-checksums \
+            --dist-dir dist/desktop --version "$RELEASE_VERSION" \
+            --checksum-file dist/desktop/DESKTOP-SHA256SUMS
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          verify_ref() {
+            local actual
+            actual="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
+            if [ "$actual" != "$SOURCE_REF" ]; then
+              echo "::error::Desktop release tag does not match the build commit" >&2
+              return 1
+            fi
+          }
+          read_assets() {
+            local release_id
+            release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')"
+            [[ "$release_id" =~ ^[0-9]+$ ]]
+            remote_assets="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" --jq '.[].name')"
+          }
+          check_asset() {
+            local artifact="$1" name matches
+            name="${artifact##*/}"
+            [[ "$name" =~ ^[A-Za-z0-9._+-]+$ ]]
+            matches="$(LC_ALL=C grep -Fixc -- "$name" <<<"$remote_assets" || true)"
+            asset_exists=0
+            if [ "$matches" -eq 0 ]; then return; fi
+            if [ "$matches" -ne 1 ] || ! grep -Fxq -- "$name" <<<"$remote_assets"; then
+              echo "::error::Desktop release asset name collision: $name" >&2
+              return 1
+            fi
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$tmpdir" --clobber
+            if ! cmp -s "$artifact" "$tmpdir/$name"; then
+              echo "::error::Desktop release asset differs: $name" >&2
+              return 1
+            fi
+            asset_exists=1
+          }
+          binaries=(dist/desktop/*.dmg dist/desktop/*.zip dist/desktop/*.exe dist/desktop/*.msi)
+          manifest=dist/desktop/DESKTOP-SHA256SUMS
+          verify_ref
+          read_assets
+          for artifact in "${binaries[@]}" "$manifest"; do check_asset "$artifact"; done
+          for artifact in "${binaries[@]}"; do
+            if ! grep -Fxq -- "${artifact##*/}" <<<"$remote_assets"; then
+              gh release upload "$RELEASE_TAG" "$artifact" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
+          read_assets
+          for artifact in "${binaries[@]}"; do
+            check_asset "$artifact"
+            if [ "$asset_exists" -ne 1 ]; then echo "::error::Missing uploaded desktop artifact" >&2; exit 1; fi
+          done
+          check_asset "$manifest"
+          if [ "$asset_exists" -eq 0 ]; then gh release upload "$RELEASE_TAG" "$manifest" --repo "$GITHUB_REPOSITORY"; fi
+          read_assets
+          check_asset "$manifest"
+          if [ "$asset_exists" -ne 1 ]; then echo "::error::Missing uploaded desktop manifest" >&2; exit 1; fi
+          verify_ref
+
       - name: Replace complete desktop binary set
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
         run: |
           set -euo pipefail
-          if gh release view "${RELEASE_TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json assets \
-            --jq 'any(.assets[]; .name == "DESKTOP-SHA256SUMS")' \
-            | grep -qx true
-          then
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+          [[ "${release_id}" =~ ^[0-9]+$ ]]
+          asset_list="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[].name')"
+          if grep -Fxq DESKTOP-SHA256SUMS <<<"${asset_list}"; then
             gh release delete-asset "${RELEASE_TAG}" DESKTOP-SHA256SUMS \
               --repo "${GITHUB_REPOSITORY}" \
               --yes
@@ -410,6 +482,7 @@ jobs:
             --clobber
 
       - name: Replace desktop checksum manifest last
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
@@ -438,6 +511,7 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --pattern "${asset}" \
               --dir dist/published-desktop
+            cmp "dist/desktop/${asset}" "dist/published-desktop/${asset}"
           done
           python scripts/desktop_release_artifacts.py verify-checksums \
             --dist-dir dist/published-desktop \

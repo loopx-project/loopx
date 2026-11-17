@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || 'main' }}
+          ref: ${{ github.sha }}
       - id: identity
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -216,7 +216,7 @@ jobs:
           path: dist/updater/*
           if-no-files-found: error
   publish:
-    needs: [identity, build-macos, build-windows, validate]
+    needs: [identity, build-macos, build-windows, validate, windows-desktop-tests]
     # A skipped Windows build is valid only on stable, where the feed is
     # Darwin-only. A main release must have its Windows artifact.
     if: >-
@@ -224,6 +224,7 @@ jobs:
       && needs.identity.result == 'success'
       && needs.build-macos.result == 'success'
       && needs.validate.result == 'success'
+      && needs.windows-desktop-tests.result == 'success'
       && (needs.identity.outputs.channel != 'main' || needs.build-windows.result == 'success')
     runs-on: ubuntu-latest
     permissions:
@@ -250,33 +251,130 @@ jobs:
           SOURCE_REF: ${{ needs.identity.outputs.ref }}
           EVENT_NAME: ${{ github.event_name }}
           CHANNEL: ${{ needs.identity.outputs.channel }}
+          VERSION: ${{ needs.identity.outputs.version }}
         run: |
           set -euo pipefail
-          # Stable builds intentionally have no Windows artifact. Without
-          # nullglob, Bash passes the unmatched pattern to `gh`, which exits
-          # before the feed and channel pointer are published.
           shopt -s nullglob
-          if [ "$EVENT_NAME" != release ]; then
-            gh release create "$RELEASE_TAG" --prerelease --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime preview."
+          python - "$VERSION" "$RELEASE_TAG" "$CHANNEL" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from scripts.desktop_update_feed import build
+
+          version, tag, channel = sys.argv[1:]
+          if channel == "stable":
+              expected_tag = "v" + version
+          elif channel == "main" and version.startswith("0.0.0-main."):
+              expected_tag = "desktop-main-" + version.removeprefix("0.0.0-main.").replace(".", "-")
+          else:
+              raise SystemExit("invalid desktop release identity")
+          if tag != expected_tag or json.loads(Path("dist/updater/desktop-updater.json").read_text()) != build(Path("dist/updater"), version, tag, channel):
+              raise SystemExit("desktop release feed does not match its identity and artifacts")
+          PY
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          verify_ref() {
+            local actual
+            actual="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
+            if [ "$actual" != "$SOURCE_REF" ]; then
+              echo "::error::Desktop release tag does not match the build commit" >&2
+              return 1
+            fi
+          }
+          if ! gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$tmpdir/release-probe"; then
+            if [ "$EVENT_NAME" != release ] && grep -Eq '^HTTP/[0-9.]+ 404([[:space:]]|$)' "$tmpdir/release-probe"; then
+              if gh api --include "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" > "$tmpdir/tag-probe"; then
+                verify_ref
+              elif ! grep -Eq '^HTTP/[0-9.]+ 404([[:space:]]|$)' "$tmpdir/tag-probe"; then
+                echo "::error::Cannot inspect desktop release tag $RELEASE_TAG" >&2
+                exit 1
+              fi
+              gh release create "$RELEASE_TAG" --prerelease --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime preview."
+            else
+              echo "::error::Cannot inspect desktop release $RELEASE_TAG" >&2
+              exit 1
+            fi
           fi
-          for artifact in dist/updater/*.gz dist/updater/*.sig dist/updater/*.exe; do
-            gh release upload "$RELEASE_TAG" "$artifact"
+          read_assets() {
+            local release_id tag="$1"
+            release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id')"
+            [[ "$release_id" =~ ^[0-9]+$ ]]
+            remote_assets="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" --jq '.[].name')"
+          }
+          check_asset() {
+            local artifact="$1" name matches
+            name="${artifact##*/}"
+            [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+            matches="$(LC_ALL=C grep -Fixc -- "$name" <<<"$remote_assets" || true)"
+            asset_exists=0
+            if [ "$matches" -eq 0 ]; then return; fi
+            if [ "$matches" -ne 1 ] || ! grep -Fxq -- "$name" <<<"$remote_assets"; then
+              echo "::error::Desktop release asset name collision: $name" >&2
+              return 1
+            fi
+            gh release download "$RELEASE_TAG" --pattern "$name" --dir "$tmpdir" --clobber
+            if ! cmp -s "$artifact" "$tmpdir/$name"; then
+              echo "::error::Desktop release asset differs: $name" >&2
+              return 1
+            fi
+            asset_exists=1
+          }
+          artifacts=(dist/updater/*.gz dist/updater/*.sig dist/updater/*.exe)
+          feed=dist/updater/desktop-updater.json
+          verify_ref
+          read_assets "$RELEASE_TAG"
+          # Reject every conflict before uploading any missing file.
+          for artifact in "${artifacts[@]}" "$feed"; do check_asset "$artifact"; done
+          for artifact in "${artifacts[@]}"; do
+            name="${artifact##*/}"
+            if ! grep -Fxq -- "$name" <<<"$remote_assets"; then
+              gh release upload "$RELEASE_TAG" "$artifact"
+            fi
           done
-          gh release upload "$RELEASE_TAG" dist/updater/desktop-updater.json --clobber
+          read_assets "$RELEASE_TAG"
+          for artifact in "${artifacts[@]}"; do
+            check_asset "$artifact"
+            if [ "$asset_exists" -ne 1 ]; then echo "::error::Missing uploaded desktop artifact" >&2; exit 1; fi
+          done
+          check_asset "$feed"
+          if [ "$asset_exists" -eq 0 ]; then gh release upload "$RELEASE_TAG" "$feed"; fi
+          read_assets "$RELEASE_TAG"
+          for artifact in "${artifacts[@]}" "$feed"; do
+            check_asset "$artifact"
+            if [ "$asset_exists" -ne 1 ]; then echo "::error::Incomplete desktop release" >&2; exit 1; fi
+          done
+          verify_ref
           # Channel pointers are independent of repository Latest, which also
           # serves separately versioned plugin releases. Advance only after the
           # immutable signed assets and feed are completely uploaded.
           pointer="desktop-$CHANNEL"
-          gh release view "$pointer" >/dev/null 2>&1 || gh release create "$pointer" --prerelease --latest=false --target "$SOURCE_REF" --title "Desktop $CHANNEL channel" --notes "Pointer to the latest complete signed desktop build."
-          pointer_assets="$(gh release view "$pointer" --json assets --jq '.assets[].name')"
+          if ! gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$pointer" > "$tmpdir/pointer-probe"; then
+            if grep -Eq '^HTTP/[0-9.]+ 404([[:space:]]|$)' "$tmpdir/pointer-probe"; then
+              gh release create "$pointer" --prerelease --latest=false --target "$SOURCE_REF" --title "Desktop $CHANNEL channel" --notes "Pointer to the latest complete signed desktop build."
+            else
+              echo "::error::Cannot inspect desktop channel $pointer" >&2
+              exit 1
+            fi
+          fi
+          read_assets "$pointer"
+          pointer_assets="$remote_assets"
+          pointer_matches="$(LC_ALL=C grep -Fixc desktop-updater.json <<<"$pointer_assets" || true)"
+          if [ "$pointer_matches" -gt 1 ] || { [ "$pointer_matches" -eq 1 ] && ! grep -Fxq desktop-updater.json <<<"$pointer_assets"; }; then
+            echo "::error::Desktop channel feed name collision" >&2
+            exit 1
+          fi
           decision=advance
           if grep -Fxq desktop-updater.json <<<"$pointer_assets"; then
             mkdir -p dist/current-pointer
-            gh release download "$pointer" --pattern desktop-updater.json --dir dist/current-pointer
-            decision="$(python scripts/desktop_update_feed.py \
-              --channel-pointer-decision "$CHANNEL" \
-              --current-feed dist/current-pointer/desktop-updater.json \
-              --candidate-feed dist/updater/desktop-updater.json)"
+            gh release download "$pointer" --pattern desktop-updater.json --dir dist/current-pointer --clobber
+            if cmp -s dist/current-pointer/desktop-updater.json dist/updater/desktop-updater.json; then
+              decision=retain
+            else
+              decision="$(python scripts/desktop_update_feed.py \
+                --channel-pointer-decision "$CHANNEL" \
+                --current-feed dist/current-pointer/desktop-updater.json \
+                --candidate-feed dist/updater/desktop-updater.json)"
+            fi
           fi
           if [ "$decision" = advance ]; then
             gh release upload "$pointer" dist/updater/desktop-updater.json --clobber
