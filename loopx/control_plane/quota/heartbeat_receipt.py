@@ -1,5 +1,4 @@
 from __future__ import annotations
-from .effective_action import EffectiveAction
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -12,6 +11,7 @@ from ...rollout_event_log import (
     rollout_event_log_path,
 )
 from ..todos.contract import normalize_todo_id, normalize_todo_replan_obligation_id
+from .effective_action import EffectiveAction
 from .effect_program import SettlementBindingKind, SettlementIdentity
 from .error_codes import HeartbeatReceiptIdentityConflictError
 from .settlement_workspace_causality import (
@@ -604,10 +604,18 @@ def requalify_bound_heartbeat_receipt(
         if not isinstance(qualified_details, Mapping):
             raise RuntimeError("TypeScript heartbeat work qualification details missing")
         event_id = str(original.get("event_id") or "")
+        receipt_revision = str(
+            qualified_details.get("settlement_receipt_revision") or ""
+        )
+        summary = (
+            "same-Turn review guard upgraded without rebinding"
+            if receipt_revision == "review_guard_upgrade"
+            else "same-Turn work admission requalified without rebinding"
+        )
         corrected = build_rollout_event(
             goal_id=goal_id, goal_ref=goal_ref, event_kind="quota_should_run",
             agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id, status=status,
-            summary="same-Turn work admission requalified without rebinding",
+            summary=summary,
             source_event_id=event_id, caused_by=event_id, details=dict(qualified_details),
         )
         _append_rollout_event_line(log_path, corrected)

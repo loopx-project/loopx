@@ -145,11 +145,13 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         # The current producer's own immutable capture is the transport oracle;
         # the original long task and optional context remain independent inputs.
         detail = actual["detail_ref"]["captured_decision"]
-        assert json.loads(Path(detail["path"]).read_text()) == actual["work_contract"]
-        assert actual["work_contract"] == plan["work_contract"]
-        assert "Validate the complete acceptance: " + "preserve original evidence; " * 180 in json.dumps(actual["work_contract"])
+        delivered_work = json.loads(Path(detail["path"]).read_text())
+        assert delivered_work == plan["work_contract"]
+        assert actual["source_decision_hash"] == plan["source_decision_hash"]
+        assert "work_contract" not in actual
+        assert "Validate the complete acceptance: " + "preserve original evidence; " * 180 in json.dumps(delivered_work)
         assert "turn_envelope" not in actual and "turn_authority" not in actual
-        delivered_context = actual["work_contract"]["interaction_contract"].get("agent_context")
+        delivered_context = delivered_work["interaction_contract"].get("agent_context")
         assert delivered_context == context
         if context:
             assert "detail_ref" not in delivered_context
@@ -234,7 +236,8 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     actual, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-    assert actual["work_contract"] == plan["work_contract"]
+    assert actual["source_decision_hash"] == plan["source_decision_hash"]
+    assert "work_contract" not in actual
     # This Goal body is a pending original read, exercised below; a complete
     # contract does not require every retained source to be inline.
     assert "turn_envelope" not in actual and "turn_authority" not in actual
