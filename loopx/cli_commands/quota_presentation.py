@@ -79,7 +79,10 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
     return view
 
 
-def budgeted_spend_result(payload, args, *, runtime_root, reader_argv):
+def budgeted_spend_result(
+    payload: dict[str, object], args: argparse.Namespace, *,
+    runtime_root: Path, reader_argv: list[str],
+) -> tuple[dict[str, object], int]:
     """Present an already evaluated spend, retaining failed-delivery controls."""
     from .quota_capture import budgeted_settlement_result, settlement_capture_failure_view
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from os import getenv
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .quota_presentation import (
     _project_native_cli_settlement,
@@ -54,6 +54,7 @@ from .quota_reward_memory import (
 )
 
 if TYPE_CHECKING:
+    from ..control_plane.capability_hooks import TurnStartContextProjector
     from .quota_action_selection import RequestedQuotaActionSelection
     from .quota_context import QuotaCommandContext
 
@@ -237,7 +238,7 @@ def _dispatch_quota_turn_start_hooks(
     preview = bool(getattr(args, "dry_run", False))
     if preview and not args.agent_id:
         return None, False
-    dispatch = {}
+    dispatch: dict[str, Any] = {}
     if not preview:
         from .lark_inbox import dispatch_goal_lark_turn_start_hooks
 
@@ -331,7 +332,9 @@ def _prepare_quota_command_execution(
     return goal_ref, turn_start_hook_dispatch, context
 
 
-def _quota_turn_context_projector(args, *, registry_path: Path, runtime_root: Path):
+def _quota_turn_context_projector(
+    args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
+) -> TurnStartContextProjector | None:
     from ..capabilities.explore.turn_context import turn_context_projector
 
     return turn_context_projector(registry_path=registry_path, runtime_root=runtime_root,
@@ -840,7 +843,7 @@ def _append_quota_heartbeat_receipt(
             turn_instance_id=turn_instance_id, goal_ref=goal_ref,
         )
     except LockAcquireTimeoutError as exc:
-        failure = _export("quota_failure_payload")(
+        failure: dict[str, object] = _export("quota_failure_payload")(
             args, registry_path=registry_path, runtime_root_arg=runtime_root_arg, error=exc,
         )
         fail_heartbeat_receipt(
@@ -898,7 +901,7 @@ def _execute_non_guard_quota_command(
     status_payload = context.status_payload
     runtime_root = context.runtime_root
     if args.quota_command == "monitor-poll":
-        return _export("record_quota_monitor_poll_for_cli")(
+        return cast(Callable[..., dict[str, object]], _export("record_quota_monitor_poll_for_cli"))(
             args,
             status_payload=status_payload,
             registry_path=registry_path,
@@ -922,7 +925,7 @@ def _execute_non_guard_quota_command(
         "scheduler-ack-current",
         "scheduler-fail-current",
     }:
-        return _export("build_scheduler_followup_payload")(
+        return cast(Callable[..., dict[str, object]], _export("build_scheduler_followup_payload"))(
             status_payload,
             args,
             registry_path=registry_path,
@@ -933,7 +936,7 @@ def _execute_non_guard_quota_command(
             goal_ref=goal_ref,
         )
     if args.quota_command == "spend-slot":
-        return _export("spend_quota_slot")(
+        return cast(Callable[..., dict[str, object]], _export("spend_quota_slot"))(
             status_payload,
             goal_id=args.goal_id,
             slots=args.slots,
@@ -950,7 +953,7 @@ def _execute_non_guard_quota_command(
             goal_ref=goal_ref,
         )
     if args.quota_command == "void-slot":
-        return _export("void_quota_slot")(
+        return cast(Callable[..., dict[str, object]], _export("void_quota_slot"))(
             status_payload,
             goal_id=args.goal_id,
             voided_run_generated_at=args.void_generated_at,
@@ -962,7 +965,9 @@ def _execute_non_guard_quota_command(
             registry_path=registry_path,
             goal_ref=goal_ref,
         )
-    return _export("build_quota_plan")(status_payload, mode=args.quota_command)
+    return cast(Callable[..., dict[str, object]], _export("build_quota_plan"))(
+        status_payload, mode=args.quota_command,
+    )
 
 
 def _execute_quota_command(
