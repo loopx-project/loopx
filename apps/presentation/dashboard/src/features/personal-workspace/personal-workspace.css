@@ -705,6 +705,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-settings-card > footer { padding: 13px 20px; border-top: 1px solid var(--pw-line); background: #faf9f6; color: var(--pw-faint); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-cadence-settings { display: grid; gap: 22px; width: min(100%, 760px); padding: 28px; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); }
 .personal-cadence-form { display: grid; gap: 20px; }
+.personal-cadence-form > details { min-width: 0; overflow-wrap: anywhere; }
 .personal-cadence-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .personal-cadence-target { grid-template-columns: 1fr; }
 .personal-cadence-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; }

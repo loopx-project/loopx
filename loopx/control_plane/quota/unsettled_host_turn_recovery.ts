@@ -335,6 +335,12 @@ function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {
     );
   }
   const settlementEffectId = optionalHeartbeatString(raw.settlement_effect_id);
+  if (raw.admitted_replan !== undefined &&
+      (raw.admitted_replan !== true || settlementEffectId === null)) {
+    throw new EffectRuntimeRequestError(
+      "prior host Turn recovery candidate has an invalid autonomous replan fact",
+    );
+  }
   if (raw.admitted_todo_replan !== undefined &&
       (raw.admitted_todo_replan !== true || bindingKind !== "todo" || settlementEffectId === null)) {
     throw new EffectRuntimeRequestError(
@@ -350,6 +356,11 @@ function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {
     binding_kind: bindingKind,
     binding_id: bindingId,
     settlement_effect_id: settlementEffectId,
+    ...(
+      raw.admitted_replan === true || raw.admitted_todo_replan === true
+        ? {admitted_replan: true as const}
+        : {}
+    ),
     ...(raw.admitted_todo_replan === true ? {admitted_todo_replan: true as const} : {}),
   };
 }
@@ -506,9 +517,10 @@ function recoveryObligation(
  *
  * The accepted closeout order is policy: a validated settlement wins, then an
  * exactly committed monitor-poll closeout, then a typed lifecycle transition.
- * For a Todo-bound autonomous replan, a verified writeback keeps its debit
- * obligation even when the Todo has changed. Ordinary lifecycle closeouts
- * retain their existing meaning.
+ * For an admitted autonomous replan, a verified writeback keeps its debit
+ * obligation under either the legacy Todo binding or the canonical replan
+ * obligation binding. Ordinary lifecycle closeouts retain their existing
+ * meaning.
  */
 export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
   const request = requireJsonObject(value, "prior host Turn recovery request");
@@ -553,7 +565,7 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     };
   }
 
-  const replanSpendOwed = selected.admitted_todo_replan === true && awaitingQuotaSpend(missingReceipts);
+  const replanSpendOwed = selected.admitted_replan === true && awaitingQuotaSpend(missingReceipts);
   const lifecycleCloseout = replanSpendOwed ? null : acceptedLifecycleCloseout(todo);
   if (lifecycleCloseout !== null) {
     return {

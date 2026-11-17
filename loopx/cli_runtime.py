@@ -699,7 +699,7 @@ def _dispatch_common_command(
 		from .cli_commands.extension import handle_extension_command
 
 		return handle_extension_command(
-			args, runtime_root_arg=args.runtime_root,
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
 	if args.command == "slash-commands":

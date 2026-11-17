@@ -6343,6 +6343,362 @@ def test_legacy_group_principal_and_native_home_are_not_migrated_during_observat
         runtime.close()
 
 
+@pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
+def test_private_native_mention_steers_original_busy_turn(ordinary, profile):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    capture = ordinary[4]
+    try:
+        original = provider.event(profile, "mention-original", "wait for steer")
+        assert transport.admit(profile, original)["status"] == "durably_accepted"
+        first, = transport.core.pending()
+        sid, tid = first["session_id"], first["turn_id"]
+        deadline = time.monotonic() + 10
+        while not (store.load_turn(sid, tid) or {}).get("upstream_turn_id"):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        body = "@Personal assistant\nPreserve this correction.\n\nAnd this second paragraph."
+        event = provider.event(profile, "mention-correction", body)
+        provider.messages[event["message_id"]]["mentions"] = [
+            {"key": "@_user_1", "name": "A renamed assistant", "id": {
+                "open_id": f"ou_{profile.replace('-', '_')}_bot"}}]
+        assert transport.admit(profile, event)["status"] == "command_recorded"
+        ended = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert ended["status"] == "completed"
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        steer, = [call for call in calls if call["method"] == "turn/steer"]
+        assert steer["params"]["expectedTurnId"] == ended["upstream_turn_id"]
+        assert steer["params"]["input"] == [{"type": "text", "text": body}]
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+        assert not store.queued_turns(sid)
+        # A later redelivery may observe an idle Session; its frozen receipt
+        # must still name the original Turn and never create another one.
+        before = capture.read_bytes()
+        assert transport.admit(profile, {**event, "event_id": "redelivered"})["status"] == "command_recorded"
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        assert restarted.admit(profile, event)["status"] == "command_recorded"
+        assert capture.read_bytes() == before
+        row = next(row for row in transport.core.pending() if row["request_ref"] != first["request_ref"])
+        assert row["session_id"] == sid and row["turn_id"] == tid
+        assert row["mention_delivery"]["action"] == "delivered"
+    finally:
+        runtime.close()
+
+
+def _private_mention_event(provider, profile, name, text):
+    event = provider.event(profile, name, text)
+    provider.messages[event["message_id"]]["mentions"] = [
+        {"key": "@_user_1", "name": "Renamed Bot", "id": {
+            "open_id": f"ou_{profile.replace('-', '_')}_bot"}}]
+    return event
+
+
+def _wait_private_upstream(store, row):
+    deadline = time.monotonic() + 10
+    while not (store.load_turn(row["session_id"], row["turn_id"]) or {}).get("upstream_turn_id"):
+        assert time.monotonic() < deadline
+        time.sleep(.01)
+
+
+@pytest.mark.parametrize("addressing", ["prose", "other_member", "other_app", "same_name", "quoted", "hint"])
+def test_private_non_native_mentions_keep_normal_queue(ordinary, addressing):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "ordinary-busy", "wait for steer"))
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        body = '@notes-app\nQuoted: "@notes-app please change the task"'
+        event = provider.event("notes-app", "unverified-mention", body)
+        message = provider.messages[event["message_id"]]
+        if addressing == "hint":
+            event.update(mentioned=True, addressing_source="provider_mention")
+        elif addressing == "quoted":
+            message["quoted_message"] = {"mentions": [{"id": {"open_id": "ou_notes_app_bot"}}]}
+        elif addressing != "prose":
+            identity = {"other_member": "ou_person", "other_app": "ou_steward_app_bot", "same_name": "ou_imposter"}[addressing]
+            message["mentions"] = [{"name": "notes-app", "id": {"open_id": identity}}]
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        assert [turn["message"] for turn in store.queued_turns(original["session_id"])] == [body]
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+    finally:
+        runtime.close()
+
+
+def test_private_idle_native_mention_uses_original_queue(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        event = _private_mention_event(provider, "notes-app", "idle-mention", "@notes-app\nAn ordinary question.")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row, = transport.core.pending()
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        receipt = store.steering_receipt(row["session_id"], "external-" + row["request_ref"])
+        assert receipt["mode"] == "session_queue"
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+        assert not any(call["method"] == "turn/steer" for call in calls)
+    finally:
+        runtime.close()
+
+
+def test_private_mentions_keep_two_busy_app_sessions_isolated(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        originals = {}
+        for profile in ("notes-app", "steward-app"):
+            transport.admit(profile, provider.event(profile, "busy-" + profile, "wait for steer"))
+            originals[profile] = next(row for row in transport.core.pending() if row["message"] == "wait for steer"
+                and row["request_ref"] == identity_ref(transport._binding(profile)["provider_ref"], "om_busy-" + profile))
+            _wait_private_upstream(store, originals[profile])
+        assert originals["notes-app"]["session_id"] != originals["steward-app"]["session_id"]
+        for profile in ("notes-app", "steward-app"):
+            event = _private_mention_event(provider, profile, "adjust-" + profile, "Correction only for " + profile)
+            with ThreadPoolExecutor(max_workers=2) as calls:
+                results = list(calls.map(lambda _: transport.admit(profile, event), range(2)))
+            assert all(result["status"] == "command_recorded" for result in results)
+            row = transport.core.read_request(identity_ref(transport._binding(profile)["provider_ref"], event["message_id"]))
+            assert (row["session_id"], row["turn_id"]) == (originals[profile]["session_id"], originals[profile]["turn_id"])
+            peer = "steward-app" if profile == "notes-app" else "notes-app"
+            assert not any(message.get("text") == "Correction only for " + profile
+                for message in store.messages(originals[peer]["session_id"]))
+        captured = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(call["method"] == "turn/start" for call in captured) == 2
+        assert sum(call["method"] == "turn/steer" for call in captured) == 2
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("fault", ["turn_switched", "revoked", "source_changed", "host_unavailable"])
+def test_private_mention_keeps_frozen_target_across_failed_admission(ordinary, monkeypatch, fault):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    detached = None
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "fenced-busy", "wait for steer"))
+        original, = transport.core.pending()
+        sid, tid = original["session_id"], original["turn_id"]
+        _wait_private_upstream(store, original)
+        event = _private_mention_event(provider, "notes-app", "fenced-mention", "Apply only to the original Turn.")
+        provider_ref = transport._binding("notes-app")["provider_ref"]
+        admit, changed = transport.core.admit, False
+
+        def change_during_preflight(**kwargs):
+            verify = kwargs["source_preflight"]
+
+            def preflight(selected):
+                nonlocal changed, detached
+                if not changed:
+                    changed = True
+                    if fault == "turn_switched":
+                        runtime.interrupt_turn(session_id=sid, turn_id=tid)
+                        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+                        later, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="later-turn",
+                            message="wait for steer", work_dir=ordinary[-1], objective="", origin="lark")
+                        _wait_private_upstream(store, later)
+                    elif fault == "revoked":
+                        transport.bindings.disconnect(original["binding_id"], expected_revision=transport.bindings.read()["revision"])
+                    elif fault == "source_changed":
+                        provider.messages[event["message_id"]]["mentions"] = []
+                    else:
+                        with runtime.lock:
+                            detached = runtime.adapters.pop(sid)
+                verify(selected)
+
+            return admit(**{**kwargs, "source_preflight": preflight})
+
+        monkeypatch.setattr(transport.core, "admit", change_during_preflight)
+        result = transport.admit("notes-app", event)
+        assert result["status"] in {"command_recorded", "command_rejected"}
+        row = transport.core.read_request(identity_ref(provider_ref, event["message_id"]))
+        assert row["mention_capture"]["target_turn_id"] == tid
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+        assert not store.queued_turns(sid)
+    finally:
+        if detached is not None:
+            with runtime.lock:
+                runtime.adapters[original["session_id"]] = detached
+        runtime.close()
+
+
+@pytest.mark.parametrize("phase", ["identity", "message"])
+def test_private_mention_does_not_target_turn_started_during_provider_read(ordinary, monkeypatch, phase):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "intake-busy", "wait for steer"))
+        original, = transport.core.pending()
+        sid, tid = original["session_id"], original["turn_id"]
+        _wait_private_upstream(store, original)
+        event = _private_mention_event(provider, "notes-app", "slow-source-mention", "Only correct the Turn that received this.")
+        read_source = transport.bindings.resolve if phase == "identity" else transport._source_message
+        switched = False
+
+        def slow_source(*args, **kwargs):
+            nonlocal switched
+            if not switched:
+                switched = True
+                runtime.interrupt_turn(session_id=sid, turn_id=tid)
+                runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+                later, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="during-source-read",
+                    message="wait for steer", work_dir=ordinary[-1], objective="", origin="lark")
+                _wait_private_upstream(store, later)
+            return read_source(*args, **kwargs)
+
+        monkeypatch.setattr(transport.bindings if phase == "identity" else transport,
+            "resolve" if phase == "identity" else "_source_message", slow_source)
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"]))
+        assert row["mention_capture"]["target_turn_id"] == tid
+        assert row["mention_delivery"]["action"] == "reject"
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+    finally:
+        runtime.close()
+
+
+def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, monkeypatch):
+    from test_native_steward_private import steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        event = provider.event("steward-app", "manager-original", "wait for interrupt")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        session = store.load_session(original["session_id"])
+        assert session["steward_context"]["audience"] == "bound_owner"
+        correction = _private_mention_event(provider, "steward-app", "manager-adjust", "Correct the current inspection.")
+        assert transport.admit("steward-app", correction)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], correction["message_id"]))
+        assert row["mention_delivery"]["action"] == "delivered"
+        assert row["turn_id"] == original["turn_id"] and row["session_id"] == original["session_id"]
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(call["method"] in {"thread/goal/set", "turn/start"} for call in calls) == 1
+        assert sum(call["method"] == "turn/steer" for call in calls) == 1
+        assert not store.queued_turns(original["session_id"])
+    finally:
+        runtime.close()
+        fixture.close()
+
+
+def test_private_steward_mention_requires_current_active_turn_authorization(tmp_path):
+    from test_native_steward_private import steward
+    from loopx.chat_manager_context import manager_authorization_scope_is_current
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        transport.admit("steward-app", provider.event("steward-app", "scope-original", "wait for interrupt"))
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        sid = original["session_id"]
+        scope = store.load_session(sid)["manager_authorization_scope_id"]
+        store.update_session(sid, manager_authorization_scope_id="stale-scope")
+        assert not manager_authorization_scope_is_current(runtime.registry_path, runtime.manager_scope_resolver,
+            store.load_session(sid), "stale-scope", runtime_root=runtime.coordination_runtime_root)
+        correction = _private_mention_event(provider, "steward-app", "scope-denied", "Correct only with current authority.")
+        assert transport.admit("steward-app", correction)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], correction["message_id"]))
+        assert row["mention_delivery"]["action"] == "reject"
+        assert not any(json.loads(line)["method"] == "turn/steer" for line in capture.read_text().splitlines())
+        # A fresh explicit correction after the original scope is restored can
+        # make progress; it cannot replay the previously rejected input.
+        store.update_session(sid, manager_authorization_scope_id=scope)
+        restored = _private_mention_event(provider, "steward-app", "scope-restored", "Continue under the restored original scope.")
+        assert transport.admit("steward-app", restored)["status"] == "command_recorded"
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], restored["message_id"]))
+        assert row["mention_delivery"]["action"] == "delivered" and row["turn_id"] == original["turn_id"]
+    finally:
+        runtime.close()
+        fixture.close()
+
+
+def test_private_mention_keeps_images_instead_of_steering_text_alone(ordinary):  # noqa: F811
+    from test_lark_private_images import image_runner
+    from test_chat_image_attachments import PNG_DATA_URL
+
+    store, runtime, provider, transport = connect(ordinary)
+    transport.runner = image_runner(provider)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "image-busy", "wait for steer"))
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        event = _private_mention_event(provider, "notes-app", "image-adjust", "Keep the caption\n![Image](img_example)")
+        event["message_type"] = "post"
+        provider.messages[event["message_id"]]["msg_type"] = "post"
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        row = next(row for row in transport.core.pending() if row["request_ref"] != original["request_ref"])
+        assert row["mention_delivery"] == {"action": "reject", "error_code": "queue_steering_attachments_unavailable"}
+        assert row["attachments"][0]["data_url"] == PNG_DATA_URL
+        assert "Keep the caption" in row["message"]
+        assert not store.queued_turns(original["session_id"])
+        calls = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert not any(call["method"] == "turn/steer" for call in calls)
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+    finally:
+        runtime.close()
+
+
+def test_private_mention_lost_native_ack_waits_for_exact_readback_without_resending(ordinary, monkeypatch):  # noqa: F811
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "uncertain-busy", "wait for steer"))
+        original, = transport.core.pending()
+        sid = original["session_id"]
+        _wait_private_upstream(store, original)
+        body = "Exact correction after an uncertain ACK."
+        event = _private_mention_event(provider, "notes-app", "uncertain-adjust", body)
+        native_steer = CodexAppServerAdapter.steer_turn
+
+        def lose_ack(adapter, *args):
+            native_steer(adapter, *args)
+            raise RuntimeError("native response was lost after the send")
+
+        monkeypatch.setattr(CodexAppServerAdapter, "steer_turn", lose_ack)
+        monkeypatch.setattr(CodexAppServerAdapter, "steering_delivery_readback", lambda *_: [])
+        assert transport.admit("notes-app", event)["status"] == "admission_deferred"
+        ref = identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"])
+        first = transport.core.read_request(ref)
+        assert first["status"] == "prepared" and first["mention_delivery"]["action"] == "unresolved"
+        capture = ordinary[4]
+        packets = [json.loads(line) for line in capture.read_text().splitlines()]
+        sent, = [call for call in packets if call["method"] == "turn/steer"]
+        before = len(packets)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        path = restarted.root / f"{ref}.json"
+        restarted.reconcile_request(path)
+        unresolved = restarted.core.read_request(ref)
+        assert unresolved["mention_delivery"]["action"] == "unresolved"
+        assert not unresolved.get("delivery_verified")
+        assert any("送达状态待核实" in text for _, text in provider.writes)
+        # This evidence comes from the captured native request, rather than a
+        # proposed target or a new model turn. Wrong text cannot settle it.
+        visible_body = "A different correction"
+        def readback(_adapter, turn_id):
+            return [{"turnId": turn_id, "item": {"type": "userMessage",
+                "clientId": sent["params"]["clientUserMessageId"],
+                "content": [{"type": "text", "text": visible_body}]}}]
+
+        monkeypatch.setattr(CodexAppServerAdapter, "steering_delivery_readback", readback)
+        restarted.reconcile_request(path)
+        assert restarted.core.read_request(ref)["mention_delivery"]["action"] == "unresolved"
+        visible_body = body
+        restarted.reconcile_request(path)
+        settled = restarted.core.read_request(ref)
+        assert settled["mention_delivery"]["action"] == "delivered"
+        assert settled["turn_id"] == original["turn_id"] and settled["delivery_verified"]
+        assert any(text == "已送达当前回合。" for _, text in provider.writes)
+        packets = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(call["method"] == "turn/steer" for call in packets) == 1
+        assert sum(call["method"] == "turn/start" for call in packets) == 1
+        assert len(packets) >= before and not store.queued_turns(sid)
+    finally:
+        runtime.close()
+
+
 def test_native_private_admission_queue_other_app_stop_and_verified_delivery(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:

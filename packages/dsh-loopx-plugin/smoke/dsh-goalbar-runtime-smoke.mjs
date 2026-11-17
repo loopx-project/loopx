@@ -1110,7 +1110,7 @@ set -eu
 printf '%s\n' "$*" >> "${cliLog}"
 case " $* " in
   *" --version "*)
-    printf '%s\n' 'loopx 1.2.4'
+    printf '%s\n' 'loopx 2.4.0'
     exit 0
     ;;
 esac
