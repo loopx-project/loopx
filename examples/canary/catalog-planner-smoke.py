@@ -708,7 +708,7 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
     ]
     assert "python3 examples/control_plane/heartbeat-prompt-smoke.py" in runtime_connector_commands
     assert (
-        "python3 examples/codex-cli-tui-bootstrap-smoke-bundle-smoke.py"
+        "python3 examples/codex-cli-bootstrap-message-smoke.py"
         in runtime_connector_commands
     )
     assert "python3 examples/claude-goalmode-lifecycle-smoke.py" in runtime_connector_commands

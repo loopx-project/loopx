@@ -1,7 +1,0 @@
-{
-  "command_outputs": {
-    "root": "Usage: codex [OPTIONS] [PROMPT]\n\nCommands:\n  exec\n  resume\n  attach-session    Send prompt to session after checking the idle TUI\n",
-    "exec": "Usage: codex exec [OPTIONS] [PROMPT]",
-    "resume": "Usage: codex resume [SESSION_ID]"
-  }
-}
