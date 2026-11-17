@@ -86,6 +86,12 @@ def _drain_session_queue_events(controller: Any, *, session_id: str, work_dir: P
                                 objective=objective,
                             )
                         except Exception as exc:
+                            with controller.lock:
+                                worker_active = controller._has_live_turn_worker(session, active)
+                            if worker_active:
+                                # An observer cannot settle its live worker's Turn.
+                                controller.closed.wait(0.05)
+                                continue
                             controller._fail_queue_preparation(session_id, active_turn_id, exc)
                         else:
                             continue

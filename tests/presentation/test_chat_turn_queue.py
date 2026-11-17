@@ -1,6 +1,7 @@
 """Ordinary browser queue intent through real HTTP, store and native stdio."""
 
 import json
+import threading
 import time
 
 import pytest
@@ -507,17 +508,39 @@ def test_concurrent_direct_recovery_serializes_the_original_send_and_readback(or
     assert len([row for row in capture.read_text().splitlines() if json.loads(row)["method"] == "turn/steer"]) == 1
 
 
-def test_proven_non_delivery_preserves_fifo_and_fresh_attempt_can_steer(ordinary):  # noqa: F811
+def test_proven_non_delivery_preserves_fifo_and_fresh_attempt_can_steer(ordinary, monkeypatch):  # noqa: F811
     store, runtime, contexts, request, capture, *_ = ordinary
     sid, active, queued, _ = held_queue(ordinary)
     path = f"/api/chat/sessions/{sid}/queue/{queued}/steer"
     body = {"target_turn_id": active, "client_ingress_id": "not-attached"}
+    # Early reattachment can hide an observer that fails the live Turn.
+    observer_parked = threading.Event()
+    allow_probe = threading.Event()
+    observer_waited = threading.Event()
+    original_wait = runtime.closed.wait
+
+    def observe_queue_wait(timeout=None):
+        if threading.current_thread() is runtime.session_queue_threads.get(sid):
+            if not observer_parked.is_set():
+                observer_parked.set()
+                allow_probe.wait(5)
+            elif sid not in runtime.adapters:
+                observer_waited.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(runtime.closed, "wait", observe_queue_wait)
+    assert observer_parked.wait(5), "queue observer must reach its active-Turn wait"
     adapter = runtime.adapters.pop(sid)
     try:
         assert request(path, body)[1]["error_code"] == "live_steering_session_not_attached"
+        allow_probe.set()
+        assert observer_waited.wait(5), "queue observer must yield while the original worker owns the Turn"
+        assert store.load_turn(sid, active)["status"] == "running"
+        assert store.load_session(sid)["active_turn_id"] == active
         assert [t["turn_id"] for t in store.queued_turns(sid)] == [queued]
     finally:
         runtime.adapters[sid] = adapter
+        allow_probe.set()
     assert request(path, {**body, "client_ingress_id": "recovered"})[0] == 200
     assert request(path, body)[0] == 409
     assert store.load_turn(sid, queued)["_queue_steering"]["status"] == "delivered"
