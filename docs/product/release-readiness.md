@@ -156,6 +156,11 @@ passes, PyPI; each stable promotion still needs one package version name. The
 version source is `loopx.__version__`, mirrored by `pyproject.toml`; the
 expected public tag is `vX.Y.Z` for that version.
 
+Exact-source qualification reads both version declarations from the selected
+checkout without executing its package. Missing, malformed or conflicting build
+metadata refuses qualification even when the commit is clean and all supplied
+receipts agree. Release artifact tooling uses the same metadata reader.
+
 Before moving `stable`, maintainers should:
 
 - before freezing the candidate, fetch `stable` from the verified target

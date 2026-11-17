@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import copy
 import gzip
 import hashlib
@@ -15,9 +14,11 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from loopx.release_manifest import checkout_release_metadata
 
 
 class ReleaseArtifactError(ValueError):
@@ -38,38 +39,11 @@ class ReleaseIdentity:
         return self.name.replace("-", "_")
 
 
-def _module_version(path: Path) -> str:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for statement in tree.body:
-        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-        if not any(isinstance(target, ast.Name) and target.id == "__version__" for target in targets):
-            continue
-        value = statement.value
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            return value.value
-    raise ReleaseArtifactError(f"missing literal __version__ in {path}")
-
-
 def load_identity(project_root: Path) -> ReleaseIdentity:
-    pyproject_path = project_root / "pyproject.toml"
-    payload = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-    project = payload.get("project")
-    if not isinstance(project, dict):
-        raise ReleaseArtifactError(f"missing [project] table in {pyproject_path}")
-    name = project.get("name")
-    version = project.get("version")
-    if not isinstance(name, str) or not name:
-        raise ReleaseArtifactError("project.name must be a non-empty string")
-    if not isinstance(version, str) or not version:
-        raise ReleaseArtifactError("project.version must be a non-empty string")
-    module_version = _module_version(project_root / "loopx" / "__init__.py")
-    if module_version != version:
-        raise ReleaseArtifactError(
-            f"version mismatch: pyproject.toml={version!r}, loopx.__version__={module_version!r}"
-        )
-    return ReleaseIdentity(name=name, version=version)
+    try:
+        return ReleaseIdentity(**checkout_release_metadata(project_root))
+    except ValueError as exc:
+        raise ReleaseArtifactError(str(exc)) from exc
 
 
 def distribution_files(dist_dir: Path, identity: ReleaseIdentity) -> tuple[Path, ...]:
