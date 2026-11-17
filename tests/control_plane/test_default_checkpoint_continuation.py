@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 import pytest
 
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 from loopx.todos import add_goal_todo, update_goal_todo
 from loopx.control_plane.quota.settlement import SettlementIdentity
 from loopx.control_plane.turn_driver.checkpoint_continuation import CurrentAgentCheckpoint
@@ -143,11 +145,14 @@ def test_committed_direction_replay_uses_index_before_disposable_read(provider, 
     control = _control(registry)
     json.loads(control.should_run())
     first = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.', next_agent_todo='Verify remaining work.'))
+    assert first['stage'] == 'direction_pending', first
+    purpose = first['context']['purpose']
+    assert purpose == 'supplement_checkpoint'
     identity = SettlementIdentity.from_runtime_payload(first['settlement_identity'])
     def decide(context):
         return {'read_context_id': context['read_context_id'],
             'vision_unchanged_reason': 'Current evidence preserves the original route.'}
-    decided = CurrentAgentCheckpoint(registry, runtime, state, identity, decide).continue_direction({})
+    decided = CurrentAgentCheckpoint(registry, runtime, state, identity, decide).continue_direction({}, purpose=purpose)
     committed = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.',
         next_agent_todo='Verify remaining work.', read_context_id=decided['checkpoint_read_context_id'],
         vision_unchanged_reason=decided['vision_unchanged_reason']))
@@ -168,7 +173,7 @@ def test_committed_direction_replay_uses_index_before_disposable_read(provider, 
         pytest.fail('A committed direction must not re-dispatch its model')
     result = CurrentAgentCheckpoint(registry, runtime, state, identity, unexpected).continue_direction({
         'summary': 'Original business result.', 'agent_vision': {'stale': True},
-        'vision_unchanged_reason': 'Obsolete pre-result judgment.'})
+        'vision_unchanged_reason': 'Obsolete pre-result judgment.'}, purpose=purpose)
     assert result['checkpoint_read_context_id'] == decided['checkpoint_read_context_id']
     assert 'agent_vision' not in result and 'vision_unchanged_reason' not in result
     replay = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.',
@@ -240,7 +245,17 @@ def test_default_pending_readback_guides_the_original_caller(provider, tmp_path,
                      '--todo-id', todo, '--turn-instance-id', identity['turn_instance_id']]):
         rc, observed = _run_cli(registry, *command)
         assert rc == 0, json.dumps(observed)
-        item = observed['attention_queue']['items'][0] if command[0] == 'status' else observed
+        if command[0] == 'status':
+            item = observed['attention_queue']['items'][0]
+        else:
+            assert observed['schema_version'] == 'context_capture_navigation_v1', observed
+            reader = shlex.split(observed['command'])
+            keys = ('first_delivery_progress', 'recommended_action')
+            selectors = [arg for key in keys for arg in ('--select', f'/{key}')]
+            rc, page = _run_cli(registry, *reader[reader.index('quota'):], *selectors)
+            assert rc == 0 and page['eof'], page
+            values = selected_context_values(page['content'])
+            item = {key: values[f'/{key}'] for key in keys}
         progress = item['first_delivery_progress']
         assert progress['settlement_identity'] == identity
         assert progress['stage'] == 'direction_pending' and progress['result_committed'] is True
@@ -292,7 +307,7 @@ else:
     rc, result = _run_cli(registry, 'turn', 'run-once', '--host', 'generic-cli', '--goal-id', GOAL_ID,
         '--agent-id', AGENT_ID, '--project', str(project), '--host-adapter-command-json',
         json.dumps([sys.executable, str(host)]), '--validation-command-json', json.dumps([sys.executable, str(validator)]),
-        '--no-global-sync', '--execute')
+        '--host-adapter-request-schema', 'loopx_turn_host_request_v1', '--no-global-sync', '--execute')
     assert rc == 0 and result.get('status') == 'committed', json.dumps(result, indent=2)
     assert len((project / 'direction.txt').read_text().splitlines()) == 1
     rows = [json.loads(line) for line in (tmp_path / 'runtime/goals' / GOAL_ID / 'runs/index.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -344,13 +359,14 @@ def test_direction_retry_keeps_input_response_binding_and_result(provider, chang
     first = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.', next_agent_todo='Verify remaining work.'))
     assert first['stage'] == 'direction_pending', first
     identity = SettlementIdentity.from_runtime_payload(first['settlement_identity'])
+    purpose = first['context']['purpose']
     seen = []
     def decide(context):
         seen.append(context)
         assert context['basis']['todo']['status'] == 'done'
         return {'read_context_id': context['read_context_id'], 'vision_unchanged_reason': 'Current evidence preserves the route.'}
     driver = CurrentAgentCheckpoint(registry, tmp_path / 'runtime', state, identity, decide)
-    decided = driver.continue_direction({})
+    decided = driver.continue_direction({}, purpose=purpose)
     _assert_pending_direction_cannot_spend(registry, tmp_path / 'runtime', identity)
     if change == 'related':
         state.write_text(state.read_text(encoding='utf-8') + '\n## Acceptance\nRevised obligation.\n', encoding='utf-8')
@@ -365,11 +381,11 @@ def test_direction_retry_keeps_input_response_binding_and_result(provider, chang
         receipt['current_agent_decision']['read_context_id'] = 'replacement-key'
         path.write_text(json.dumps(receipt), encoding='utf-8')
         with pytest.raises(ValueError, match='binding'):
-            driver.continue_direction({})
+            driver.continue_direction({}, purpose=purpose)
         assert len(seen) == 1
         return
     cold = CurrentAgentCheckpoint(registry, tmp_path / 'runtime', state, identity, decide)
-    replay = cold.continue_direction({})
+    replay = cold.continue_direction({}, purpose=purpose)
     assert len(seen) == (2 if change == 'related' else 1)
     assert (replay['checkpoint_read_context_id'] != decided['checkpoint_read_context_id']) == (change == 'related')
     result = json.loads(_control(registry).complete_task(todo, AGENT_ID, 'Candidate verified.',
@@ -386,6 +402,8 @@ def test_direction_failure_retains_result_and_respects_existing_host_budget(prov
     control = _control(registry)
     json.loads(control.should_run())
     first = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.', next_agent_todo='Verify remaining work.'))
+    assert first['stage'] == 'direction_pending', first
+    purpose = first['context']['purpose']
     identity = SettlementIdentity.from_runtime_payload(first['settlement_identity'])
     calls = []
     def fail(context):
@@ -396,7 +414,7 @@ def test_direction_failure_retains_result_and_respects_existing_host_budget(prov
     driver = CurrentAgentCheckpoint(registry, tmp_path / 'runtime', state, identity, fail)
     for _ in range(3):
         with pytest.raises(ValueError):
-            driver.continue_direction({})
+            driver.continue_direction({}, purpose=purpose)
     assert len(calls) == (2 if failure == 'timeout' else 1)
     receipt = json.loads(_receipt_path(tmp_path / 'runtime', identity).read_text())
     assert receipt['decision_basis']['todo']['status'] == 'done'
@@ -437,7 +455,7 @@ else:
     rc, result = _run_cli(registry, 'turn', 'run-once', '--host', 'generic-cli', '--goal-id', GOAL_ID,
         '--agent-id', AGENT_ID, '--project', str(project), '--host-adapter-command-json',
         json.dumps([sys.executable, str(host)]), '--validation-command-json', json.dumps([sys.executable, '-c', 'pass']),
-        '--no-global-sync', '--execute')
+        '--host-adapter-request-schema', 'loopx_turn_host_request_v1', '--no-global-sync', '--execute')
     assert rc == 0 and result['status'] in {'committed','stopped'}, json.dumps(result, indent=2)
     assert (project / 'direction.txt').exists() == (kind != 'wait')
     rows = [json.loads(line) for line in (tmp_path / 'runtime/goals' / GOAL_ID / 'runs/index.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -492,7 +510,8 @@ if not marker.exists():
     args = ('turn', 'run-once', '--host', 'generic-cli', '--goal-id', GOAL_ID,
         '--agent-id', AGENT_ID, '--project', str(project), '--host-adapter-command-json',
         json.dumps([sys.executable, str(host)]), '--validation-command-json',
-        json.dumps([sys.executable, str(validator)]), '--no-global-sync', '--execute')
+        json.dumps([sys.executable, str(validator)]), '--host-adapter-request-schema',
+        'loopx_turn_host_request_v1', '--no-global-sync', '--execute')
     rc, first = _run_cli(registry, *args)
     assert rc == 1 and first.get('result_kind') == 'validation_failed', first
     journal_path = next((runtime / 'goals' / GOAL_ID / 'turns').glob('*.json'))

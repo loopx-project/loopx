@@ -21,6 +21,7 @@ from .control_plane.work_items.delivery_batch_scale import (
 from .control_plane.work_items.delivery_outcome import (
     ACCOUNTABLE_DELIVERY_OUTCOMES,
     DELIVERY_OUTCOME_CHOICES as DELIVERY_OUTCOME_CHOICES,
+    DeliveryOutcome,
     TURN_SCOPED_SETTLEMENT_GAP_FALLBACK,
     TURN_SCOPED_SETTLEMENT_REQUIREMENT,
     explain_turn_scoped_settlement_gap,
@@ -131,6 +132,7 @@ from .control_plane.todos.completion_validation_accountability import (
     require_accountable_completion_validation,
 )
 from .control_plane.turn_driver.delivery_continuity import (
+    DELIVERY_BOUNDARY_SEMANTIC_CLOSEOUT,
     normalize_delivery_boundary,
 )
 
@@ -1359,9 +1361,7 @@ def refresh_state_run(
         # read_heartbeat_settlement admits checkpoint_supplement only for a
         # checkpoint-only retry of an already committed writeback with the
         # exact Goal/Agent/Todo/Turn and delivery identity. It rejects replayed
-        # mutations and conflicting vision decisions before this fence. The
-        # supplement repairs only the missing vision decision, so terminal
-        # validation remains attached to the original Todo completion.
+        # mutations and conflicting vision decisions before this fence.
         vision_checkpoint = build_vision_checkpoint(
             agent_id=normalized_agent_id or None,
             agent_vision=agent_vision,
@@ -1375,9 +1375,30 @@ def refresh_state_run(
             autonomous_replan_recorded=effective_autonomous_replan_recorded,
             blocked_retry=blocked_retry,
         )
+        staged_todo_progress = (
+            default_checkpoint
+            and settlement_identity is not None
+            and settlement_identity.todo_id is not None
+            and normalized_delivery_outcome == DeliveryOutcome.OUTCOME_PROGRESS.value
+            and normalized_delivery_boundary == DELIVERY_BOUNDARY_SEMANTIC_CLOSEOUT
+        )
+        # The result-work fence may retain evidence before a direction exists.
+        # Qualify the open-Todo checkpoint when that retained result has a direction.
+        retain_progress = (
+            staged_todo_progress and result_work_checkpoint
+            and vision_checkpoint.get("decision") == "missing_required"
+            and not any((agent_vision_packet, vision_unchanged_reason, completion_todo_id,
+                         completion_turn_key, normalized_next_action, autonomous_replan_recorded,
+                         usage_measurement, usage_codex_session, (external_delivery or {}).get("resume_key")))
+        )
+        qualify_retained_progress = (
+            staged_todo_progress and checkpoint_supplement
+            and (prior_writeback_run or {}).get("result_work_context") is not None
+        )
         if (
             normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
-            and not checkpoint_supplement
+            and not retain_progress
+            and (not checkpoint_supplement or qualify_retained_progress)
             and not replan_stage["deferred"]
         ):
             require_accountable_completion_validation(
