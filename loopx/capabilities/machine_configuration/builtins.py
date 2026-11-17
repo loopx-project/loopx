@@ -12,11 +12,6 @@ from .contract import MachineConfigurationNamespace, MachineConfigurationRegistr
 # and a reader loads only the namespaces it resolves.
 _BUILTIN_NAMESPACES = (
     (
-        "compaction_memory",
-        "loopx.capabilities.machine_configuration.compaction_memory",
-        "compaction_memory_machine_configuration_namespace",
-    ),
-    (
         "context_delivery",
         "loopx.capabilities.machine_configuration.context_delivery",
         "context_delivery_machine_configuration_namespace",
@@ -80,7 +75,10 @@ def _owner(module: str, factory: str) -> Callable[[], MachineConfigurationNamesp
 
 
 def build_builtin_machine_configuration_registry() -> MachineConfigurationRegistry:
+    from .compaction_memory import normalize_compaction_memory
+
     registry = MachineConfigurationRegistry()
+    registry.register_retired("compaction_memory", normalize_compaction_memory)
     for namespace, module, factory in _BUILTIN_NAMESPACES:
         registry.register_deferred(namespace, _owner(module, factory))
     return registry

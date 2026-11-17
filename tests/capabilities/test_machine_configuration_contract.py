@@ -350,7 +350,6 @@ def test_builtin_catalog_lists_every_owner_in_namespace_order() -> None:
     assert registry.namespace_ids == (
         "change_quality_qualification",
         "codex_chat",
-        "compaction_memory",
         "context_delivery",
         "explore_harness",
         "goal_storage",
@@ -364,6 +363,40 @@ def test_builtin_catalog_lists_every_owner_in_namespace_order() -> None:
         descriptor["namespace"]
         for descriptor in registry.public_catalog()["namespaces"]
     ] == list(registry.namespace_ids)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_retired_setting_decodes_without_an_active_owner(enabled: bool) -> None:
+    registry = build_builtin_machine_configuration_registry()
+    configuration = {
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {"compaction_memory": {
+            "schema_version": "compaction_memory_machine_defaults_v0", "enabled": enabled,
+        }},
+    }
+    assert normalize_machine_configuration(configuration, registry=registry) == configuration
+    assert project_machine_configuration(configuration, registry=registry)["namespaces"] == {}
+    with pytest.raises(ValueError, match="unsupported machine-configuration namespace"):
+        registry.resolve("compaction_memory")
+    for invalid in ("true", 1, None):
+        configuration["namespaces"]["compaction_memory"]["enabled"] = invalid
+        with pytest.raises(ValueError, match="boolean enabled"):
+            normalize_machine_configuration(configuration, registry=registry)
+    with pytest.raises(ValueError, match="unsupported machine-configuration namespace"):
+        normalize_machine_configuration({
+            "schema_version": "loopx_machine_configuration_v0",
+            "namespaces": {"unregistered": {"schema_version": "future_v0"}},
+        }, registry=registry)
+
+
+def test_retired_decoders_share_the_active_namespace_reservation() -> None:
+    with pytest.raises(ValueError, match="already registered: example"):
+        _registry().register_retired("example", _normalize_example)
+    registry = MachineConfigurationRegistry().register_retired("example", _normalize_example)
+    with pytest.raises(ValueError, match="already registered: example"):
+        registry.register(_example_namespace())
+    with pytest.raises(ValueError, match="already registered: example"):
+        registry.register_deferred("example", _example_namespace)
 
 
 def test_builtin_registry_still_fails_closed_on_an_invalid_stored_sibling() -> None:

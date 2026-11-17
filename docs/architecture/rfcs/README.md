@@ -212,14 +212,11 @@ Paired diffs do not certify translation accuracy.
     remain unqualified; no runtime, default or experiment change.
 - [Sparse Working Memory at Context Compaction v0](sparse-compaction-working-memory-v0.md)
   ([中文版](sparse-compaction-working-memory-v0.zh-CN.md))
-  - **Delivery on merge:** Partial experimental implementation; independent
-    machine opt-in, off by default, with a Workbench switch.
-  - **Current boundary:** Deterministic exact selected-work notes and references,
-    immutable private artifacts and additive native post-compaction restoration.
-    Actual native model-input and packaged settings checks are recorded in the
-    [ledger](ledger/sparse-compaction-working-memory-v0/2026-11-17-native-kernel-and-workbench.md).
-    Conversation semantic extraction, broad retention, task benefit and total-cost
-    reduction remain unqualified; no paid/task-benefit experiment starts here.
+  - **Retired:** Kernel execution and Workbench activation removed after the
+    requester withdrew the unqualified experiment. Strict saved-settings
+    compatibility and existing exact capture references remain; see the
+    [retirement ledger](ledger/sparse-compaction-working-memory-v0/2026-11-17-retirement.md).
+
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
   - **Delivery on `main`:** Substantially implemented; active migration.

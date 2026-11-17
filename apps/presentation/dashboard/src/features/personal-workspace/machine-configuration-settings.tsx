@@ -289,24 +289,15 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     await saveImmediatePreference(configuration, label);
   }
 
-  async function setCompactionMemory(enabled: boolean) {
-    if (busy || !editorAvailable || selected?.capability_id !== "compaction_memory") return;
-    // Removing the opt-in namespace also restores compatibility with older editors.
-    await saveImmediatePreference(enabled ? {...selected.default, enabled: true} : null,
-      locale === "zh-CN" ? "压缩工作记忆" : "Compaction working memory");
-  }
-
-  async function saveImmediatePreference(configuration: Record<string, unknown> | null, label: string) {
+  async function saveImmediatePreference(configuration: Record<string, unknown>, label: string) {
     if (busy || !editorAvailable || !selected?.machine_namespace) return;
     const namespace = selected.machine_namespace;
     const generation = editorGeneration.current;
     setBusy("apply"); setError(null); setNotice(null);
     try {
-      const plan = configuration === null ? await previewMachineConfigurationRemoval(namespace)
-        : await previewMachineConfiguration(namespace, configuration);
+      const plan = await previewMachineConfiguration(namespace, configuration);
       if (generation !== editorGeneration.current) return;
-      if (configuration === null) await applyMachineConfigurationRemoval(namespace, plan.plan_revision);
-      else await applyMachineConfiguration(namespace, configuration, plan.plan_revision);
+      await applyMachineConfiguration(namespace, configuration, plan.plan_revision);
       if (generation !== editorGeneration.current) { onChanged?.(); return; }
       setReadbackPending(selected.display_name);
       const next = await fetchMachineConfiguration();
@@ -314,8 +305,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       setInspection(next);
       setReadbackPending(null);
       const saved = next.machine_configuration?.namespaces[namespace];
-      if (next.status === "invalid" || (configuration === null ? saved !== undefined
-        : Object.entries(configuration).some(([key, value]) => saved?.[key] !== value))) {
+      if (next.status === "invalid" || Object.entries(configuration).some(([key, value]) => saved?.[key] !== value)) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
       setNotice(locale === "zh-CN" ? `${label}偏好已保存。` : `${label} preference saved.`);
@@ -561,18 +551,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
               ? "渐进读取先提供当前要求，支持材料按需展开，适用于所有宿主。跨轮差分独立控制：仅在受支持的 POSIX Codex App／SSH、benchmark 心跳已保留完整旧上下文时自动使用，否则恢复完整当前输入。关闭偏好和实验显式关闭均继续生效。保存不会安装 hook、启动实验或证明当前会话已采用差分。"
               : "Progressive reads present current requirements before expandable supporting material on every host. Cross-turn delta is independent: automatic reuse requires a supported POSIX Codex App/SSH or benchmark heartbeat and complete retained context; otherwise the current full input is restored. Saved off preferences and explicit experiment opt-outs remain effective. Saving installs no hook, starts no experiment and does not prove current-session delta use."}</p></ContextHelp>
           </section> : null}
-          {selected.capability_id === "compaction_memory" ? <section aria-label={locale === "zh-CN" ? "压缩工作记忆" : "Compaction working memory"} className="personal-capability-field-summary">
-            <div className="personal-capability-fields"><label className="is-boolean">
-              <span>{locale === "zh-CN" ? "压缩时保留工作信息" : "Keep work context at compaction"}</span>
-              <input aria-label={locale === "zh-CN" ? "启用实验性压缩工作记忆" : "Enable experimental compaction working memory"}
-                type="checkbox" role="switch" checked={selectedCurrent?.enabled === true} disabled={Boolean(busy) || !editorAvailable}
-                onChange={(event) => void setCompactionMemory(event.target.checked)} />
-            </label></div>
-            <ContextHelp label={locale === "zh-CN" ? "实验作用范围与关闭" : "Experiment scope and disablement"}><p>{locale === "zh-CN"
-              ? "仅作用于本机已经支持上下文恢复的原生根会话。压缩时保留有来源的工作标题、短注记及引用，之后恢复；不增加模型调用，不安装 hook，也不省略当前必读要求。关闭会移除实验设置以支持旧版编辑器，已保存的引用仍保留。尚未验证任务效果与完整成本收益。"
-              : "Applies to this device's native root sessions that already support context recovery. Keeps source-bound work titles, short notes and references at compaction and restores them afterward. No additional model calls, hook installation or skipped required reads. Disabling removes the experiment setting for older editors and retains saved references. Task effectiveness and total-cost gains remain unverified."}</p></ContextHelp>
-          </section> : null}
-          {editorAvailable && selected.capability_id !== "context_delivery" && selected.capability_id !== "compaction_memory" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
+          {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
             <button disabled={Boolean(busy)} onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
               <Code2 aria-hidden size={14} />{t(editorMode === "guided" ? "machine.editJson" : "machine.backToForm")}
             </button>
@@ -621,7 +600,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             </section>
           ) : null}
 
-          {editorAvailable && selected.capability_id !== "context_delivery" && selected.capability_id !== "compaction_memory" ? <footer className="personal-capability-actions">
+          {editorAvailable && selected.capability_id !== "context_delivery" ? <footer className="personal-capability-actions">
             {configured ? <button className="is-danger" disabled={Boolean(busy)} onClick={() => void createRemovalPreview()} type="button"><Trash2 aria-hidden size={15} />{t("machine.previewRemoval")}</button> : null}
             <button disabled={Boolean(busy) || !editorValid} onClick={() => void createPreview()} type="button">{busy === "preview" ? t("common.loading") : t("machine.previewChanges")}</button>
             <button className="is-primary" disabled={Boolean(busy) || !preview} onClick={() => void applyPreview()} type="button">{busy === "apply" ? t("common.loading") : t("machine.applyPreview")}</button>

@@ -341,7 +341,6 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
     assert response["available_namespaces"] == [
         "change_quality_qualification",
         "codex_chat",
-        "compaction_memory",
         "context_delivery",
         "explore_harness",
         "goal_storage",
@@ -448,7 +447,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     )
     # Machine-only capabilities are the ones a Goal cannot override: the
     # manager profile, native host defaults, steward executor and storage target.
-    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage", "codex_chat", "context_delivery", "compaction_memory"} == {
+    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage", "codex_chat", "context_delivery"} == {
         feature["feature_id"] for feature in goal["features"]
     }
     assert machine["pull_request_review"]["available_scopes"] == ["machine", "goal"]
@@ -464,7 +463,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     for capability_id, item in machine.items():
         assert "current" not in item
         assert "commands" not in item
-        if capability_id in {"manager_runtime", "steward_executor", "goal_storage", "codex_chat", "context_delivery", "compaction_memory"}:
+        if capability_id in {"manager_runtime", "steward_executor", "goal_storage", "codex_chat", "context_delivery"}:
             assert item["available_scopes"] == ["machine"]
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]
@@ -556,6 +555,55 @@ def test_preview_apply_inspect_and_rollback_are_revision_locked(tmp_path: Path) 
     final_handler = _Handler(tmp_path)
     final_handler._machine_configuration_inspect()
     assert final_handler.responses[0]["status"] == "absent"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_retired_setting_preserves_inspection_sibling_update_and_rollback(tmp_path: Path, enabled: bool) -> None:
+    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+
+    configuration = _configuration()
+    configuration["namespaces"]["compaction_memory"] = {
+        "schema_version": "compaction_memory_machine_defaults_v0", "enabled": enabled,
+    }
+    path = tmp_path / "machine" / "configuration.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(configuration))
+    before = path.read_bytes()
+    handler = _Handler(tmp_path)
+    handler._machine_configuration_inspect()
+    inspection = handler.responses[0]
+    assert inspection["status"] == "configured"
+    assert "compaction_memory" not in inspection["available_namespaces"]
+    assert "compaction_memory" not in inspection["machine_configuration"]["namespaces"]
+    assert all(row["capability_id"] != "compaction_memory" for row in inspection["capability_catalog"]["capabilities"])
+    assert path.read_bytes() == before
+
+    rejected = _Handler(tmp_path, {"namespace": "compaction_memory", "namespace_configuration": configuration["namespaces"]["compaction_memory"]})
+    rejected._machine_configuration_update(execute=True)
+    assert rejected.responses[0]["ok"] is False
+    assert path.read_bytes() == before
+
+    update = {"namespace": "periodic_report", "namespace_configuration": _namespace(enabled=False)}
+    preview = _Handler(tmp_path, update)
+    preview._machine_configuration_update(execute=False)
+    plan = preview.responses[0]
+    assert plan["changed_namespaces"] == ["periodic_report"]
+    apply = _Handler(tmp_path, {**update, "expected_plan_revision": plan["plan_revision"]})
+    apply._machine_configuration_update(execute=True)
+    receipt = apply.responses[0]
+    assert receipt["readback_verified"] is True
+    registry = build_builtin_machine_configuration_registry()
+    saved = read_machine_configuration(tmp_path, registry=registry)
+    assert saved["namespaces"]["compaction_memory"] == configuration["namespaces"]["compaction_memory"]
+    assert saved["namespaces"]["periodic_report"]["enabled"] is False
+
+    rollback_preview = _Handler(tmp_path, {"transaction_id": receipt["transaction_id"], "execute": False})
+    rollback_preview._machine_configuration_rollback()
+    rollback = _Handler(tmp_path, {"transaction_id": receipt["transaction_id"], "execute": True,
+        "expected_plan_revision": rollback_preview.responses[0]["plan_revision"]})
+    rollback._machine_configuration_rollback()
+    assert rollback.responses[0]["readback_verified"] is True
+    assert read_machine_configuration(tmp_path, registry=registry) == configuration
 
 
 def test_the_steward_executor_namespace_is_editable_and_read_back(
