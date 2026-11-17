@@ -24,7 +24,7 @@ def test_incomplete_lifecycle_candidate_cannot_replace_receipt_source(case):
     candidate = {'lifecycle_settled': True, 'obligation': copy.deepcopy(RECOVERED)}
     source = copy.deepcopy(SOURCE)
     context = {'replan_obligation': {'obligation_id': 'replan-fedcba9876543210'},
-               'replan_transition_candidates': [candidate]}
+               'replan_transition_candidates': [candidate], 'stride_strategy': 'off'}
     if case == "unsettled":
         candidate["lifecycle_settled"] = False
     if case == "non_boolean":
@@ -50,11 +50,20 @@ def test_incomplete_lifecycle_candidate_cannot_replace_receipt_source(case):
             with pytest.raises(ValueError, match="source identity differs"):
                 call()
             return
+        if case == 'no_source':
+            with pytest.raises(EffectRuntimeRejected, match="settlement identity conflicts"):
+                call()
+            return
         chosen, _ = call()
-    # A candidate's settled boolean is not native lifecycle proof. These
-    # intentionally incomplete objects cannot replace the admitted source.
-    expected = context['replan_obligation'] if case in {'unguarded', 'no_source'} else SOURCE
-    assert chosen == expected
+    # A candidate's settled boolean cannot replace the original source.
+    if case == 'unguarded':
+        assert chosen == context['replan_obligation']
+        return
+    assert chosen['selection_binding'] == 'heartbeat_receipt'
+    assert chosen['replan_context']['obligation_id'] == OID
+    assert {key: value for key, value in chosen.items()
+            if key not in {'selection_binding', 'replan_context'}} == SOURCE
+    assert source == SOURCE
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
@@ -145,6 +154,7 @@ def test_native_lifecycle_writeback_and_replay(tmp_path, monkeypatch, provider):
 @pytest.mark.parametrize('case', ['matching', 'wrong_turn', 'wrong_actor', 'unsettled', 'closed_before_guard', 'wrong_todo'])
 def test_original_source_cardinality(case):
     items = [{'todo_id':f'todo_{i}', 'index':i, 'status':'done', 'done':True,
+        'text': f'Completed original work {i}.', 'role': 'agent',
         'task_class':'advancement_task', 'claimed_by':'fixture-agent', 'last_actor_agent_id':'fixture-agent',
         'completed_at':f'2026-08-13T04:0{9-i}:00Z', 'updated_at':'2026-08-13T05:01:00Z',
         'no_followup':i<3, 'completion_continuation':'no_followup' if i<3 else 'active_goal',
@@ -163,14 +173,18 @@ def test_original_source_cardinality(case):
         items[0]["updated_at"] = "2026-08-13T04:50:00Z"
     if case == "wrong_todo":
         source["triggers"][0]["todo_id"] = "wrong"
-    with patch.object(writer,'build_goal_frontier_projection_context_from_status',return_value={}), \
+    todo_fields = {'agent_todos': {
+        'schema_version': 'todo_summary_v0',
+        'items': items, 'open_count': 0, 'total_count': len(items), 'done_count': len(items),
+    }}
+    with patch.object(writer,'build_goal_frontier_projection_context_from_status',
+                      return_value={'stride_strategy': 'off'}), \
          patch.object(writer,'autonomous_replan_obligation_from_runs',return_value=None), \
          patch.object(writer,'guarded_replan_transition_delta',return_value=None), \
-         patch.object(writer,'select_planning_inventory_source_items',return_value=items), \
          patch.object(writer,'semantic_delta_from_writeback',return_value={'outcomes':[]}):
         def call():
             return writer.qualify_replan_writeback(newest_first_runs=[],state_text='',agent_id='fixture-agent',
-                    goal_id='fixture-goal',todo_fields={},guard_scoped=True,guard_semantic_replan_obligation_id=OID,
+                    goal_id='fixture-goal',todo_fields=todo_fields,guard_scoped=True,guard_semantic_replan_obligation_id=OID,
                     receipt_bound_guard_recorded_at='2026-08-13T05:00:00Z',receipt_bound_source=source)
         if case not in {'matching', 'unsettled'}:
             with pytest.raises(
