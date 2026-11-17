@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { statSync } from 'node:fs'
 
-// 1.2.4 includes the released Windows peer-file fix. Bootstrap and every
-// runtime consumer must use the same floor, including an existing global CLI.
-export const MINIMUM_LOOPX_VERSION = '1.2.4'
+// 2.4.0 adds the original-Turn receipt reader used by selection recovery.
+// Bootstrap and every runtime consumer share this floor, including global CLIs.
+export const MINIMUM_LOOPX_VERSION = '2.4.0'
 
 export type LoopXCliErrorKind =
   | 'aborted'

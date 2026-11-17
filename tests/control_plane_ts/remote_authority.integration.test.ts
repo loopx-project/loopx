@@ -21,10 +21,12 @@ import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {registerRemoteAuthorityModeConformance} from "./remote_authority_mode_conformance.ts";
 import {registerRemoteAuthorityLifecycleConformance} from "./remote_authority_lifecycle_conformance.ts";
+import {registerRemoteAuthorityReadAclConformance} from "./remote_authority_read_acl_conformance.ts";
 
 const connectionString = process.env.LOOPX_TEST_POSTGRES_URL;
 registerRemoteAuthorityModeConformance(connectionString);
 registerRemoteAuthorityLifecycleConformance(connectionString);
+registerRemoteAuthorityReadAclConformance(connectionString);
 test("quota CLI verifies the exact remote binding and never grants local execution", {skip: !connectionString}, async t => {
   const fixture = await postgresRemoteFixture(t, connectionString!);
   await fixture.seed(["todo_gateway_probe"], {todo_gateway_probe: "private-synthetic-note"});

@@ -17,7 +17,7 @@ import {GOAL_ACCEPTANCE_SCHEMA, clearedGoalAcceptance, acceptanceKeys, acceptanc
   resolveGoalAcceptanceDocument, projectGoalAcceptance, readGoalAcceptance, readGoalAcceptanceAuthority,
   type AcceptanceDocument, type AcceptanceState, type AcceptanceVerification} from "./acceptance_contract.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
-import {GOAL_ACCEPTANCE_LIFECYCLE_SCHEMA, parseGoalAcceptanceLifecycleTransition, parseWireExactGoalRef,
+import {GOAL_ACCEPTANCE_LIFECYCLE_SCHEMA, GOAL_ACCEPTANCE_LIFECYCLE_OPERATION_SCHEMA, parseGoalAcceptanceLifecycleTransition, parseWireExactGoalRef,
   readGoalAcceptanceLifecycle, sameExactGoalRef, type GoalAcceptanceLifecycle,
   type GoalAcceptanceLifecycleTransition, type WireExactGoalRef} from "./acceptance_lifecycle.ts";
 
@@ -27,7 +27,7 @@ import {projectCoreGoal} from "../work_items/replan_context.ts";
 
 const RESULT_SCHEMA = "loopx_goal_acceptance_result_v0";
 const RECEIPT_SCHEMA = "loopx_goal_acceptance_operation_v0";
-const LIFECYCLE_RECEIPT_SCHEMA = "loopx_goal_acceptance_lifecycle_operation_v0";
+const LIFECYCLE_RECEIPT_SCHEMA = GOAL_ACCEPTANCE_LIFECYCLE_OPERATION_SCHEMA;
 const REQUEST_FIELDS = ["goal_id", "operation_id", "actor_agent_id", "expected_provider_revision"];
 const LOCAL_FIELDS = ["runtime_root", "dry_run"];
 
