@@ -341,6 +341,20 @@ def _heartbeat_receipt_count(runtime: Path, turn_instance_id: str) -> int:
     )
 
 
+def _assert_composed_spend_source(cli: dict, runtime: Path, turn: str, source: str) -> None:
+    from loopx.control_plane.quota.heartbeat_receipt import find_heartbeat_receipt
+
+    plan = cli['settlement_plan']
+    assert plan['schema_version'] == 'quota_settlement_plan_v2'
+    spend = next(step for step in plan['ordered_steps'] if step['kind'] == 'quota_spend')
+    assert spend['owner'] == 'runtime' and 'command_template' not in spend
+    writeback = next(step for step in plan['ordered_steps'] if step['kind'] == 'durable_writeback')
+    assert '--settle-turn --settlement-receipt' in writeback['command_template']
+    assert writeback['command_template'] in cli['next_cli_actions']
+    receipt = find_heartbeat_receipt(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, turn_instance_id=turn)
+    assert receipt['details']['quota_spend_source'] == source
+
+
 def _configure_read_only_todo(project: Path) -> Path:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
@@ -4313,10 +4327,7 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     assert settlement_plan["identity"] == receipt_identity
     assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
-    assert any(
-        f"--source {expected_source}" in action
-        for action in cli_channel["next_cli_actions"]
-    )
+    _assert_composed_spend_source(cli_channel, runtime, turn_instance_id, expected_source)
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4373,9 +4384,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     assert settlement_plan["identity"] == selected["heartbeat_receipt"][
         "settlement_identity"
     ]
-    assert any(
-        "--source visible-goal" in action for action in cli_channel["next_cli_actions"]
-    )
+    _assert_composed_spend_source(cli_channel, runtime, turn_instance_id, 'visible-goal')
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4485,11 +4494,8 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     ]
     assert settlement_plan["identity"] == identity
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
-    assert expected_source in next(
-        step["command_template"]
-        for step in settlement_plan["ordered_steps"]
-        if step["kind"] == "quota_spend"
-    )
+    _assert_composed_spend_source(guard['interaction_contract']['cli_channel'], _runtime,
+                                identity['turn_instance_id'], expected_source)
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
@@ -4586,11 +4592,8 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     )
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == identity
-    assert "--source visible-goal" in next(
-        step["command_template"]
-        for step in plan["ordered_steps"]
-        if step["kind"] == "quota_spend"
-    )
+    _assert_composed_spend_source(guard['interaction_contract']['cli_channel'], runtime,
+                                turn_instance_id, 'visible-goal')
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -4695,6 +4698,7 @@ def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     assert spend_rc == 0, spend
     assert spend["turn_instance_id"] == turn_instance_id
     assert spend["settlement_identity"] == plan["identity"]
+    assert spend['source'] == expected_source
     assert _spend_run_count(runtime) == 1
 
 
@@ -7293,12 +7297,13 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert identity["replan_obligation_id"] == obligation_id
     assert identity["turn_instance_id"].startswith("guided-start:")
     cli_channel = bound["interaction_contract"]["cli_channel"]
-    assert cli_channel["settlement_identity"] == identity
-    assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
-    assert "settlement_plan" not in cli_channel
-    # Native admission defers the plan; consume its exact captured reader
-    # without another guard or a second guided-start Turn.
-    reader_argv = shlex.split(bound["replan_action_packet"]["writeback"])
+    assert cli_channel["settlement_plan"]["identity"] == identity
+    assert 'settlement_read_ref' not in cli_channel
+    # The current source carries the whole plan. The public saved-source reader
+    # must return that same original plan without another admission or mutation.
+    reader_argv = [*bound['replan_read_argv'], '--format', 'json', 'quota', 'replan-view',
+                   '--decision-file', bound['replan_read_path'],
+                   '--source-hash', bound['contract_binding']['content_hash'], '--replan-stage', 'writeback']
     source_paths = (
         registry_path,
         project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
@@ -7318,6 +7323,7 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     writeback = json.loads(reader.stdout)
     assert writeback["obligation_id"] == obligation_id
     plan = writeback["writeback"]["settlement_plan"]
+    assert plan == cli_channel['settlement_plan']
     assert plan["identity"] == identity
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend",

@@ -64,7 +64,7 @@ def assert_source_shape() -> None:
     assert_contains(todo_text, "render_todo_markdown", "todo module")
     assert_contains(todo_text, "append_cli_rollout_event", "todo module")
     assert_contains(quota_text, "from .quota_presentation import", "quota module")
-    assert_contains(quota_presentation_text, "render_quota_should_run_markdown", "quota presentation")
+    assert_contains(quota_presentation_text, "render_turn_context_markdown", "quota presentation")
     assert_contains(quota_text, "append_cli_rollout_event", "quota module")
 
 

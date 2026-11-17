@@ -14,14 +14,31 @@ Turn 的 ready 决策。Host 将该原件交给既有 saved-capture 展示/reade
 readiness 路径，不补造 Turn。这只是有界的 Host 交接修复，不代表 C1 切换、已安装
 采用，或模型费用与长程收益已取得资格。
 
-源码实际共享的部分比输出名称体现的更多。`_emit_quota_result` 在
-`_project_quota_cli_payload` 选择普通 CLI 压缩或 `buildTurnEnvelope` **之前**，
-已经捕获完整决策。后者委托 TypeScript owner，Python 模块是传输 adapter。
+普通 CLI 切换让每个已形成决策的 `quota should-run` 在 capture **之前**复用既有
+TypeScript `composeCompleteTurnDecision` owner。默认调用及兼容别名
+`--turn-envelope` / `--complete-turn` 使用同一来源。显式关闭 context delivery 时，
+完整来源以内联形式返回，不选择旧格式，也不打开渐进交付；完整 Goal 材料的取得与
+此展示选择分开。CLI 中选择 compactor 或 `buildTurnEnvelope` 的活跃分支删除。
+Status、plan 与 scheduler-observation 保留各自用途；本切片不退役历史 reader 或
+其他剩余调用方。
 Quota capture 与 Turn journal capture 都调用
 [`decision_capture.py`](../../../../loopx/control_plane/turn_driver/decision_capture.py)
 中的 `write_decision_capture`。原生上下文交付与显式宿主 handoff 也复用该模块和既有
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
-也不重写已经共享的差分与 native-resume 逻辑。
+也不重写已经共享的差分与 native-resume 逻辑。请求保存原 capture 时，公布的
+`detail_ref.full_decision` 复用既有不可变 reader sidecar：先将路由纳入签名，再在
+capture 发布后写入最终字节摘要，避免循环自哈希。Reader 发布失败仍保留已提交
+来源和回执；读取不重新准入或结算工作。
+
+同一份冻结的 `ef099ae3` small/crowded/multi-agent quota fixture，JSON 字符数为
+**23,289/42,965/25,514 → 24,984/53,441/29,574**，Markdown 为
+**7,476/8,143/6,441 → 25,083/53,543/29,674**。完整 Goal 字节此前需要另行读取，
+完整 Markdown carrier 现保留所有来源字段。这些只是 stdout 测量，不代表模型费用、
+时延或验收成果。保留原 JSON 25k/51k/26.5k 与 Markdown 10k/17k/7k 上限失败。
+新有界上限两种格式均为 26k/55k/31k，行数限制不变。Crowded 减 small 的 JSON
+增长为 19,676 → 28,457 字符：每 Todo 允许量调整为 600，固定 9,700 允许量不变。
+此工程校准不豁免独立的匹配单会话成果／完整成本 gate、其他 Host、打包、安装采用
+或原生 Windows 验收。
 
 可选 host poll 也是该次原始观测的一部分。来源保真切片在 capture 前仅记录一次
 `--record-host-poll`，普通 CLI、envelope 与原生上下文交付复用同一回执；恢复读取不再
