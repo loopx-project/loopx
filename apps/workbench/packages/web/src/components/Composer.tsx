@@ -835,6 +835,8 @@ export function Composer({
     sendingRef.current = true;
     const message = asMessage(text, notes, references);
     const mark: Sending = { text: message, after: lastSent?.turnId ?? null };
+    // Carry the send identity when the new draft becomes its created conversation.
+    inFlight.current = mark;
     const sentFrom = draftKey;
     // On the device the draft now says it is on its way. Should the page be reloaded before the
     // send comes back, it is neither lost nor taken for something still to send.
@@ -847,11 +849,11 @@ export function Composer({
       images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
       videos.forEach(video => URL.revokeObjectURL(video.previewUrl));
       // The same composer may now hold another conversation's draft.
-      if (keyRef.current !== sentFrom) return;
+      if (keyRef.current !== sentFrom && inFlight.current !== mark) return;
       setMentions([]);
       // Forget the sent draft at once, but retain words committed while its request was pending.
       const remainingText = draftRef.current.text === text ? '' : draftRef.current.text;
-      if (remainingText && keyRef.current !== undefined) keepDraft(keyRef.current, { text: remainingText, notes: [], images: [] });
+      if (keyRef.current !== undefined) keepDraft(keyRef.current, remainingText ? { text: remainingText, notes: [], images: [] } : null);
       inFlight.current = null;
       setNotes([]);
       setReferences([]);

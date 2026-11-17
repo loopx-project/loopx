@@ -55,11 +55,13 @@ const create = async (page, agent, title, mobile) => {
   return thread;
 };
 const screenshot = async (page, name) => { if (shots) await page.screenshot({ path: join(shots, `${name}.png`), animations: 'disabled' }); };
-const waitForPaletteLayout = page => page.waitForFunction(() => {
+const waitForPaletteLayout = page => page.waitForFunction(height => {
   const menu = document.querySelector('.command-menu')?.getBoundingClientRect();
   const composer = document.querySelector('.composer-box')?.getBoundingClientRect();
-  return menu && composer && Math.abs(menu.width - composer.width) < 0.5 && menu.y >= 0 && menu.bottom <= composer.top;
-});
+  // The old layout also fits its composer. Wait until the resized viewport contains both.
+  return window.innerHeight === height && menu && composer && composer.bottom <= height
+    && Math.abs(menu.width - composer.width) < 0.5 && menu.y >= 0 && menu.bottom <= composer.top;
+}, page.viewportSize().height);
 
 test('long catalogs scroll by touch and wheel without losing the draft or opening the phone sidebar', { timeout: 180000 }, async () => {
   const commands = ['command', 'skill'].flatMap(kind => Array.from({ length: 40 }, (_, i) => ({
