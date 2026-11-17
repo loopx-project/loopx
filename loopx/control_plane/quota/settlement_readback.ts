@@ -1,6 +1,7 @@
-import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
+import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 
+import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
 import {
   heartbeatReceiptsFromEvents,
   readGoalRolloutEventSnapshot,
@@ -21,6 +22,7 @@ import {
   type SettlementResult,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { hasMonitorPollTransaction } from "./monitor_poll_commit.ts";
 import { readQuotaSpendEventFromRun } from "./accounting_artifact_transaction.ts";
 import {
@@ -43,6 +45,7 @@ import {
   isCapabilityRetirementWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
+  type ReceiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
 import {
@@ -72,6 +75,11 @@ import {
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
 import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
+import {
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+} from "../work_items/replan_semantics.ts";
 import {
   parseQuotaAccountingOwner,
   quotaOwnerOwnsProjection,
@@ -527,7 +535,8 @@ export function projectSemanticReplanGuard(
 ): JsonObject {
   const hasCapability = ["semantic_replan_capability_id", "semantic_replan_gap_id", "semantic_replan_frontier_revision"]
     .some(field => Object.hasOwn(receiptDetails, field));
-  const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition"]
+  const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition",
+    "semantic_replan_review_stop_condition_sha256", "semantic_replan_review_stop_contract_id"]
     .some(field => Object.hasOwn(receiptDetails, field));
   if (hasCapability && hasReview) throw new EffectRuntimeRequestError(
     "a review source cannot replace a capability guard", "malformed_settlement_state");
@@ -558,20 +567,88 @@ export function projectSemanticReplanGuard(
     );
   }
   const reviewKind = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_kind, "receipt review kind") : null;
-  const stop = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
+  const stop = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition")
+    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
+  const stopDigest = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition_sha256")
+    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition_sha256,
+      "receipt review stop condition digest") : null;
+  const stopContractId = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_contract_id")
+    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_contract_id,
+      "receipt review stop contract id") : null;
+  if (hasReview && stop === null && stopDigest === null) throw new EffectRuntimeRequestError(
+    "a receipt review requires a stop condition or digest", "malformed_settlement_state");
   if (stop && stop.length > 240) throw new EffectRuntimeRequestError(
     "receipt review stop condition exceeds scalar metadata bounds", "malformed_settlement_state");
+  if (stopDigest !== null && !BARE_SHA256_PATTERN.test(stopDigest)) throw new EffectRuntimeRequestError(
+    "receipt review stop condition digest is malformed", "malformed_settlement_state");
+  if (stopContractId !== null &&
+      (stopContractId !== AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID || stopDigest === null ||
+       createHash("sha256").update(AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, "utf8").digest("hex") !== stopDigest)) {
+    throw new EffectRuntimeRequestError(
+      "receipt review stop contract does not match its digest", "malformed_settlement_state");
+  }
+  if (stop !== null && stopDigest !== null &&
+      stop !== AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION &&
+      createHash("sha256").update(stop, "utf8").digest("hex") !== stopDigest) {
+    throw new EffectRuntimeRequestError(
+      "receipt review stop condition digest does not match its value", "malformed_settlement_state");
+  }
   return {
     schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
     scope: "turn_guard",
     selected_obligation_id: selectedObligationId,
-    ...(hasReview ? {selected_review_source: {kind: reviewKind, stop_condition: stop}} : {}),
+    ...(hasReview ? {selected_review_source: {kind: reviewKind,
+      ...(stop === null ? {} : {stop_condition: stop}),
+      ...(stopDigest === null ? {} : {stop_condition_sha256: stopDigest}),
+      ...(stopContractId === null ? {} : {stop_contract_id: stopContractId})}} : {}),
     ...(hasCapability ? {
       selected_capability_guard: decodeCapabilityGuard({schema_version: "semantic_replan_capability_guard_v0",
         capability_id: receiptDetails.semantic_replan_capability_id, gap_id: receiptDetails.semantic_replan_gap_id,
         frontier_revision: receiptDetails.semantic_replan_frontier_revision}),
     } : {}),
   };
+}
+
+/** Upgrade a legacy bound review receipt without changing its Turn identity.
+ *
+ * Older receipts retained the selected replan obligation but not the review
+ * source that proves a regenerated frontier still represents the same duty.
+ * The correction is append-only: the caller serializes the returned details
+ * under the receipt-log lock.  It is admitted only while closeout has not
+ * started and both the old and current guards select this exact binding.
+ */
+function requalifyHeartbeatReceipt(
+  heartbeatReceipt: JsonObject,
+  currentDetails: JsonObject,
+  identity: SettlementIdentity,
+  replayPhase: ReceiptBoundReplayPhase,
+  closeoutStarted: boolean,
+): JsonObject {
+  const work = heartbeatWorkRequalification(
+    heartbeatReceipt,
+    currentDetails,
+    identity,
+    replayPhase,
+    closeoutStarted,
+  );
+  if (work.append === true || replayPhase !== "open" || closeoutStarted ||
+      identity.binding_kind !== "autonomous_replan") return work;
+
+  const originalDetails = details(heartbeatReceipt);
+  const originalGuard = projectSemanticReplanGuard(originalDetails);
+  const currentGuard = projectSemanticReplanGuard(currentDetails);
+  if (originalGuard.selected_obligation_id !== identity.replan_obligation_id ||
+      currentGuard.selected_obligation_id !== identity.replan_obligation_id ||
+      originalGuard.selected_review_source != null ||
+      currentGuard.selected_review_source == null) return work;
+
+  const upgraded = {...originalDetails};
+  for (const field of ["semantic_replan_review_kind", "semantic_replan_review_stop_condition",
+    "semantic_replan_review_stop_condition_sha256", "semantic_replan_review_stop_contract_id"]) {
+    if (currentDetails[field] !== undefined) upgraded[field] = currentDetails[field]!;
+  }
+  upgraded.settlement_receipt_revision = "review_guard_upgrade";
+  return {append: true, details: upgraded};
 }
 
 function decodeCapabilityGuard(value: unknown): JsonObject {
@@ -940,13 +1017,24 @@ function resolveIdentity(
     const fact = heartbeatReceiptFactFromEvent(guard);
     const originalTodoId = normalizeTodoId(fact.todo_id);
     const originalReplanId = normalizeReplanObligationId(fact.replan_obligation_id);
+    const retainedTodoId = normalizeTodoId(
+      details(guard).pending_action_selection_todo_id,
+    );
     if (!originalTodoId && !originalReplanId && !requestSubject) {
       return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
     }
-    if ((request.todo_id !== null && (todoId === null || todoId !== originalTodoId)) ||
+    const requestedTodoMatchesOriginal = request.todo_id === null ||
+      (todoId !== null && (
+        todoId === originalTodoId ||
+        (originalReplanId !== null && todoId === retainedTodoId)
+      ));
+    if (!requestedTodoMatchesOriginal ||
         (request.replan_obligation_id !== null &&
           (replanObligationId === null || replanObligationId !== originalReplanId))) {
-      return failedIdentity("requested binding differs from the original Turn guard", "identity_mismatch");
+      return failedIdentity(
+        "settlement binding does not match: requested binding differs from the original Turn guard",
+        "identity_mismatch",
+      );
     }
     todoId = originalTodoId;
     replanObligationId = originalReplanId;
@@ -1472,7 +1560,7 @@ function readQuotaSettlementFromRequest(
       closeoutStarted, normalizeReplanObligationId(semanticReplanGuard.selected_obligation_id),
     ),
     ...(request.heartbeat_reentry_guard === null ? {} : {
-      heartbeat_reentry_qualification: heartbeatWorkRequalification(heartbeatReceipt,
+      heartbeat_reentry_qualification: requalifyHeartbeatReceipt(heartbeatReceipt,
         request.heartbeat_reentry_guard, identity, replayPhase, closeoutStarted),
     }),
   };

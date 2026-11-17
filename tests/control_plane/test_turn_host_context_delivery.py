@@ -154,6 +154,7 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         # context independently.
         detail = actual["detail_ref"]["captured_decision"]
         assert json.loads(Path(detail["path"]).read_text()) == plan["work_contract"] == source
+        assert actual["source_decision_hash"] == plan["source_decision_hash"]
         task_context = assert_host_task_context(actual, source)
         assert "Validate the complete acceptance: " + "preserve original evidence; " * 180 in json.dumps(task_context)
         delivered_context = task_context["interaction_contract"].get("agent_context")
@@ -242,6 +243,8 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     prompt = prompt_path.read_text()
     actual, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
     assert request["work_contract"] == source == plan["work_contract"]
+    assert actual["source_decision_hash"] == plan["source_decision_hash"]
+    assert "work_contract" not in actual
     task_context = actual["task_context"]
     assert actual["source_schema_version"] == "loopx_turn_host_request_v1"
     assert task_context["replan_action_packet"]["obligation_id"] == source["replan_action_packet"]["obligation_id"]

@@ -310,12 +310,15 @@ def _source_run(
 
 def _expected_todo_receipt(
     run: dict[str, Any], events: list[dict[str, Any]], *,
-    goal_id: str, agent_id: str, turn_instance_id: str,
+    goal_id: str, agent_id: str, turn_instance_id: str, obligation_id: str,
 ) -> tuple[str, str]:
-    """Todo settlement identity for this ACK, filled from its heartbeat receipt.
+    """Todo command identity for this ACK, filled from its heartbeat receipt.
 
     A historical index can omit the Todo and effect. The turn's existing
-    quota receipt still has that exact identity. An empty side is not a match.
+    quota receipt still has that exact identity.  A replan-bound receipt keeps
+    the admitted Todo as its pending action selection; that retained selection
+    may address the writeback without replacing the receipt's obligation.
+    An empty or differently bound side is not a match.
     """
 
     identity = run.get("settlement_identity")
@@ -333,7 +336,15 @@ def _expected_todo_receipt(
         ):
             continue
         details = _event_details(event)
-        todo = todo or _binding_text(event.get("todo_id") or details.get("todo_id"))
+        receipt_replan = _binding_text(details.get("replan_obligation_id"))
+        retained_todo = (
+            _binding_text(details.get("pending_action_selection_todo_id"))
+            if receipt_replan == obligation_id
+            else ""
+        )
+        todo = todo or _binding_text(
+            event.get("todo_id") or details.get("todo_id") or retained_todo
+        )
         effect = effect or _binding_text(details.get("settlement_effect_id"))
     return todo, effect
 
@@ -366,7 +377,8 @@ def _writeback_event_is_bound(
     if not event_todo or not event_effect:
         return False
     expected_todo, expected_effect = _expected_todo_receipt(
-        run, events, goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id)
+        run, events, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, obligation_id=obligation_id)
     return bool(
         expected_todo and expected_effect
         and event_todo == expected_todo and event_effect == expected_effect

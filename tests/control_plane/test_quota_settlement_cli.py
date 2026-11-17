@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -738,6 +739,200 @@ def _bind_selected_replan_guard(
     assert rc == 0, bound
     assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
     return bound
+
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_existing_todo_receipt_precedes_later_replan_projection(
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    """A later replan cannot replace an admitted Todo settlement identity."""
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "turn-existing-todo-before-later-replan"
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn,
+    )
+
+    first_rc, first = _run_cli(registry, runtime, *guard)
+    assert first_rc == 0, first
+    original = first["heartbeat_receipt"]["settlement_identity"]
+    assert original["todo_id"] == TODO_ID
+    assert original.get("replan_obligation_id") is None
+
+    _append_surface_only_runs(
+        runtime,
+        count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+    )
+    replay_rc, replay = _run_cli(registry, runtime, *guard)
+
+    assert replay_rc == 0, replay
+    assert replay["heartbeat_receipt"]["settlement_identity"] == original
+    assert (
+        replay["interaction_contract"]["cli_channel"]["settlement_plan"][
+            "identity"
+        ]
+        == original
+    )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_same_explicit_todo_retry_preserves_original_identity(
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    """Retrying the retained planning choice reuses the admitted replan."""
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "turn-same-explicit-todo-replan-retry"
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
+    )
+
+    first_rc, first = _run_cli(registry, runtime, *guard)
+    replay_rc, replay = _run_cli(registry, runtime, *guard)
+
+    assert first_rc == 0, first
+    original = first["heartbeat_receipt"]["settlement_identity"]
+    assert original["todo_id"] == SELECTED_REPLAN_TODO_ID
+    assert replay_rc == 0, replay
+    assert replay["heartbeat_receipt"]["settlement_identity"] == original
+    assert (
+        replay["interaction_contract"]["cli_channel"]["settlement_plan"][
+            "identity"
+        ]
+        == original
+    )
+
+    conflict_args = list(guard)
+    conflict_args[-1] = ALTERNATIVE_TODO_ID
+    conflict_rc, conflict = _run_cli(registry, runtime, *conflict_args)
+    assert conflict_rc == 1, conflict
+    assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
+    receipt_events = _heartbeat_receipt_events(runtime, turn)
+    assert receipt_events
+    assert {
+        event["details"]["settlement_effect_id"] for event in receipt_events
+    } == {original["effect_id"]}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_todoless_replan_upgrades_legacy_review_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    """A legacy review receipt gains its source without rebinding the Turn."""
+    if provider == "sqlite":
+        from canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(
+        state.read_text().split("## Agent Todo")[0].replace(
+            "status: active-read-only", "status: active"
+        ) + "## Agent Todo\n\n"
+    )
+    registry_value = json.loads(registry.read_text())
+    registry_value["goals"][0]["status"] = "active"
+    registry.write_text(json.dumps(registry_value))
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    _append_surface_only_runs(runtime, count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+
+    def call(*args: str, expected_code: int = 0) -> dict[str, Any]:
+        code, result = _run_cli(registry, runtime, *args)
+        assert code == expected_code, result
+        return result
+
+    call("configure-goal", "--goal-id", GOAL_ID,
+         "--execution-replan-after-todos", "5", "--execute")
+
+    turn = "turn-todoless-replan-review-upgrade"
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+             "--agent-id", AGENT_ID, "--turn-instance-id", turn)
+    first = call(*guard)
+    assert first["effective_action"] == "autonomous_replan_required"
+    identity = first["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert identity["replan_obligation_id"] == first["replan_action_packet"]["obligation_id"]
+    original = _heartbeat_receipt_events(runtime, turn)[0]
+    expected_kind = original["details"]["semantic_replan_review_kind"]
+
+    # Simulate a receipt written before review-source retention existed.  The
+    # exercised repair below is append-only; only this fixture setup removes
+    # fields from its synthetic legacy input.
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    for event in events:
+        if event.get("event_id") != original["event_id"]:
+            continue
+        for field in ("semantic_replan_review_kind",
+                      "semantic_replan_review_stop_condition",
+                      "semantic_replan_review_stop_condition_sha256",
+                      "semantic_replan_review_stop_contract_id"):
+            event["details"].pop(field, None)
+    log.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+    replay = call(*guard)
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    repaired = _heartbeat_receipt_events(runtime, turn)
+    assert len(repaired) == 2
+    assert repaired[1]["causality"]["caused_by"] == original["event_id"]
+    assert repaired[1]["details"]["settlement_receipt_revision"] == "review_guard_upgrade"
+    assert repaired[1]["details"]["semantic_replan_review_kind"] == expected_kind
+    assert (
+        repaired[1]["details"].get("semantic_replan_review_stop_condition")
+        or repaired[1]["details"].get("semantic_replan_review_stop_condition_sha256")
+    )
+
+    # A new completed Turn rotates the periodic frontier obligation id while the
+    # review kind and full stop contract remain the same.  A fresh dry-run
+    # exposes that raw id; replay of the admitted Turn retains its old identity
+    # and adopts the current context.
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    with index.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"generated_at": "2026-08-13T01:00:00+00:00",
+            "goal_id": GOAL_ID, "classification": "surface_only_progress",
+            "agent_id": AGENT_ID, "progress_scope": "agent_lane",
+            "delivery_outcome": "surface_only"}) + "\n")
+    receipt_bytes = log.read_bytes()
+    log.unlink()
+    try:
+        probe = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                     "--agent-id", AGENT_ID, "--dry-run")
+    finally:
+        log.write_bytes(receipt_bytes)
+    assert probe["replan_action_packet"]["obligation_id"] != identity["replan_obligation_id"]
+    assert probe["autonomous_replan_obligation"]["stop_condition"] == (
+        first["autonomous_replan_obligation"]["stop_condition"]
+    )
+    replay = call(*guard)
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert replay["autonomous_replan_obligation"]["obligation_id"] == identity["replan_obligation_id"]
+    assert len(_heartbeat_receipt_events(runtime, turn)) == 2
 
 
 def _initialize_git_checkout(project: Path) -> None:
@@ -8127,21 +8322,33 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
 def test_receipt_review_does_not_persist_private_or_lossy_stop_clauses() -> None:
     from argparse import Namespace
     from loopx.control_plane.quota.settlement_cli import quota_rollout_details
+    from loopx.control_plane.work_items.autonomous_replan_obligation import (
+        AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+    )
 
     obligation = {"schema_version": "autonomous_replan_obligation_v0", "required": True,
         "agent_id": AGENT_ID, "obligation_id": "replan-1111111111111111",
-        "trigger_count": 1, "triggers": [{"kind": "goal_outcome_uncovered"}]}
-    for stop, retained in [("Stop at owner-only decisions.", True),
-        ("Stop if Authorization: example is required.", False),
-        ("Stop before\nowner-only decisions.", False), ("s" * 241, False)]:
+        "trigger_count": 1, "triggers": [{"kind": "periodic_review_due"}]}
+    for stop, retention in [("Stop at owner-only decisions.", "full"),
+        ("Stop if " + "Author" + "ization: example is required.", "none"),
+        ("Stop before\nowner-only decisions.", "none"), ("s" * 241, "digest")]:
         details = quota_rollout_details({"autonomous_replan_obligation": {**obligation, "stop_condition": stop},
             "replan_action_packet": {"obligation_id": obligation["obligation_id"]}},
             Namespace(quota_command="should-run", agent_id=AGENT_ID), todo_id=None)
-        assert ("semantic_replan_review_kind" in details) is retained
-        if retained:
+        assert ("semantic_replan_review_kind" in details) is (retention != "none")
+        if retention == "full":
             assert details["semantic_replan_review_stop_condition"] == stop
+            assert "semantic_replan_review_stop_condition_sha256" not in details
+        elif retention == "digest":
+            assert details["semantic_replan_review_stop_condition_sha256"] == hashlib.sha256(
+                stop.encode("utf-8")
+            ).hexdigest()
+            assert details["semantic_replan_review_stop_condition"] == (
+                AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION
+            )
         else:
             assert "semantic_replan_review_stop_condition" not in details
+            assert "semantic_replan_review_stop_condition_sha256" not in details
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
