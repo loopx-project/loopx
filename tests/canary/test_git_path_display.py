@@ -413,7 +413,9 @@ def test_worktree_root_reads_bytes_and_removes_only_gits_terminator(
         monkeypatch.setattr(
             contract,
             "_git_query_bytes",
-            lambda *args, _raw=raw_root: answer(returncode=0, stdout=_raw + b"\n"),
+            lambda *args, _raw=raw_root: answer(
+                returncode=0, stdout=_raw + b"\n", stderr=b""
+            ),
         )
         assert contract._git_worktree_root(tmp_path) == Path(
             os.fsdecode(raw_root)

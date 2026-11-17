@@ -383,6 +383,7 @@ class _GitAnswer:
 class _GitBytesAnswer:
     returncode: int
     stdout: bytes
+    stderr: bytes
 
 
 def _retire_owned_probe(process: subprocess.Popen[str] | subprocess.Popen[bytes]) -> None:
@@ -429,6 +430,11 @@ def _literal_git_environment() -> dict[str, str]:
     environment = dict(os.environ)
     for key in _GIT_PATHSPEC_ENVIRONMENT_KEYS:
         environment.pop(key, None)
+    # Discovery failures are told apart from "there is no repository here" by
+    # the message Git prints, so ask for that message in one fixed language.
+    # Porcelain output this module reads is not localized either way.
+    environment["LC_ALL"] = "C"
+    environment["LANGUAGE"] = "C"
     return environment
 
 
@@ -490,14 +496,14 @@ def _git_query_bytes(*arguments: str) -> _GitBytesAnswer | None:
     except OSError:
         return None
     try:
-        stdout, _stderr = process.communicate(timeout=GIT_PROBE_TIMEOUT_SECONDS)
+        stdout, stderr = process.communicate(timeout=GIT_PROBE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _retire_owned_probe(process)
         return None
     except BaseException:
         _retire_owned_probe(process)
         raise
-    return _GitBytesAnswer(returncode=process.returncode, stdout=stdout)
+    return _GitBytesAnswer(returncode=process.returncode, stdout=stdout, stderr=stderr)
 
 
 def _git_worktree_root(path: Path) -> Path | None:
@@ -518,6 +524,16 @@ def _git_worktree_root(path: Path) -> Path | None:
     if answer is None:
         raise GitProbeUnavailable("git did not answer the worktree probe")
     if answer.returncode != 0:
+        # Only Git's own "this is not a repository" is a negative answer. A
+        # refusal - unsafe ownership, a blocked index, a corrupt repository -
+        # also exits nonzero, and reading it as "not a worktree" drops every
+        # tracked file below the target: an explicit scan of a pruned directory
+        # then reports a clean empty boundary instead of an unknown one.
+        if b"not a git repository" not in answer.stderr:
+            raise GitProbeUnavailable(
+                "git refused the worktree probe: "
+                + answer.stderr.decode("utf-8", "replace").strip()[:200]
+            )
         return None
     record = answer.stdout
     if record.endswith(b"\n"):

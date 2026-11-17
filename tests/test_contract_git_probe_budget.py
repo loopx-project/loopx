@@ -86,7 +86,7 @@ def test_an_unanswered_ownership_question_is_not_a_negative_answer(
     def fake_bytes_query(*arguments: str) -> contract._GitBytesAnswer | None:
         asked.append(arguments)
         return contract._GitBytesAnswer(
-            returncode=0, stdout=os.fsencode(str(tmp_path)) + b"\n"
+            returncode=0, stdout=os.fsencode(str(tmp_path)) + b"\n", stderr=b""
         )
 
     monkeypatch.setattr(contract, "_git_query", fake_query)
@@ -217,7 +217,9 @@ def test_a_refused_tracked_enumeration_is_not_a_clean_scan(
 
     def refuse(*arguments: str) -> contract._GitBytesAnswer | None:
         if "ls-files" in arguments:
-            return contract._GitBytesAnswer(returncode=128, stdout=b"")
+            return contract._GitBytesAnswer(
+                returncode=128, stdout=b"", stderr=b"fatal: refused\n"
+            )
         return real_query(*arguments)
 
     monkeypatch.setattr(contract, "_git_query_bytes", refuse)
@@ -241,6 +243,45 @@ def test_a_refused_tracked_enumeration_is_not_a_clean_scan(
     assert not [
         check for check in checked["checks"] if check.startswith("public boundary scan clean")
     ]
+
+
+def test_a_refused_worktree_discovery_is_not_a_clean_selected_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git refusing the root must leave the selected scan unknown, not empty."""
+
+    repo = _repository(tmp_path)
+    private_dir = repo / ".venv"
+    private_dir.mkdir()
+    real_query = contract._git_query_bytes
+
+    def refuse(*arguments: str) -> contract._GitBytesAnswer | None:
+        if "rev-parse" in arguments and "--show-toplevel" in arguments:
+            return contract._GitBytesAnswer(
+                returncode=128,
+                stdout=b"",
+                stderr=b"fatal: detected dubious ownership in repository\n",
+            )
+        return real_query(*arguments)
+
+    monkeypatch.setattr(contract, "_git_query_bytes", refuse)
+
+    # The pruned directory has no walk-visible file, and its tracked file can
+    # only come from Git.  A refusal must not turn that into a clean report.
+    boundary = contract.scan_public_boundary([private_dir])
+    assert boundary["ok"] is False
+    assert boundary["unavailable_git_probes"]
+    assert boundary["files"] == 0
+
+    checked = contract.check_contract(
+        registry_path=_registry(tmp_path),
+        runtime_root_override=None,
+        scan_roots=[private_dir],
+        limit=5,
+    )
+    assert checked["ok"] is False
+    codes = [diagnostic["code"] for diagnostic in checked["error_diagnostics"]]
+    assert "public_boundary_scan_git_unavailable" in codes
 
 
 def test_a_literal_git_read_drops_only_the_pathspec_mode(
