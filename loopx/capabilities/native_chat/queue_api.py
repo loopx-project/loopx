@@ -4,10 +4,16 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ...chat_store import CHAT_STORE_SCHEMA_VERSION
-from ...extensions.lark.private_ingress import project_private_reply_history
 
 
 class ChatQueueRequestMixin:
+    def _project_queue_reply_history(
+        self,
+        store: Any,
+        session: dict[str, Any],
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return rows
     def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
         from .steward_managed_mode import ManagedSessionTurn
         service = ManagedSessionTurn(self.server.runtime_controller)
@@ -68,7 +74,7 @@ class ChatQueueRequestMixin:
                 # a preview cannot decode a partial context envelope.
                 original = {"role": "user", "origin": turn.get("origin"),
                             "turn_id": turn["turn_id"], "text": str(turn.get("message") or "")}
-                visible = project_private_reply_history(store, session, [original])[0]
+                visible = self._project_queue_reply_history(store, session, [original])[0]
                 text = visible.get("reply_context", {}).get("source_text", original["text"])
                 rows.append({
                     "turn_id": turn["turn_id"],
