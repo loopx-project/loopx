@@ -10,6 +10,7 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _run_cli, _write_fixture, _spend_run_count,
 )
@@ -122,7 +123,7 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
             tokens = command_argv(executable, tokens[1:])
         completed = subprocess.run(tokens, cwd=project, env=environment, capture_output=True, text=True)
         assert completed.returncode != 97, "projection invoked the unrelated checkpoint-context executable"
-        return completed.returncode, json.loads(completed.stdout)
+        return completed.returncode, read_cli_policy_payload(completed.stdout, returncode=completed.returncode)
 
     prefix = [program, "--cli-bin", program, "--registry", str(registry),
               "--runtime-root", str(runtime), "--format", "json"]
@@ -138,7 +139,13 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
     original_basis = guard["delivery_result_context"]
     admission = read_heartbeat_settlement(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
         todo_id=identity["todo_id"], turn_instance_id=turn, registry_path=registry).heartbeat_receipt
-    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    channel = guard["interaction_contract"]["cli_channel"]
+    if channel.get("settlement_read_ref") == "$.replan_action_packet.writeback":
+        rc, writer = execute(guard["replan_action_packet"]["writeback"])
+        assert rc == 0 and writer["writeback"]["settlement_plan"]["identity"] == identity, writer
+        actions = writer["writeback"]["next_cli_actions"]
+    else:
+        actions = channel["next_cli_actions"]
     decision_path = project / "new direction.json"
 
     # Run the advertised first action unchanged, before any direction is authored.
@@ -150,7 +157,6 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
     assert retained.heartbeat_receipt == admission
     assert retained.writeback_run["vision_checkpoint"]["satisfied"] is False
     assert not retained.writeback_run.get("autonomous_replan_ack", {}).get("recorded")
-    spend = next(c for c in actions if "spend-slot" in c)
     assert _spend_run_count(runtime) == 0
     # A separate CLI process restores the original admission, not a new Turn.
     rc, recovered = execute([*prefix, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -158,6 +164,7 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
                             "--turn-instance-id", turn])
     assert rc == 0, recovered
     cold_actions = recovered["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    spend = next(c for c in cold_actions if "spend-slot" in c)
     (project / "cold-reentry.json").write_text(json.dumps(recovered), encoding="utf-8")
     receipts = runtime / "goals" / GOAL_ID
     before = {name: (receipts / name).read_bytes() for name in ("runs/index.jsonl", "rollout-event-log.jsonl")}
@@ -174,7 +181,7 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
     assert context["basis"]["todo"]["status"] == "open"
     assert original_basis["settlement_identity"] == identity
     # The Agent authors the direction only after reading this post-result basis.
-    decision_path.write_text(json.dumps({
+    decision = {
         "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
         "vision_patch": {"acceptance_summary": "Verify the retained candidate before closing its selected task."},
         "path_delta": {"outcome": "replan", "prior_assumption": "The oversized serial route could finish directly.",
@@ -182,13 +189,33 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
             "retained": ["The original candidate and its selected task."],
             "changed": ["Verify the selected candidate before advancing the dependent tasks."],
             "evidence_refs": [f"todo:{identity['todo_id']}"]},
-    }), encoding="utf-8")
+    }
+    control = context["stride_control"]
+    assert control["reference_context_id"] == context["replan_context"]["context_id"]
+    decision["stride_decision"] = {
+        **control["minimal_example"],
+        "basis": "useful_new_route",
+        "action": "switch",
+        "axes": {
+            "work_slice": {"plan": "Verify the single selected candidate.", "reason": "This produces one scoped result."},
+            "route_distance": {"plan": "Replace the serial route with an independent check.", "reason": "The dependency chain cannot finish in this Turn."},
+            "validation_scope": {"plan": "Check the candidate against the selected Todo.", "reason": "The original requirements still apply."},
+        },
+        "next_probe": {
+            "scope": "Verify one candidate before starting its dependents.",
+            "prediction": "The selected candidate passes the retained requirements on its own.",
+            "adoption_criterion": "Independent validation returns an admissible result.",
+            "cost_bound": "One candidate validation.",
+            "minimum_evidence": "Record the checked candidate and validator outcome.",
+        },
+    }
+    decision_path.write_text(json.dumps(decision), encoding="utf-8")
     replacements = {
         "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>": decision_path,
         "<read-context-id>": context["read_context_id"],
     }
     rc, direction = execute(actions[2], **replacements)
-    assert rc == 0 and direction["autonomous_replan_ack"]["recorded"], direction
+    assert rc == 0 and direction["autonomous_replan_ack"]["recorded"], json.dumps(direction)
     # Recover only from durable facts if the caller loses that response.
     rc, after_direction = execute([*prefix, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                                   "--agent-id", AGENT_ID, "--todo-id", identity["todo_id"],
@@ -275,11 +302,12 @@ def test_concurrent_default_reads_share_original_turn_and_basis(provider, tmp_pa
     def read():
         barrier.wait()
         return _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-            "--agent-id", AGENT_ID, cwd=project)
+            "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID, cwd=project)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: read(), range(2)))
     assert all(rc == 0 for rc, _ in results), json.dumps(results, indent=2)
     assert results[0][1]["delivery_result_context"] == results[1][1]["delivery_result_context"]
+    assert results[0][1]["delivery_result_context"]["settlement_identity"]["turn_instance_id"] == TURN_ID
 
 
 def test_explicit_todo_selection_still_requires_a_turn(tmp_path):

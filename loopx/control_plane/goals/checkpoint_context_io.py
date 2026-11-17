@@ -366,7 +366,7 @@ def result_work_context(*, registry_path: Path, runtime_root: Path,
             return read_checkpoint_context(registry_path=registry_path, runtime_root_override=str(runtime_root),
                 goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
                 turn_instance_id=identity.turn_instance_id, purpose="delivery_result", goal_ref=goal_ref,
-                restore_issued_for=identity)
+                restore_issued_for=identity, replace_issued_work=reread)
         except CheckpointReadContextRejected as error:
             if reread or error.code != "delivery_result_already_committed":
                 raise
@@ -378,6 +378,11 @@ def result_work_context(*, registry_path: Path, runtime_root: Path,
                 "runtime_root": str(runtime_root.resolve()), "identity": identity.as_dict(),
                 "purpose": "delivery_result", "goal_ref": goal_ref,
             })
+    return _restore_issued_result_work(identity, receipt, goal_ref)
+
+
+def _restore_issued_result_work(identity: SettlementIdentity, receipt: Mapping[str, Any],
+                               goal_ref: Mapping[str, Any] | None) -> dict[str, Any]:
     result = _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
         "phase": "restore", "identity": identity.as_dict(), "receipt": receipt, "goal_ref": goal_ref,
     })
@@ -971,6 +976,7 @@ def read_checkpoint_context(
     purpose: str = "supplement_checkpoint", decision_scope: str | None = None,
     include_retained_content: bool = False,
     restore_issued_for: SettlementIdentity | None = None,
+    replace_issued_work: bool = False,
     reuse_current_first_delivery: bool = False,
 ) -> dict[str, Any]:
     if restore_issued_for is not None and purpose != "delivery_result":
@@ -1048,6 +1054,10 @@ def read_checkpoint_context(
                         # Inspection verified this exact row against the index
                         # and artifacts; a later direction row is a different effect.
                         prior = previous_receipt["commit_attempt"]["index_record"]
+                if restore_issued_for is not None and not replace_issued_work and previous_receipt is not None:
+                    # Another caller can issue the receipt while this caller
+                    # waits for the source and result-work locks.
+                    return _restore_issued_result_work(identity, previous_receipt, goal_ref)
                 replan_pending = (purpose == "supplement_checkpoint" and continuation
                     and (prior_checkpoint or {}).get("replan_stage") == "awaiting_direction")
                 runs = load_index(root / "goals" / goal_id / "runs" / "index.jsonl")[0] if replan_pending else None
