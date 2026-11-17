@@ -244,7 +244,9 @@ Paired diffs do not certify translation accuracy.
     [#3798](https://github.com/huangruiteng/loopx/pull/3798)). In-process PostgreSQL
     service admission and identity rotation also exist;
     deployed authenticated remote service and provider promotion remain distinct
-    qualification gates.
+    qualification gates. [Cross-person shared access](shared-goal-authority-state-provider-v0.md#cross-person-shared-access)
+    defines the resource ACL and identity boundary. [R6 qualification](shared-goal-authority-state-provider-v0.md#cross-person-delivery-under-r6)
+    covers shared reading, collaborative research and the cloud worker.
 - [Shared Goal Alignment and Governed Amendment Protocol v0](shared-goal-alignment-and-governed-amendment-v0.md)
   ([中文版](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md))
   - **Delivery on `main`:** Stage 1/2 read-only alignment and proposal-admission

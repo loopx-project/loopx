@@ -1469,6 +1469,7 @@ full lifecycle.
 
 ### R6: Local/Cloud Convergence
 
+- **Cross-person product path** See [Shared Authority R6 qualification](shared-goal-authority-state-provider-v0.md#cross-person-delivery-under-r6). M1 exercises default-deny resource access and shared reading. M2 exercises cross-computer work and return together with Live Team L1/L2. M3 retains the full G3/R6 exit below.
 - **Owner:** shared-authority provider/service, session host adapters and collaboration. Extend existing PostgreSQL admission/identity-rotation foundations; do not rebuild the store.
 - **Delivery:** authenticated transport, tenant/Goal/actor authorization, host identity and capability admission. Cross-host request/receipt/wake flows use their owners. Handle disconnection, lease expiry, stale workers, service restart/restore incarnation and ambiguous commit.
 - **Exit:** at least two real hosts, including one cloud worker, collaborate in an isolated tenant; wrong-tenant/actor, revocation and split-brain negatives pass. Shared budgets/admission have explicit ownership; local quota is not a distributed resource reservation.
