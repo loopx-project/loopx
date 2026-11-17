@@ -15,6 +15,14 @@ if [ ! -f "$ENVF" ]; then
 fi
 PIDF="$STATE/daemon.pid"
 alive(){ [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
+# Keep the background PID as the server PID on both Linux and macOS (which has no setsid command).
+detach(){
+  if command -v setsid >/dev/null 2>&1; then
+    exec setsid nohup "$@"
+  else
+    exec nohup python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+  fi
+}
 # The LoopX core (Python chat server) the daemon proxies to. A Goal can only be created in a directory the
 # core has been given, one --scan-path each, the way the dashboard is started. Add projects with
 # LOOPX_GOAL_WORKSPACES=/path/a,/path/b and restart the core: scripts/workbench.sh core restart
@@ -26,9 +34,10 @@ core_start(){
   [ -n "${LOOPX_CHAT_ASSETS:-}" ] && assets=(--assets-dir "$LOOPX_CHAT_ASSETS")
   IFS=',' read -ra items <<< "$WS"
   for item in "${items[@]}"; do [ -n "$item" ] && scan+=(--scan-path "$item"); done
-  ( cd "$REPO_ROOT" && LOOPX_USAGE_PING=0 setsid nohup python3 -m loopx.cli chat --global-registry --host 127.0.0.1 --port "$CORE_PORT" --no-open \
+  ( cd "$REPO_ROOT"; LOOPX_USAGE_PING=0 detach python3 -m loopx.cli chat --global-registry --host 127.0.0.1 --port "$CORE_PORT" --no-open \
       "${assets[@]}" "${scan[@]}" --project-workspace-grant workspace_read \
       > "$STATE/core.log" 2>&1 < /dev/null & echo $! > "$CORE_PIDF" )
+  sleep 6; core_alive || { tail -20 "$STATE/core.log"; return 1; }
 }
 case "${1:-start}" in
   stop) alive && kill "$(cat "$PIDF")" && echo stopped || echo "not running";;
@@ -39,8 +48,8 @@ case "${1:-start}" in
     case "${2:-start}" in
       stop) core_alive && kill "$(cat "$CORE_PIDF")" && echo "core stopped" || echo "core not running";;
       status) core_alive && echo "core running pid $(cat "$CORE_PIDF") on :$CORE_PORT" || echo "core not running";;
-      restart) core_alive && kill "$(cat "$CORE_PIDF")"; sleep 2; core_start; sleep 6; echo "core restarted, log $STATE/core.log";;
-      start) if core_alive; then echo "core already running"; else core_start; sleep 6; echo "core started, log $STATE/core.log"; fi;;
+      restart) core_alive && kill "$(cat "$CORE_PIDF")"; sleep 2; core_start; echo "core restarted, log $STATE/core.log";;
+      start) if core_alive; then echo "core already running"; else core_start; echo "core started, log $STATE/core.log"; fi;;
     esac;;
   start)
     if alive; then echo "already running pid $(cat "$PIDF")"; exit 0; fi
@@ -66,7 +75,7 @@ case "${1:-start}" in
     LOOCHAT_ENV_FILE="$ENVF" LOOCHAT_HOST="${WORKBENCH_HOST:-127.0.0.1}" LOOCHAT_PORT="$PORT" LOOCHAT_PREVIEW_PORT=$((PORT+1)) \
     LOOCHAT_DATA_DIR="$STATE/data" LOOCHAT_SOCKET="$STATE/daemon.sock" \
     LOOCHAT_WORKDIRS="${WORKBENCH_WORKDIRS:-$REPO_ROOT,/tmp}" \
-      setsid nohup node dist/index.js > "$STATE/daemon.log" 2>&1 < /dev/null &
+      detach node dist/index.js > "$STATE/daemon.log" 2>&1 < /dev/null &
     echo $! > "$PIDF"
     sleep 3; alive || { tail -20 "$STATE/daemon.log"; exit 1; }
     echo "started pid $(cat "$PIDF"), log $STATE/daemon.log"
