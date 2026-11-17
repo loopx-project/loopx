@@ -169,9 +169,9 @@
       "dict_any_count": 0
     },
     "loopx/quota.py": {
-      "any_count": 219,
+      "any_count": 0,
       "dict_any_count": 0,
-      "lines": 1999
+      "lines": 1427
     },
     "loopx/slash_command_install.py": {
       "any_count": 11,
