@@ -22,6 +22,11 @@
       "any_count": 40,
       "dict_any_count": 0
     },
+    "loopx/capabilities/explore/result_log.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1146
+    },
     "loopx/capabilities/issue_fix/cli.py": {
       "any_count": 5,
       "dict_any_count": 0
