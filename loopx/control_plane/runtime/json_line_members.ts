@@ -184,92 +184,233 @@ function parseObjectAt(row: DecodedRow, index: number, depth: number): ParsedVal
 }
 
 /**
- * The quote that closes a string whose bytes were damaged.
+ * How much a row's structure still shows after its bytes were damaged.
  *
- * A damaged byte leaves the string's own end unknowable in theory, but the row
- * still shows which structural token follows it.  Only a quote followed by the
- * separator a finished key or value has can be that end, so scanning stops on
- * the first one.  Without such a quote the rest of the row is unreadable.
+ * Recovery answers one narrow question: which named top-level members can be
+ * read without guessing.  When a damaged byte leaves a separator unknowable,
+ * the members after it may be missing for reasons the row itself cannot state;
+ * callers must then treat any missing identity as possibly hidden rather than
+ * absent.
  */
-function closingQuoteAfterDamage(row: DecodedRow, from: number): number {
-  for (let at = from; at < row.text.length; at += 1) {
-    if (row.damaged.has(at)) continue;
-    if (row.text[at] === "\\") {
-      at += 1;
-      continue;
-    }
-    if (row.text[at] !== '"') continue;
-    const after = skipWhitespace(row, at + 1);
-    const token = row.text[after];
-    if (token === "," || token === "}" || token === "]" || token === ":") return at;
-  }
-  return -1;
+export interface MemberScan {
+  readonly offsets: readonly number[];
+  /** A key's name met an undecodable byte, so the recovered set is incomplete. */
+  readonly lostKeyName: boolean;
+  /** A separator or container boundary was unknowable, so the scan is inexact. */
+  readonly ambiguous: boolean;
 }
 
 /**
  * Byte offsets of the named keys that sit directly in the row's root object.
  *
- * Depth is tracked through nested objects and arrays, so a key inside a
+ * A small JSON state machine tracks the container stack, so a key inside a
  * diagnostic `details` value can never be read as a top-level schema member.
- * Damage inside a string is resynchronized on the quote its own row shows, which
- * keeps the depth available for the members that follow it.
+ * Damage is handled by context rather than by scanning for a plausible quote:
+ *
+ * - A damaged byte where a value must start can only stand for that value's
+ *   opening quote, so the scan resumes inside the string and stops at its own
+ *   closing quote.
+ * - A damaged byte where a key must start likewise stands for that key's
+ *   opening quote; the key's name is lost, which the caller is told about.
+ * - A damaged byte inside a string is the lost closing quote only when the
+ *   separator its role requires follows it.  Otherwise it is damage inside the
+ *   text, and the string ends at the next unescaped quote as it normally would.
+ *
+ * Anything the state machine cannot place leaves `ambiguous` set.  The scan
+ * never guesses a member from text that may be nested, and the caller must not
+ * read a missing identity as an absent one when either flag is set.
  */
-function topLevelMemberOffsets(row: DecodedRow, wanted: ReadonlySet<string>): number[] {
+function topLevelMemberOffsets(row: DecodedRow, wanted: ReadonlySet<string>): MemberScan {
   const offsets: number[] = [];
   let index = skipWhitespace(row, 0);
-  if (row.text[index] !== "{" || row.damaged.has(index)) return offsets;
-  index += 1;
-  let depth = 1;
-  let inString = false;
+  if (row.text[index] !== "{" || row.damaged.has(index)) {
+    return {
+      offsets,
+      lostKeyName: false,
+      ambiguous: row.text[index] !== "{",
+    };
+  }
+  const containers: ("object" | "array")[] = ["object"];
+  // True when the row's next token must be a value (after `:` or in an array).
+  let expectValue = false;
+  // True when the row's next token must be a key of the current object.
+  let expectKey = true;
+  let inString: "key" | "value" | null = null;
   let escaped = false;
-  while (index < row.text.length && depth >= 1 && offsets.length <= MAX_MEMBERS) {
+  let lostKeyName = false;
+  let ambiguous = false;
+  index += 1;
+  while (index < row.text.length && containers.length > 0) {
+    if (offsets.length > MAX_MEMBERS) {
+      ambiguous = true;
+      break;
+    }
     const character = row.text[index];
     if (row.damaged.has(index)) {
-      if (!inString) {
+      if (inString === null) {
+        if (expectValue) {
+          // A value was required here: the damaged byte is its opening quote.
+          inString = "value";
+          escaped = false;
+          expectValue = false;
+          expectKey = false;
+          index += 1;
+          continue;
+        }
+        if (expectKey && containers[containers.length - 1] === "object") {
+          // A key was required here: its name is lost, its structure is not.
+          lostKeyName = true;
+          inString = "key";
+          escaped = false;
+          expectKey = false;
+          index += 1;
+          continue;
+        }
+        ambiguous = true;
         index += 1;
         continue;
       }
-      const close = closingQuoteAfterDamage(row, index + 1);
-      if (close < 0) break;
-      inString = false;
-      escaped = false;
-      index = close + 1;
-      continue;
-    }
-    if (inString) {
       if (escaped) {
         escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
+        index += 1;
+        continue;
       }
+      const after = skipWhitespace(row, index + 1);
+      const follower = row.text[after];
+      const closesKey = inString === "key" && follower === ":";
+      const closesValue = inString === "value" &&
+        (follower === "," || follower === "}" || follower === "]");
+      if (closesKey || closesValue) {
+        // The damaged byte sits where this string's closing quote was.
+        inString = null;
+        expectKey = false;
+        expectValue = false;
+        index = after;
+        continue;
+      }
+      // Damage inside the text; the string still ends at its own closing quote.
       index += 1;
+      continue;
+    }
+    if (inString !== null) {
+      if (escaped) {
+        escaped = false;
+        index += 1;
+        continue;
+      }
+      if (character === "\\") {
+        escaped = true;
+        index += 1;
+        continue;
+      }
+      if (character !== '"') {
+        index += 1;
+        continue;
+      }
+      const role = inString;
+      inString = null;
+      const after = skipWhitespace(row, index + 1);
+      const follower = row.text[after];
+      if (role === "key") {
+        if (follower !== ":") ambiguous = true;
+      } else if (follower !== "," && follower !== "}" && follower !== "]") {
+        // A value string must be followed by the end of its container or the
+        // next member; anything else means the closing quote was misread.
+        ambiguous = true;
+      }
+      expectKey = false;
+      expectValue = false;
+      index = after;
       continue;
     }
     if (character === '"') {
-      const key = parseStringAt(row, index);
-      if (key.ok && typeof key.value === "string" && depth === 1) {
-        const colon = skipWhitespace(row, key.next);
-        if (row.text[colon] === ":" && !row.damaged.has(colon)) {
-          if (wanted.has(key.value)) offsets.push(index);
-          index = colon + 1;
+      const role: "key" | "value" = expectValue ||
+          containers[containers.length - 1] === "array" ? "value" : "key";
+      const parsed = parseStringAt(row, index);
+      if (role === "key") {
+        if (!parsed.ok || typeof parsed.value !== "string") {
+          // The name cannot be read; keep scanning inside the string so the
+          // structure behind it stays available.
+          lostKeyName = true;
+          inString = "key";
+          escaped = false;
+          index += 1;
           continue;
         }
+        const colon = skipWhitespace(row, parsed.next);
+        if (row.text[colon] !== ":" || row.damaged.has(colon)) {
+          // This was a value string mistaken for a key; it still ended here.
+          expectKey = false;
+          expectValue = false;
+          index = parsed.next;
+          continue;
+        }
+        if (containers.length === 1 && wanted.has(parsed.value)) {
+          offsets.push(index);
+        }
+        expectValue = true;
+        expectKey = false;
+        index = colon + 1;
+        continue;
       }
-      inString = true;
-      escaped = false;
+      if (!parsed.ok) {
+        // The value string is damaged; keep scanning inside it.
+        inString = "value";
+        escaped = false;
+        index += 1;
+        continue;
+      }
+      expectValue = false;
+      expectKey = false;
+      index = parsed.next;
+      continue;
+    }
+    if (character === "{") {
+      containers.push("object");
+      expectKey = true;
+      expectValue = false;
       index += 1;
       continue;
     }
-    if (character === "{" || character === "[") {
-      depth += 1;
-    } else if (character === "}" || character === "]") {
-      depth -= 1;
+    if (character === "[") {
+      containers.push("array");
+      expectKey = false;
+      expectValue = true;
+      index += 1;
+      continue;
     }
+    if (character === "}" || character === "]") {
+      const expected = character === "}" ? "object" : "array";
+      if (containers[containers.length - 1] !== expected) {
+        ambiguous = true;
+      } else {
+        containers.pop();
+      }
+      expectKey = false;
+      expectValue = false;
+      index += 1;
+      continue;
+    }
+    if (character === ",") {
+      const top = containers[containers.length - 1];
+      expectKey = top === "object";
+      expectValue = top === "array";
+      index += 1;
+      continue;
+    }
+    if (character === ":") {
+      expectKey = false;
+      expectValue = true;
+      index += 1;
+      continue;
+    }
+    // Any other byte continues a scalar value (number or literal).
+    expectKey = false;
+    expectValue = false;
     index += 1;
   }
-  return offsets;
+  if (containers.length > 0) ambiguous = true;
+  return { offsets, lostKeyName, ambiguous };
 }
 
 /** What one row still carries of the members a caller named. */
@@ -283,6 +424,22 @@ export interface LineMembers {
    * absent: the row did contain it, so "absent" would be a different fact.
    */
   readonly unreadable: readonly string[];
+  /**
+   * A key's name met an undecodable byte.
+   *
+   * The recovered member set is therefore incomplete: a member a caller needs
+   * may be the one whose name was lost, and a caller cannot read its absence as
+   * proof that the row never carried it.
+   */
+  readonly lostKeyName: boolean;
+  /**
+   * A separator or container boundary was unknowable.
+   *
+   * The members before the damage are exact; the ones after it are best effort.
+   * A caller that must decide an identity from this row has to treat a missing
+   * identity as unreadable rather than absent.
+   */
+  readonly ambiguous: boolean;
 }
 
 /**
@@ -302,8 +459,11 @@ export function jsonLineMembers(
   const wanted = new Set(keys);
   const members: [string, unknown][] = [];
   const unreadable: string[] = [];
-  if (wanted.size === 0) return { members, unreadable };
-  for (const offset of topLevelMemberOffsets(row, wanted)) {
+  if (wanted.size === 0) {
+    return { members, unreadable, lostKeyName: false, ambiguous: false };
+  }
+  const scan = topLevelMemberOffsets(row, wanted);
+  for (const offset of scan.offsets) {
     const key = parseStringAt(row, offset);
     if (!key.ok || typeof key.value !== "string") continue;
     const colon = skipWhitespace(row, key.next);
@@ -314,5 +474,10 @@ export function jsonLineMembers(
     }
     members.push([key.value, value.value]);
   }
-  return { members, unreadable: [...new Set(unreadable)] };
+  return {
+    members,
+    unreadable: [...new Set(unreadable)],
+    lostKeyName: scan.lostKeyName,
+    ambiguous: scan.ambiguous,
+  };
 }

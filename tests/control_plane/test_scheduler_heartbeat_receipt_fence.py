@@ -451,6 +451,46 @@ def _damage_committed_summary(path: Path, turn_id: str) -> None:
     path.write_bytes(b"\n".join(lines))
 
 
+def _damage_committed_detail_quote(
+    path: Path, turn_id: str, which: str
+) -> None:
+    """Damage one byte of a nested display value in a committed receipt.
+
+    ``which`` names the byte: the opening quote of the value, its closing
+    quote, or a byte inside the text.  Identity members and the terminating
+    newline stay untouched, so the row still proves its writer finished it.
+    """
+    lines = path.read_bytes().split(b"\n")
+    damaged = 0
+    for index, line in enumerate(lines):
+        if turn_id.encode() not in line:
+            continue
+        marker = b'"quota_command":'
+        at = line.find(marker)
+        if at < 0:
+            raise AssertionError("fixture receipt has no nested detail value")
+        opener = at + len(marker)
+        while line[opener:opener + 1] in (b" ", b"\t"):
+            opener += 1
+        if line[opener:opener + 1] != b'"':
+            raise AssertionError("fixture receipt detail value is not a string")
+        closer = line.find(b'"', opener + 1)
+        if closer < 0:
+            raise AssertionError("fixture receipt has no closing quote")
+        if which == "open":
+            position = opener
+        elif which == "close":
+            position = closer
+        elif which == "inside":
+            position = opener + 3
+        else:  # pragma: no cover - parametrization guard
+            raise AssertionError(f"unknown damage position {which!r}")
+        lines[index] = line[:position] + b"\xff" + line[position + 1:]
+        damaged += 1
+    assert damaged == 1
+    path.write_bytes(b"\n".join(lines))
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize(
     "command", ["scheduler-ack-current", "scheduler-fail-current"],
@@ -507,6 +547,136 @@ def test_damaged_committed_successor_still_supersedes_the_older_turn(
     assert result["ok"] is False
     assert result["status"] == "heartbeat_receipt_stale"
     assert result["scheduler_state_mutated"] is False
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
+@pytest.mark.parametrize("damage", ["open", "close", "inside"])
+def test_damaged_detail_quote_still_retires_the_older_turn(
+    tmp_path: Path, provider: str, command: str, damage: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-{damage}",
+        scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    for turn_id in ("turn-1", "turn-2"):
+        code, guard = run_json_cli_result(
+            "quota",
+            "should-run",
+            "--goal-id",
+            goal_id,
+            "--agent-id",
+            SCOPED_AGENT_ID,
+            "--trae_app",
+            "--app-automation-current-rrule",
+            "FREQ=MINUTELY;INTERVAL=3",
+            "--turn-instance-id",
+            turn_id,
+            registry_path=registry,
+            runtime_root=runtime_root,
+            cwd=project,
+        )
+        assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    _damage_committed_detail_quote(log_path, "turn-2", damage)
+    before = log_path.read_bytes()
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        "turn-1",
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # A damaged display value never hides the Turn its writer committed.  Even
+    # when the scan cannot say what the row contained, "unknown" is not
+    # "absent": the older return must not regain write authority.
+    assert code == 1, result
+    assert result["ok"] is False
+    assert result["status"] == "heartbeat_receipt_stale"
+    assert result["scheduler_state_mutated"] is False
+    assert log_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
+def test_damaged_detail_quote_in_another_agent_row_is_tolerated(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}", scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    code, guard = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--app-automation-current-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--turn-instance-id",
+        "turn-1",
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    foreign = build_rollout_event(
+        goal_id=goal_id,
+        event_kind="quota_should_run",
+        agent_id="another-agent",
+        run_id="turn-other",
+        details={"quota_command": "should-run", "turn_instance_id": "turn-other"},
+    )
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(foreign, sort_keys=True, ensure_ascii=False) + "\n")
+    _damage_committed_detail_quote(log_path, "turn-other", "open")
+    before = log_path.read_bytes()
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        "turn-1",
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # The damaged row's readable agent identity proves it cannot supersede this
+    # Agent's Turn, so an otherwise valid return must still complete.
+    assert code == 0, result
+    assert result["ok"] is True
+    assert result["scheduler_state_mutated"] is True
+    assert log_path.read_bytes() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

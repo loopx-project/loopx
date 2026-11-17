@@ -285,6 +285,115 @@ test("a committed successor stays superseding after its early field is damaged",
   }
 });
 
+/** A committed successor row shaped like the writer's sorted-key output. */
+function receiptRowWithDetails(turnId: string, agentId = scope.agent_id): string {
+  return JSON.stringify({
+    agent_id: agentId,
+    boundary: { absolute_paths_recorded: false, credential_values_recorded: false },
+    details: {
+      command: "quota",
+      quota_command: "should-run",
+      todo_id: "",
+      turn_instance_id: turnId,
+    },
+    event_id: `event-${turnId}`,
+    event_kind: "quota_should_run",
+    goal_id: scope.goal_id,
+    recorded_at: "2026-08-27T06:30:00Z",
+    run_id: turnId,
+    schema_version: "loopx_rollout_event_v0",
+    status: "normal_run",
+    summary: `receipt ${turnId}`,
+  });
+}
+
+function damageLineAt(line: string, index: number): Buffer {
+  const bytes = Buffer.from(line, "utf8");
+  return Buffer.concat([
+    bytes.subarray(0, index),
+    Buffer.from([0xff]),
+    bytes.subarray(index + 1),
+  ]);
+}
+
+test("a damaged quote inside details cannot hide a committed successor", async (t) => {
+  const cases: readonly {
+    name: string;
+    agentId?: string;
+    stale: boolean;
+    at: (line: string) => number;
+  }[] = [
+    {
+      name: "damaged opening quote",
+      stale: true,
+      at: (line) => line.indexOf('"quota_command":"') + '"quota_command":'.length,
+    },
+    {
+      name: "damaged closing quote",
+      stale: true,
+      at: (line) => {
+        const opener = line.indexOf('"quota_command":"') + '"quota_command":'.length;
+        return line.indexOf('"', opener + 1);
+      },
+    },
+    {
+      name: "damage inside the text",
+      stale: true,
+      at: (line) => line.indexOf('"should-run"') + 3,
+    },
+    {
+      // A readable agent identity proves this row belongs to somebody else,
+      // so its damaged display field must still be tolerated.
+      name: "damaged opening quote in another Agent's row",
+      agentId: "other-agent",
+      stale: false,
+      at: (line) => line.indexOf('"quota_command":"') + '"quota_command":'.length,
+    },
+  ];
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      for (const { name, agentId, stale, at } of cases) {
+        const runtimeRoot = await tempRuntime(t);
+        await appendReceipt(runtimeRoot, "turn-followup-1");
+        const path = receiptLogPath(runtimeRoot);
+        const line = receiptRowWithDetails("turn-followup-2", agentId);
+        const index = at(line);
+        assert.ok(index > 0, `${name}: fixture lost its damage point`);
+        await appendFile(path, Buffer.concat([
+          damageLineAt(line, index),
+          Buffer.from("\n"),
+        ]));
+        const before = await readFile(path);
+        const statePath = schedulerStatePath(runtimeRoot, {
+          goalId: scope.goal_id,
+          agentId: scope.agent_id,
+          surface: scope.surface,
+          stateKey: scope.state_key,
+        });
+        const result = await evaluateSchedulerHeartbeatFollowup(
+          followupRequest(runtimeRoot, operation),
+        );
+        if (stale) {
+          assert.equal(
+            result.error_code,
+            "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE",
+            `${name} let ${operation} write stale state`,
+          );
+          assert.equal(result.scheduler_state_mutated, false, name);
+          assert.deepEqual(await readFile(path), before, name);
+          await assert.rejects(readFile(statePath, "utf8"), name);
+        } else {
+          assert.equal(result.ok, true, name);
+          assert.equal(result.scheduler_state_mutated, true, name);
+          assert.deepEqual(await readFile(path), before, name);
+          const persisted = JSON.parse(await readFile(statePath, "utf8"));
+          assert.equal(persisted.heartbeat_commit.operation, operation, name);
+        }
+      }
+    });
+  }
+});
+
 test("only an ambiguous receipt of this scope fails closed", async (t) => {
   const rows: readonly {
     row: string;

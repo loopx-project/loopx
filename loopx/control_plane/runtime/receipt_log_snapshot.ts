@@ -14,6 +14,10 @@ export interface MalformedLineMembers {
   readonly members: readonly (readonly [string, unknown])[];
   /** Named members the line contained but could not read intact. */
   readonly unreadable: readonly string[];
+  /** A key's name met an undecodable byte; the member set is incomplete. */
+  readonly lostKeyName: boolean;
+  /** A separator or container boundary was unknowable; later members are guessed. */
+  readonly ambiguous: boolean;
 }
 
 export interface ReceiptLogSnapshot {
@@ -76,6 +80,8 @@ function freezeMalformed(line: MalformedLineMembers): MalformedLineMembers {
       Object.freeze([key, value] as const)
     ))),
     unreadable: Object.freeze([...line.unreadable]),
+    lostKeyName: line.lostKeyName,
+    ambiguous: line.ambiguous,
   });
 }
 
@@ -163,7 +169,8 @@ export async function readReceiptLogSnapshot(
       if (line === null) {
         firstErrorLine ??= lines;
         const recovered = jsonLineMembers(raw, recoveryKeys);
-        if (recovered.members.length > 0 || recovered.unreadable.length > 0) {
+        if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
+          recovered.ambiguous || recovered.lostKeyName) {
           malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
         }
       } else if (line.trim()) {
@@ -172,7 +179,8 @@ export async function readReceiptLogSnapshot(
         } catch {
           firstErrorLine ??= lines;
           const recovered = jsonLineMembers(raw, recoveryKeys);
-          if (recovered.members.length > 0 || recovered.unreadable.length > 0) {
+          if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
+            recovered.ambiguous || recovered.lostKeyName) {
             malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
           }
         }

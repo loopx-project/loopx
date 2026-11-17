@@ -40,6 +40,10 @@ export interface GoalRolloutEventSnapshot {
     members: readonly (readonly [string, unknown])[];
     /** Identity members the damaged line contained but could not read. */
     unreadable: readonly string[];
+    /** A key name was lost to damage, so recovered members may be incomplete. */
+    lostKeyName: boolean;
+    /** A separator or container boundary was unknowable after damage. */
+    ambiguous: boolean;
   }>[];
   readonly firstStrictErrorLine: number | null;
 }
@@ -224,12 +228,18 @@ const ADMISSION_IDENTITY_MEMBERS = [
  */
 type CommittedSuccessor =
   | { readonly kind: "superseded"; readonly runId: string }
-  | { readonly kind: "unattributed" };
+  | { readonly kind: "unattributed" }
+  // The row belongs to this scope but its damage left an identity unknowable.
+  // Absence of proof is not proof of absence: a caller must treat this receipt
+  // as possibly superseding rather than as unrelated.
+  | { readonly kind: "unknown" };
 
 function committedSuccessor(
   damaged: Readonly<{
     members: readonly (readonly [string, unknown])[];
     unreadable: readonly string[];
+    lostKeyName: boolean;
+    ambiguous: boolean;
   }>,
   goalId: string,
   agentId: string,
@@ -257,13 +267,18 @@ function committedSuccessor(
     if (key !== "run_id") return null;
     if (fields.has("run_id")) ambiguousTurn = true;
   }
-  if (fields.get("schema_version") !== ROLLOUT_EVENT_SCHEMA_VERSION) return null;
-  if (fields.get("event_kind") !== HEARTBEAT_RECEIPT_EVENT_KIND) return null;
-  if (fields.get("goal_id") !== goalId) return null;
-  if (fields.get("agent_id") !== agentId) return null;
+  // A member that is present with another value proves the row is outside this
+  // scope; only then may damage elsewhere in the row be tolerated.  Missing
+  // members are handled below, because damage can hide a member entirely.
+  if (fields.has("schema_version") &&
+    fields.get("schema_version") !== ROLLOUT_EVENT_SCHEMA_VERSION) return null;
+  if (fields.has("event_kind") &&
+    fields.get("event_kind") !== HEARTBEAT_RECEIPT_EVENT_KIND) return null;
+  if (fields.has("goal_id") && fields.get("goal_id") !== goalId) return null;
+  if (fields.has("agent_id") && fields.get("agent_id") !== agentId) return null;
   if (goalRef === null) {
     if (fields.has("goal_ref")) return null;
-  } else {
+  } else if (fields.has("goal_ref")) {
     const eventGoalRef = jsonObject(fields.get("goal_ref"));
     if (
       eventGoalRef === null ||
@@ -271,14 +286,34 @@ function committedSuccessor(
       eventGoalRef.goal_instance_id !== goalRef.goal_instance_id
     ) return null;
   }
+  // Scope members whose bytes could not be read keep the row inside this
+  // transaction without proving which Turn admitted it.
+  for (const key of damaged.unreadable) {
+    if (!(ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key)) continue;
+    if (key !== "run_id") return { kind: "unknown" };
+  }
+  const identityUncertain = damaged.lostKeyName || damaged.ambiguous;
+  const required = goalRef === null
+    ? ["schema_version", "event_kind", "goal_id", "agent_id"]
+    : ["schema_version", "event_kind", "goal_id", "agent_id", "goal_ref"];
+  if (required.some((key) => !fields.has(key))) {
+    // Without damage such a row simply is not one of this scope's receipts.
+    // Damage can have hidden the member behind a key name or separator it
+    // could not read, so the row is unreadable instead of unrelated.
+    return identityUncertain ? { kind: "unknown" } : null;
+  }
   // The row now proves it is one of this scope's heartbeat receipts.  Only then
   // does an unknown Turn mean "somebody else's turn superseded mine".
+  if (damaged.ambiguous) return { kind: "unknown" };
   if (ambiguousTurn) return { kind: "unattributed" };
   const runId = fields.get("run_id");
   if (typeof runId === "string" && runId.trim().length > 0) {
     return { kind: "superseded", runId };
   }
-  return damaged.unreadable.includes("run_id") ? { kind: "unattributed" } : null;
+  if (damaged.unreadable.includes("run_id")) return { kind: "unattributed" };
+  // Nothing names a Turn here.  A lost key name could have been that Turn, so
+  // only a row whose key names all survived may be read as a diagnostic.
+  return damaged.lostKeyName ? { kind: "unknown" } : null;
 }
 
 export async function heartbeatReceiptStatus(params: {
@@ -317,8 +352,11 @@ export async function heartbeatReceiptStatus(params: {
       damaged, params.goalId, params.agentId, goalRef,
     );
     if (admitted === null) return false;
-    return admitted.kind === "unattributed" ||
-      admitted.runId !== params.turnInstanceId;
+    if (admitted.kind === "superseded") {
+      return admitted.runId !== params.turnInstanceId;
+    }
+    // An unreadable admission of this scope still retires the old Turn.
+    return true;
   });
   return laterReceipt || laterAdmission ? "stale" : "fresh";
 }
