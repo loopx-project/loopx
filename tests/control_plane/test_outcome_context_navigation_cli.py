@@ -8,6 +8,7 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.testing.canary_harness import write_fixture_registry
 from test_quota_settlement_cli import _run_cli
 from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
@@ -61,14 +62,8 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         code, applied = configure(registry, runtime, tmp_path, "on", delta="auto")
         assert code == 0 and applied["readback_verified"], applied
     off = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
-    if legacy_spelling:
-        assert off["schema_version"] == "loopx_turn_envelope_v0"
-        work_context = off["work_context"]
-    else:
-        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-
-        assert_complete_turn_decision(off)
-        work_context = off["interaction_contract"]["agent_channel"]["work_context"]
+    assert_complete_turn_decision(off)
+    work_context = off["interaction_contract"]["agent_channel"]["work_context"]
     source = next(row["content"] for row in work_context["sources"]
         if row.get("source") == "goal_acceptance")
     assert "outcome_context" not in source

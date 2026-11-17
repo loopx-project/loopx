@@ -140,10 +140,9 @@ def test_original_capture_retains_the_emitted_poll_observation(
     elif wire == "envelope":
         from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 
-        # Explicitly disabled context delivery keeps the bounded v0 wire view;
-        # the immutable capture may carry the complete v1 source instead.
-        assert emitted["schema_version"] == "loopx_turn_envelope_v0"
-        assert emitted != source
+        assert emitted == source
+        assert emitted["schema_version"] == "loopx_turn_envelope_v1"
+        historical = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
         # Replan readers bind the full observation, including this receipt.
         # Their hash changes without changing the selected work or debit.
         without_poll = deepcopy(source)
@@ -160,16 +159,16 @@ def test_original_capture_retains_the_emitted_poll_observation(
             without_poll, _ = _resign_contract(without_poll)
             assert_complete_turn_decision(without_poll)
         prior = build_turn_envelope(without_poll)
-        actual = emitted["action_signature"]
+        actual = historical["action_signature"]
         for key in ("decision", "should_run", "effective_action"):
             assert emitted[key] == prior[key]
-        assert emitted["writeback"]["settlement_identity"] == prior["writeback"]["settlement_identity"]
+        assert historical["writeback"]["settlement_identity"] == prior["writeback"]["settlement_identity"]
         assert actual["source_decision_hash"] != prior["action_signature"]["source_decision_hash"]
         assert actual == build_turn_envelope(source)["action_signature"]
-        review = subprocess.run(shlex.split(emitted["replan_action_packet"]["review"]),
+        review = subprocess.run(shlex.split(historical["replan_action_packet"]["review"]),
                                 check=True, capture_output=True, text=True, timeout=90)
         assert json.loads(review.stdout)["source_hash"] == actual["source_decision_hash"]
-        reader = shlex.split(emitted["detail_ref"]["full_decision"])
+        reader = shlex.split(historical["detail_ref"]["full_decision"])
     else:
         reader = [sys.executable, "-m", "loopx.cli", "--format", "json", "quota", "context-read",
                   "--capture-file", str(capture / "decision.json"),

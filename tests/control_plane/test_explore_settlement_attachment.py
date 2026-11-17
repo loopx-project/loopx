@@ -81,14 +81,10 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
     writeback = plan["ordered_steps"][1]
     assert writeback["optional_attachments"][0]["required"] is False
     assert "--explore-result-json" not in writeback["command_template"]
-    rc, compact = _run_cli(path, runtime, *command, "--turn-envelope", cwd=project)
-    assert rc == 0, compact
-    if context_delivery == "off":
-        assert compact["schema_version"] == "loopx_turn_envelope_v0"
-        assert compact["writeback"]["settlement_plan"] == plan
-    else:
-        assert compact["schema_version"] == "loopx_turn_envelope_v1"
-        assert compact["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+    rc, alias_guard = _run_cli(path, runtime, *command, "--turn-envelope", cwd=project)
+    assert rc == 0, alias_guard
+    assert alias_guard["schema_version"] == "loopx_turn_envelope_v1"
+    assert alias_guard["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
     rc, completed = _run_cli(path, runtime, "todo", "complete", *binding,
                             "--evidence", "Synthetic deliverable validated", "--no-follow-up", cwd=project)
     assert rc != 0 and completed["settlement_blocked_completion"], completed

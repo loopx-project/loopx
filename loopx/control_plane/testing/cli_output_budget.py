@@ -500,14 +500,14 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --turn-envelope",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("schema_version", "contract_capsule", "action_signature"),
+        semantic_json_keys=CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"].semantic_json_keys,
         markdown_anchor="# LoopX Turn Envelope",
-        # The same canonical fixture costs 10,681 JSON chars (12,268 with
-        # multi-subagent) on base/head. Rendering the instruction once reduces
-        # Markdown 4,996 -> 4,521 chars without removing source content.
-        # These stdout guards do not change the envelope's wire byte limit.
-        max_chars={"json": 13_000, "markdown": 4_800},
-        max_lines={"json": 300, "markdown": 140},
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        # The retained flag now emits the ordinary complete source, including
+        # the existing multi-agent form. The frozen v0 reports retain their own
+        # carrier and 13,000 / 4,800-character ceilings.
+        max_chars=CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"].max_chars["multi_agent"],
+        max_lines=CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"].max_lines["multi_agent"],
     ),
     CliOutputModeVariantSpec(
         variant_id="loopx_turn_plan_transaction_detail",

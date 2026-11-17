@@ -275,7 +275,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         return run(command, **kwargs)
     monkeypatch.setattr(checkpoint.subprocess, "run", observe)
     receipt = {"turn_id": TURN, "mode": "heartbeat", "stage": "execute"}
-    legacy_view = turn_envelope and not context_delivery
+    legacy_flag_off = turn_envelope and not context_delivery
     try:
         body = checkpoint.capture_before_replan(env, receipt, "original heartbeat instructions")
         assert len(commands) == 1
@@ -299,19 +299,12 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         raw = source_path.read_bytes()
         source, view = json.loads(raw), json.loads(view_path.read_bytes())
         assert captured.read_bytes() == raw
-        if legacy_view:
-            assert view["schema_version"] == "loopx_turn_envelope_v0"
-            assert view["action_signature"]["matches"] is True
-            assert view["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
-            assert shlex.split(view["detail_ref"]["full_decision"]) == ["cat", "--", str(captured)]
-            assert "follow its action, required reads and settlement instructions" in body
-        elif context_delivery:
+        if context_delivery:
             assert view_path.read_bytes() == raw
         else:
-            assert view["heartbeat_receipt"] == source["heartbeat_receipt"]
-            assert view["effective_action"] == source["effective_action"]
-            assert view["interaction_contract"]["cli_channel"] == source["interaction_contract"]["cli_channel"]
-        assert ("--turn-envelope" in commands[0]) is turn_envelope
+            assert view == source
+            assert "follow its interaction_contract" in body
+        assert "--complete-turn" in commands[0] and "--turn-envelope" not in commands[0]
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
@@ -448,12 +441,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert view.get("replan_action_packet") is None
             return
         assert source["autonomous_replan_obligation"]["replan_context"]["context_id"]
-        if context_delivery:
-            packet = staged_packet
-        elif legacy_view:
-            packet = view["replan_action_packet"]
-        else:
-            packet = build_turn_envelope(source)["replan_action_packet"]
+        packet = staged_packet if context_delivery else build_turn_envelope(source)["replan_action_packet"]
         capture = Path(source["replan_read_path"])
         assert capture.read_bytes() == source_path.read_bytes()
         before = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
@@ -499,20 +487,22 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
-        if context_delivery or legacy_view:
+        if context_delivery or legacy_flag_off:
             followup = shlex.split(selection["command_args_template"])
-            if legacy_view:
-                assert "--turn-envelope" in followup
+            if legacy_flag_off:
+                assert "--turn-envelope" not in followup
                 assert followup[followup.index("--context-delivery") + 1] == "off"
             selected = shlex.split(selection["route_prefix"]) + followup
             selected[selected.index("{todo_id}")] = TODO
-            selection_env = {**env, "LOOPX_CONTEXT_DELIVERY": "on"} if legacy_view else env
+            selection_env = {**env, "LOOPX_CONTEXT_DELIVERY": "on"} if legacy_flag_off else env
             result = run(selected, cwd=fixture["project"], env=selection_env, capture_output=True, text=True, timeout=60)
             assert result.returncode == 0, result.stdout
-            if legacy_view:
-                assert json.loads(result.stdout)["schema_version"] == "loopx_turn_envelope_v0"
             [next_capture] = set(capture_root.glob("*/decision.json")) - {capture}
-            identity = json.loads(next_capture.read_bytes())["heartbeat_receipt"]["settlement_identity"]
+            selected_source = json.loads(next_capture.read_bytes())
+            if legacy_flag_off:
+                assert json.loads(result.stdout) == selected_source
+                assert selected_source["schema_version"] == "loopx_turn_envelope_v1"
+            identity = selected_source["heartbeat_receipt"]["settlement_identity"]
             assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
             assert capture.read_bytes() == source_path.read_bytes()
     finally:
@@ -615,7 +605,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
             "--todo-id", TODO, "--decision-output-dir", str(capture),
-            # Exercise complete output and the explicit bounded legacy view.
+            # Both spellings deliver the complete source with context Off.
             "--context-delivery", "off",
             ("--turn-envelope" if envelope else "--complete-turn"))
         saved = (capture / "decision.json").read_bytes()
@@ -623,16 +613,11 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         assert source["schema_version"] == "loopx_turn_envelope_v1"
         entry_writeback = source["interaction_contract"]["cli_channel"]
         assert "settlement_read_ref" not in entry_writeback
-        if envelope:
-            assert guard["schema_version"] == "loopx_turn_envelope_v0"
-            assert guard["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
-            assert shlex.split(guard["detail_ref"]["full_decision"]) == ["cat", "--", str(capture / "decision.json")]
-            packet = guard["replan_action_packet"]
-        else:
-            assert guard == source
-            # Complete output needs no deferred reads; test the historical
-            # material reader against this same capture as well.
-            packet = build_turn_envelope(source)["replan_action_packet"]
+        assert guard == source
+        historical = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
+        assert historical["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+        assert shlex.split(historical["detail_ref"]["full_decision"]) == ["cat", "--", str(capture / "decision.json")]
+        packet = historical["replan_action_packet"]
         # Unknown old/custom prose, different templates, ambiguous/missing
         # writers and missing capture must remain fully inline.
         for mutation in ("custom", "template", "duplicate", "missing", "capture"):

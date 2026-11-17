@@ -118,21 +118,6 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
                     break
                 offset = page["next_offset"]
             denied = json.loads(contents)
-        elif source == "compatibility":
-            # The raw compatibility view is signed against the same complete
-            # refusal and must preserve the stop without granting settlement.
-            assert denied["schema_version"] == "loopx_turn_envelope_v0"
-            assert denied["action"]["must_attempt"] is False
-            assert denied["action"]["delivery_allowed"] is False
-            assert denied["writeback"]["spend_allowed_now"] is False
-            assert denied["writeback"]["spend_after_validation"] is False
-            assert "settlement_plan" not in denied["writeback"]
-            assert denied["contract_capsule"]
-            signature = denied["action_signature"]
-            assert signature["matches"] is True
-            assert signature["source_decision_hash"] == captured["contract_binding"]["content_hash"]
-            assert denied["detail_ref"]["captured_decision"]["path"] == str(capture / "decision.json")
-            denied = captured
         assert denied["error_code"] == "quota_action_selection_rejected"
         assert denied["schema_version"] == "loopx_turn_envelope_v1"
         assert denied == captured
@@ -163,14 +148,29 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
             )
             == denied
         )
-        envelope = build_turn_envelope(denied)
-        plan = build_loopx_turn_plan(
-            envelope,
-            host="codex-cli",
-            execution_mode="isolated-headless",
-            turn_instance_id=turn,
-        )
-        assert plan["route"]["would_invoke_host"] is False
+        # Construct the saved historical format explicitly and verify the same
+        # refusal through both readers.
+        capture_path = str(capture / "decision.json")
+        historical = build_turn_envelope(denied, captured_decision_path=capture_path)
+        assert historical["schema_version"] == "loopx_turn_envelope_v0"
+        assert historical["action"]["must_attempt"] is False
+        assert historical["action"]["delivery_allowed"] is False
+        assert historical["writeback"]["spend_allowed_now"] is False
+        assert historical["writeback"]["spend_after_validation"] is False
+        assert "settlement_plan" not in historical["writeback"]
+        assert historical["contract_capsule"]
+        signature = historical["action_signature"]
+        assert signature["matches"] is True
+        assert signature["source_decision_hash"] == denied["contract_binding"]["content_hash"]
+        assert historical["detail_ref"]["captured_decision"]["path"] == capture_path
+        for work in (denied, historical):
+            plan = build_loopx_turn_plan(
+                work,
+                host="codex-cli",
+                execution_mode="isolated-headless",
+                turn_instance_id=turn,
+            )
+            assert plan["route"]["would_invoke_host"] is False
         if original:
             assert denied["heartbeat_receipt"]["status"] == "replayed"
             assert (

@@ -1676,6 +1676,7 @@ def test_public_multi_subagent_probe_preserves_bounded_orchestration(tmp_path, m
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
     from loopx.control_plane.testing import cli_output_semantics as semantics
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
     emitted = []
     invoke = probe._invoke_cli
@@ -1697,14 +1698,12 @@ def test_public_multi_subagent_probe_preserves_bounded_orchestration(tmp_path, m
         rows = runner["_multi_subagent_rows"](probe, semantics, root)
     assert len(rows) == len(emitted) == 1
     view = emitted[0]
-    assert view["boundary"]["orchestration"] == {
+    assert_complete_turn_decision(view)
+    assert view["goal_boundary"]["orchestration"] == {
         "mode": "multi_subagent", "spawn_allowed": True, "max_children": 4,
         "model_config": {"model": "example-small", "reasoning_effort": "max"},
     }
-    assert view["schema_version"] == "loopx_turn_envelope_v0"
-    assert view["action_signature"]["matches"] is True
-    assert rows[0]["action_signature_coverages"] == ["turn_envelope_action_dimensions_v4"]
-    assert "$.boundary.orchestration.max_children" in rows[0]["json_shape_paths"]
+    assert "$.goal_boundary.orchestration.max_children" in rows[0]["json_shape_paths"]
 
 
 def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None:

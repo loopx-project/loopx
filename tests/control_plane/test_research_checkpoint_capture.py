@@ -201,8 +201,8 @@ def test_checkpoint_handoff_checks_the_original_contract_before_capture(tmp_path
 
 @pytest.mark.skipif(os.name != "posix", reason="benchmark uses the POSIX source launcher")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("legacy_display", [False, True], ids=["default", "explicit-v0"])
-def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, provider, legacy_display):
+@pytest.mark.parametrize("legacy_flag", [False, True], ids=["default", "legacy-flag"])
+def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, provider, legacy_flag):
     import shlex
     import subprocess
     import sys
@@ -212,7 +212,7 @@ def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, prov
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path)
     state = project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"
-    if legacy_display:
+    if legacy_flag:
         cli._configure_selectable_alternative(project)
     cli._initialize_fixture_authority(project, runtime, provider=provider)
     cli_path = Path(__file__).resolve().parents[2] / "scripts/loopx"
@@ -226,11 +226,12 @@ def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, prov
         "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wake.parent),
         "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "off",
-        "LOOPX_COMPLETE_TURN": "0", "LOOPX_TURN_ENVELOPE": str(int(legacy_display))}
+        "LOOPX_COMPLETE_TURN": "0", "LOOPX_TURN_ENVELOPE": str(int(legacy_flag))}
 
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
     body = capture_before_replan(env, receipt, "original work")
     command, *source_commands = (line for line in body.splitlines() if " quota context-read " in line)
+    opening = command
     [view] = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
     assert view.stat().st_mode & 0o077 == 0
     saved_view = view.read_bytes()
@@ -258,36 +259,29 @@ def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, prov
     assert source_bytes == source.read_bytes() == (wake / "checkpoint-start-guard.json").read_bytes()
     assert original["heartbeat_receipt"]["turn_instance_id"] == turn
     recovered = json.loads(received)
-    if legacy_display:
-        assert "follow its action, required reads and settlement instructions" in body
-        assert recovered["schema_version"] == "loopx_turn_envelope_v0"
-        assert recovered["detail_ref"]["captured_decision"]["path"] == str(source)
-        assert recovered["action_signature"]["source_decision_hash"] == original["contract_binding"]["content_hash"]
-        [source_command] = source_commands
+    assert not source_commands
+    assert pages > 1
+    assert "follow its interaction_contract" in body
+    assert recovered == original
+    if legacy_flag:
+        # Select the original binding from this same bounded complete reader.
         pointer = "/interaction_contract/cli_channel/selection_command"
-        assert f"--select {pointer}" in body
-        argv = shlex.split(source_command) + ["--select", pointer]
+        argv = shlex.split(opening) + ["--select", pointer]
         assert argv[:3] == [str(cli_path), "--cli-bin", str(cli_path)]
         selected = subprocess.run(argv, cwd=project, env=env, capture_output=True, check=True)
         page = json.loads(selected.stdout)
         assert page["ok"] and page["eof"] and len(selected.stdout) <= 8000
-        assert page["sha256"] == hashlib.sha256(source_bytes).hexdigest()
+        assert page["sha256"] == digest
         [field] = json.loads(page["content"])["selections"]
         assert field["pointer"] == pointer
         selection = field["value"]
         assert selection == original["interaction_contract"]["cli_channel"]["selection_command"]
-        assert "--turn-envelope" in selection["command_args_template"]
+        assert "--turn-envelope" not in shlex.split(selection["command_args_template"])
         argv[argv.index("--capture-sha256") + 1] = "0" * 64
         invalid = subprocess.run(argv, cwd=project, env=env, capture_output=True, timeout=30)
         assert invalid.returncode == 1 and not json.loads(invalid.stdout)["ok"]
-    else:
-        assert not source_commands
-        assert pages > 1
-        assert "follow its interaction_contract" in body
-        assert recovered == original
 
     first_source = view.read_bytes()
-    opening = next(line for line in body.splitlines() if " quota context-read " in line)
     first = json.loads(subprocess.check_output(shlex.split(opening), cwd=project, env=env))
     assert first["next_command"]
     with state.open("a", encoding="utf-8") as state_file:
@@ -307,14 +301,11 @@ def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, prov
     assert invalid.returncode == 1 and not json.loads(invalid.stdout)["ok"]
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
     assert cli._spend_run_count(runtime) == 0
-    if legacy_display:
+    if legacy_flag:
         args = selection["command_args_template"].replace("{todo_id}", cli.ALTERNATIVE_TODO_ID)
         argv = shlex.split(selection["route_prefix"]) + shlex.split(args)
         selected = subprocess.run(argv, cwd=project, env=env, capture_output=True, check=True, timeout=30)
-        chosen_view = json.loads(selected.stdout)
-        assert chosen_view["schema_version"] == "loopx_turn_envelope_v0"
-        chosen_source = Path(chosen_view["detail_ref"]["captured_decision"]["path"])
-        chosen = json.loads(chosen_source.read_bytes())
+        chosen = json.loads(selected.stdout)
         assert_complete_turn_decision(chosen)
         assert chosen["selected_todo"]["todo_id"] == cli.ALTERNATIVE_TODO_ID
         assert chosen["heartbeat_receipt"]["turn_instance_id"] == turn

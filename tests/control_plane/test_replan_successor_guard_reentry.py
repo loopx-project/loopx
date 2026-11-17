@@ -569,14 +569,17 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert all("todo add" not in command for command in actions)
     assert all("--replan-obligation-id " + obligation_id in command for command in actions)
     assert all("--turn-instance-id " + TURN in command for command in actions)
-    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, build_turn_envelope
 
     def check_off_capture(name, expected_commands, expected_plan):
         directory = tmp_path / name
-        envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        delivered = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope",
             "--context-delivery", "off", "--decision-output-dir", str(directory))
         complete = json.loads((directory / "decision.json").read_bytes())
+        assert delivered == complete
+        assert delivered["replan_action_packet"]["settlement_only"] is True
+        envelope = build_turn_envelope(complete, captured_decision_path=str(directory / "decision.json"))
         assert envelope["schema_version"] == "loopx_turn_envelope_v0"
         assert envelope["replan_action_packet"]["settlement_only"] is True
         assert envelope["writeback"]["next_cli_actions"] == expected_commands

@@ -932,7 +932,13 @@ def test_turn_envelope_references_selected_todo_without_duplicate_context(
         exit_code, text = _invoke_cli(command, read_context=True)
 
     assert exit_code == 0, text
-    payload = _json_payload(text)
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, build_turn_envelope
+
+    current = _json_payload(text)
+    assert_complete_turn_decision(current)
+    assert current["selected_todo"]["todo_id"] == "todo_fixture_000"
+    assert current["interaction_contract"]["agent_channel"]["work_context"]["selected_todo_ref"] == "selected_todo"
+    payload = build_turn_envelope(current)
     assert payload["schema_version"] == "loopx_turn_envelope_v0"
     assert payload["action"]["selected_todo"]["todo_id"] == "todo_fixture_000"
     assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
@@ -2106,6 +2112,7 @@ def test_explicit_modes_keep_original_contracts_on_long_routes(
         }
         registry_path.write_text(json.dumps(registry))
         import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        from dataclasses import replace
         from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
         from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
         for output_format in ("json", "markdown"):
@@ -2118,6 +2125,11 @@ def test_explicit_modes_keep_original_contracts_on_long_routes(
                 capture = runtime / f"{variant_id}-{output_format}"
                 command = commands[variant_id]
                 if variant_id == "quota_should_run_turn_envelope":
+                    # The same bound, 128-character route includes the original
+                    # Turn receipt. File/SQLite measured at most 27,712 chars
+                    # with the complete carrier. Keep the unbound and other
+                    # variant ceilings unchanged.
+                    spec = replace(spec, max_chars={"json": 28_000, "markdown": 28_000})
                     command = [*command, "--decision-output-dir", str(capture),
                                "--turn-instance-id", "complete-explicit"]
                 code, text = _invoke_cli(command)
@@ -2128,14 +2140,9 @@ def test_explicit_modes_keep_original_contracts_on_long_routes(
                     assert build_loopx_turn_host_request(payload)["work_contract"] == source
                 else:
                     source = json.loads((capture / "decision.json").read_text())
-                    if output_format == "json":
-                        view = json.loads(text)
-                        assert view["schema_version"] == "loopx_turn_envelope_v0"
-                        assert view["action_signature"]["matches"] is True
-                        assert view["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
-                    else:
-                        assert text.startswith("# LoopX Turn Envelope")
-                        assert "- envelope_bytes: `" in text
+                    view = _measured_payload(_measure_context_output(text, output_format=output_format))
+                    assert_complete_turn_decision(view)
+                    assert view["contract_binding"]["content_hash"] == source["contract_binding"]["content_hash"]
                 assert_complete_turn_decision(source)
                 assert_cli_output_mode_variant(spec, output_format=output_format, text=text,
                     measurement=measure_cli_output(text, output_format=output_format))
@@ -2664,14 +2671,6 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    if context_delivery == "off":
-        assert payload["schema_version"] == "loopx_turn_envelope_v0"
-        assert payload["goal_id"] == GOAL_ID and payload["agent_id"] == AGENT_IDS[0]
-        assert payload["action_signature"]["matches"] is True
-        assert "--codex-app" in shlex.split(payload["detail_ref"]["full_decision"])
-        assert payload["scheduler"]["app_automation"]
-        return
-
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
     assert_complete_turn_decision(payload)
@@ -2681,7 +2680,10 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
     scheduler_args = shlex.split(payload["contract_binding"]["scheduler_execution_args"])
     assert "--codex-app" in scheduler_args
     assert payload["scheduler_hint"]["app_automation"]
-    assert payload["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    if context_delivery == "off":
+        assert "context_delivery" not in payload
+    else:
+        assert payload["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
 def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
