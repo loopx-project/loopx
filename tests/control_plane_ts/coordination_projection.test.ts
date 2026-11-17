@@ -549,7 +549,8 @@ for (const native of [false, true]) {
 
     const observation = {
       ...noteEdit, material_change_scope: "case-a/run-1",
-      material_change_scope_generations: {"case-a/run-1": 1},
+      // The Monitor persists a scope digest, generation, and result digest.
+      material_change_scope_generations: "95866d27011023fae340614c:1:cb27aee87af9e0125c0766d8",
     };
     const observed = reduceCoordinationProjection(edited, head.goal_id, [{kind: "todo_upsert", todo: observation}]);
     const model = validateCoordinationTodoReadModel(observed, head.goal_id);
