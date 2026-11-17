@@ -219,7 +219,8 @@ def test_native_code_mode_resume_requires_observed_coverage(
     current_stop = "Stop before submitting the new result."
 
     def read_command(cmd):
-        return "await tools.exec_command(" + json.dumps({"cmd": cmd, "max_output_tokens": 8000}) + ")"
+        # The capture pipeline requires Bash even when the native host defaults to /bin/sh.
+        return "await tools.exec_command(" + json.dumps({"cmd": cmd, "shell": "/bin/bash", "max_output_tokens": 8000}) + ")"
 
     def resumed_response(request, number, message):
         nonlocal resume_state, first_read
