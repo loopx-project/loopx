@@ -48,10 +48,14 @@ names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
 snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Use `loopx update plan --ref main` and `loopx update apply
---ref main` only for maintainer/dev archive qualification. Re-running the curl
-installer remains a repair path when an archive wrapper is too broken to run
-its own updater.
+snapshot rollback. Before replacing the launcher, `loopx update --rollback
+previous` checks that the selected release can read the current authoritative
+Todos for registered local File and SQLite Goals. If it cannot verify the read,
+the running version and Goal state stay in place. Use a release with a matching
+state backup if older code cannot read the current data. Use `loopx update plan
+--ref main` and `loopx update apply --ref main` only for maintainer/dev archive
+qualification. Re-running the curl installer remains a repair path when an
+archive wrapper is too broken to run its own updater.
 
 For contributors, keep the clone-plus-canary path:
 
