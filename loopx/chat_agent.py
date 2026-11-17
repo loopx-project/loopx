@@ -10,12 +10,13 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from .presentation.codex_activity import CodexActivitySteps
+from .control_plane.goals.first_party_host_admission import HostLaunchGuard, require_host_launch_lease
 from .chat import (
     CHAT_RESPONSE_EXAMPLE_SUFFIX,
     CHAT_REVIEW_CLOSE_TAG,
@@ -717,7 +718,7 @@ class CodexChatAgentSession:
     read_only_review: bool = False
     answer_review: bool = False
     metadata_review: bool = False
-    _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
+    _launch_guard: HostLaunchGuard | None = field(
         default=None, repr=False
     )
     _native_task_policy_used: bool = field(default=False, repr=False)
@@ -751,7 +752,7 @@ class CodexChatAgentSession:
         reasoning_effort: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
         host_config: dict[str, Any] | None = None,
-        launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        launch_guard: HostLaunchGuard | None = None,
         account_runtime_root: Path | None = None,
         account_consumer: str = "worker",
         _compatibility_catalog_path: Path | None = None,
@@ -853,7 +854,8 @@ class CodexChatAgentSession:
         try:
             # The admitting caller owns this short launch fence. Native startup
             # RPCs and model execution must not hold the Goal writer lock.
-            with launch_guard() if launch_guard is not None else nullcontext():
+            with (launch_guard() if launch_guard is not None else nullcontext()) as lease_expires_at_ms:
+                require_host_launch_lease(lease_expires_at_ms)
                 try:
                     process = subprocess.Popen(
                         command,
@@ -1174,7 +1176,7 @@ class CodexChatAgentSession:
 
     def _write(
         self, payload: dict[str, Any], *,
-        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        write_guard: HostLaunchGuard | None = None,
         deadline: float | None = None,
     ) -> None:
         if self.process.stdin is None:
@@ -1193,7 +1195,7 @@ class CodexChatAgentSession:
             ) from exc
 
     def _guarded_write(
-        self, frame: str, write_guard: Callable[[], AbstractContextManager[None]], *,
+        self, frame: str, write_guard: HostLaunchGuard, *,
         deadline: float | None,
     ) -> None:
         from .extensions.process_runtime import force_terminate_process, write_process_stdin_before_deadline
@@ -1204,7 +1206,11 @@ class CodexChatAgentSession:
         if not self._write_lock.acquire(timeout=max(0, dispatch_deadline - time.monotonic())):
             raise self._timeout_error("response_timeout", "Codex input dispatch timed out.")
         try:
-            with write_guard():
+            with write_guard() as lease_expires_at_ms:
+                require_host_launch_lease(lease_expires_at_ms)
+                if lease_expires_at_ms is not None:
+                    lease_deadline = time.monotonic() + lease_expires_at_ms / 1000 - time.time()
+                    dispatch_deadline = min(dispatch_deadline, lease_deadline)
                 process = self.process
                 try:
                     if time.monotonic() >= dispatch_deadline:
@@ -1223,6 +1229,7 @@ class CodexChatAgentSession:
                         ),
                     )
                 except TimeoutError as exc:
+                    require_host_launch_lease(lease_expires_at_ms)
                     raise self._timeout_error(
                         "response_timeout", "Codex input dispatch timed out."
                     ) from exc
@@ -1389,7 +1396,7 @@ class CodexChatAgentSession:
         *,
         request_id: int | None = None,
         deadline: float | None = None,
-        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        write_guard: HostLaunchGuard | None = None,
     ) -> dict[str, Any]:
         if request_id is None:
             with self._request_id_lock:
@@ -1734,7 +1741,7 @@ class CodexChatAgentSession:
         output_schema: dict[str, Any] | None = None,
         project_collaboration: bool = False,
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
-        turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        turn_start_guard: HostLaunchGuard | None = None,
         check_running: Callable[[], None] | None = None,
         _native_task: bool = False,
         sandbox_policy: dict[str, object] | None = None,

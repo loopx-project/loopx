@@ -23,6 +23,7 @@ from ..goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     FirstPartyHostLaunchRejected,
     FirstPartyHostRuntimeRejected,
+    HostLaunchGuard,
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
@@ -875,7 +876,7 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
-    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    launch_guard: HostLaunchGuard | None = None,
 ) -> dict[str, Any]:
     # Dispatch has already validated the input and resolved any recorded
     # compatibility carrier. Serialize the same request as the in-process Host.
@@ -1010,7 +1011,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: HostLaunchGuard | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -1586,7 +1587,7 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: HostLaunchGuard | None = None,
 ) -> dict[str, Any]:
     argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (

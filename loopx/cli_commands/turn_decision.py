@@ -21,6 +21,7 @@ import argparse
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,7 @@ from ..control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_turn,
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
-from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_result
 from ..control_plane.work_items.autonomous_replan_obligation import replan_obligation_id_from_packet
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .turn_selection import turn_controller_advisory_primary
@@ -428,6 +429,31 @@ def current_turn_host_launch_decision(
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
     if planned_selected_work_basis is not None and plan.get("_selected_work_basis") != planned_selected_work_basis:
         raise FirstPartyHostRuntimeRejected("current_turn_work_changed")
+    preparation = current.get("execution_preparation") or {}
+    if identity.todo_id and preparation.get("handoff_mode") == "hard_lease":
+        from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+        from ..control_plane.work_items.task_lease import inspect_task_lease
+
+        # The dispatch lifetime holds the canonical writer fence. Read the
+        # admitted generation's current expiry, including same-generation renewals.
+        proof = preparation.get("lease_proof") or {}
+        try:
+            observed = inspect_task_lease(
+                registry_path=registry_path, runtime_root=runtime_root,
+                goal_id=identity.goal_id, todo_id=identity.todo_id,
+            )
+            expires_at = datetime.fromisoformat(observed["lease"]["expires_at"]) if observed["active"] else None
+        except (LocalCoordinationAuthorityUnavailable, EffectRuntimeRemoteError, EffectRuntimeStartupError,
+                ValueError, KeyError, TypeError) as exc:
+            raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
+        lease = observed.get("lease") or {}
+        if expires_at is None:
+            raise FirstPartyHostRuntimeRejected("task_lease_expired")
+        if (lease.get("idempotency_key") != proof.get("idempotency_key")
+                or lease.get("version") != proof.get("expected_version")
+                or lease.get("owner") != identity.agent_id):
+            raise FirstPartyHostRuntimeRejected("current_turn_work_changed")
+        launch["lease_expires_at_ms"] = round(expires_at.timestamp() * 1000)
     return launch
 
 

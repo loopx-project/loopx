@@ -12,6 +12,7 @@ import sys
 import textwrap
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -423,6 +424,72 @@ def test_actual_launch_preserves_original_task_lease_generation(
     else:
         assert code == 0 and result["status"] == ("stopped" if operation_tools else "committed"), result
         assert native_start.exists() and turn_start.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("dispatch", ["codex-cli", "app-server", "bridge"])
+def test_bound_host_cannot_dispatch_after_lease_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, dispatch: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
+    operation_tools = dispatch == "app-server"
+    arguments, _process, turn_start = _host(tmp_path, monkeypatch, operation_tools)
+    subject = ["--goal-id", GOAL, "--todo-id", "todo_fixture0001"]
+    code, acquired = _cli(
+        registry, runtime, "task-lease", "acquire", *subject, "--owner", AGENT,
+        "--idempotency-key", "original-lease", "--expected-version", "0", "--ttl-seconds", "300",
+    )
+    assert code == 0, acquired
+    original = acquired["lease"]
+    owner = codex_operation_host if operation_tools else codex_cli
+    prepare_input = owner.prepare_codex_cli_input
+    renewals = []
+
+    def renew_before_dispatch(request):
+        prepared = prepare_input(request)
+        code, renewed = _cli(
+            registry, runtime, "task-lease", "renew", *subject, "--owner", AGENT,
+            "--idempotency-key", original["idempotency_key"],
+            "--expected-version", str(original["version"]), "--ttl-seconds", "6",
+        )
+        assert code == 0 and renewed["lease"]["lease_epoch"] == original["lease_epoch"], renewed
+        renewals.append(renewed["lease"])
+        return prepared
+
+    def wait_past_expiry(expiry_ms):
+        assert not turn_start.exists() and len(renewals) == 1
+        expiry = datetime.fromisoformat(renewals[0]["expires_at"]).timestamp()
+        assert expiry_ms == round(expiry * 1000) and time.time() < expiry
+        time.sleep(max(0, expiry - time.time()) + 0.05)
+        code, inspected = _cli(registry, runtime, "task-lease", "inspect", *subject)
+        assert code == 0 and inspected["active"] is False and not turn_start.exists()
+
+    monkeypatch.setattr(owner, "prepare_codex_cli_input", renew_before_dispatch)
+    if dispatch == "bridge":
+        send = host_process_transport.GuardedHostBridge.send
+
+        def deliver_after_expiry(bridge, frame):
+            wait_past_expiry(json.loads(frame)["lease_expires_at_ms"])
+            return send(bridge, frame)
+
+        monkeypatch.setattr(host_process_transport.GuardedHostBridge, "send", deliver_after_expiry)
+    else:
+        launch_lifetime = FirstPartyHostGoalAdmission.launch_lifetime
+        target = "codex_operation_turn_start" if operation_tools else "codex_cli_host_launch"
+
+        @contextlib.contextmanager
+        def pause_before_dispatch(admission, *, operation):
+            with launch_lifetime(admission, operation=operation) as expiry_ms:
+                if operation == target:
+                    wait_past_expiry(expiry_ms)
+                yield expiry_ms
+
+        monkeypatch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", pause_before_dispatch)
+    code, result = _run(registry, runtime, project, arguments)
+    assert code == 1 and result["error_code"] == "task_lease_expired", result
+    assert not turn_start.exists() and result["effects"]["host_invoked"] is False, result
+    _assert_no_settlement(runtime, result)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

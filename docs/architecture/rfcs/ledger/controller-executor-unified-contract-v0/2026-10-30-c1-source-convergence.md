@@ -3062,6 +3062,13 @@ owners with a synthetic Host. A registry lock held by another operation
 refuses dispatch before sending the request and leaves the original attempt
 available for retry.
 
+The writer lock cannot pause a lease's clock. The launch scope retains the
+current expiry of the admitted generation and carries it to the native spawn
+or `turn/start` write. The stdio bridge checks the deadline before spawning
+the Host after it receives the frame. An expired lease refuses dispatch before
+task work, work writeback or spending, including when the adapter has already
+bound a session for the original Turn.
+
 File/SQLite cases exercise unchanged retries, capability and task changes,
 recovery in the original session, historical formats, and subprocess stdin.
 Visible Codex CLI JSON follows the complete source through the generated
