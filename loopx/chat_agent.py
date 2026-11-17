@@ -1207,10 +1207,7 @@ class CodexChatAgentSession:
             raise self._timeout_error("response_timeout", "Codex input dispatch timed out.")
         try:
             with write_guard() as lease_expires_at_ms:
-                require_host_launch_lease(lease_expires_at_ms)
-                if lease_expires_at_ms is not None:
-                    lease_deadline = time.monotonic() + lease_expires_at_ms / 1000 - time.time()
-                    dispatch_deadline = min(dispatch_deadline, lease_deadline)
+                dispatch_deadline = require_host_launch_lease(lease_expires_at_ms, deadline=dispatch_deadline)
                 process = self.process
                 try:
                     if time.monotonic() >= dispatch_deadline:

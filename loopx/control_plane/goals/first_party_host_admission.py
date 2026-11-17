@@ -66,9 +66,15 @@ class FirstPartyHostLaunchRejected(FirstPartyHostRuntimeRejected):
         self.session_prepared = session_prepared
 
 
-def require_host_launch_lease(lease_expires_at_ms: int | None) -> None:
-    if lease_expires_at_ms is not None and time.time_ns() // 1_000_000 >= lease_expires_at_ms:
+def require_host_launch_lease(lease_expires_at_ms: int | None, *, deadline: float = float("inf")) -> float:
+    """Reject an elapsed lease and cap an existing monotonic dispatch timeout."""
+    if lease_expires_at_ms is None:
+        return deadline
+    now = time.monotonic()
+    remaining = lease_expires_at_ms / 1000 - time.time()
+    if remaining <= 0:
         raise FirstPartyHostLaunchRejected("task_lease_expired")
+    return min(deadline, now + remaining)
 
 
 @dataclass(frozen=True, slots=True)
