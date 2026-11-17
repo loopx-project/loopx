@@ -747,6 +747,28 @@ def handle_refresh_state_command(
             or getattr(args, "replan_obligation_id", None)
         )
     )
+    if (material_refresh_ready or settlement_receipt_repair) and payload.get("explore_result") is not None:
+        from ..capabilities.explore.result_writeback import deliver_result_attachment
+
+        # Receipt repair carries the verified original Run, without appending
+        # it again. Both receipt writers must finish its requested delivery
+        # before recording proof that the original writeback can be settled.
+        # Preserve replay semantics when the original receipt is missing;
+        # disabling guidance must not turn its committed capture into new work.
+        delivery = deliver_result_attachment(
+            payload={**payload, "appended": True,
+                     "idempotent_replay": bool(payload.get("idempotent_replay") or settlement_receipt_repair)},
+            registry_path=registry_path,
+            runtime_root=Path(payload["runtime_root"]),
+            goal_id=args.goal_id, agent_id=args.agent_id,
+            todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,
+        )
+        payload["explore_result_delivery"] = delivery
+        if not delivery["ok"]:
+            payload["ok"] = False
+            payload["error"] = "Primary writeback committed; replay this exact refresh to retry Explore result delivery"
+            material_refresh_ready = False
+            settlement_receipt_repair = False
     if material_refresh_ready or settlement_receipt_repair:
         append_cli_rollout_event(
             payload,
@@ -898,18 +920,6 @@ def handle_refresh_state_command(
             attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
             print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
-        if payload.get("explore_result") is not None:
-            from ..capabilities.explore.result_writeback import deliver_result_attachment
-            delivery = deliver_result_attachment(
-                payload=payload, registry_path=registry_path,
-                runtime_root=Path(payload["runtime_root"]),
-                goal_id=args.goal_id, agent_id=args.agent_id,
-                todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,
-            )
-            payload["explore_result_delivery"] = delivery
-            if not delivery["ok"]:
-                payload["ok"] = False
-                payload["error"] = "Primary writeback committed; replay this exact refresh to retry Explore result delivery"
         graph_sync = sync_explore_graph_after_material_refresh(
             registry_path=registry_path,
             goal_id=args.goal_id,

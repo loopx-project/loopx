@@ -294,14 +294,16 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
 @pytest.mark.parametrize("terminal", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("source_mode", ["file", "vision", "both", "path_delta", "wide_path_delta", "linked_path_delta"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_retry(
-    tmp_path, terminal, interrupted, source_mode, monkeypatch, capsys,
+    tmp_path, terminal, interrupted, source_mode, provider, monkeypatch, capsys,
 ):
-    from canonical_authority_fixture import initialize_canonical_authority
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import (
         build_todo_runtime_shadow_projection,
     )
     from loopx.control_plane.work_items.task_lease import acquire_task_lease
+    from loopx.rollout_event_log import rollout_event_log_path
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture,
         _run_cli,
@@ -311,6 +313,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         TURN_ID,
     )
 
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, path = _write_fixture(tmp_path)
     config = json.loads(path.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
@@ -339,7 +342,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
             handoff_mode="hard_lease" if terminal else "soft_claim",
         ),
         state_path=project / config["goals"][0]["state_file"],
-        provider="file",
+        provider=provider,
     )
     terminal_proof = {}
     if terminal:
@@ -482,6 +485,12 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         assert first["explore_result_delivery"]["primary_committed"], first
         assert not first["explore_result_delivery"]["ok"], first
         assert "replay this exact refresh" in first["error"]
+        events = rollout_event_log_path(runtime, GOAL_ID)
+        assert not any(json.loads(line)["event_kind"] == "refresh_state"
+                       for line in events.read_text().splitlines())
+        rc, premature = _run_cli(path, runtime, "quota", "spend-slot", *binding,
+                                 "--source", "heartbeat", "--slots", "1", "--execute", cwd=project)
+        assert rc != 0 and not premature.get("appended"), premature
     else:
         rc, first = _run_cli(path, runtime, *args, cwd=project)
         assert rc == 0, first
@@ -489,7 +498,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
     index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     before = index.read_bytes()
     rc, replay = _run_cli(path, runtime, *args, cwd=project)
-    assert rc == 0 and replay["idempotent_replay"], replay
+    assert rc == 0 and replay["receipt_repaired" if interrupted else "idempotent_replay"], replay
     assert replay["explore_result_delivery"]["ok"], replay
     assert index.read_bytes() == before
     # Follow the owning hook's required read in a new process. Presence in the
