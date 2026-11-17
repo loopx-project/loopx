@@ -1026,7 +1026,7 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(
 @pytest.mark.skipif(os.name != "posix", reason="Exercises the private Host Unix rendezvous")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("mode_matches", [True, False], ids=["retained", "switched"])
-@pytest.mark.parametrize("display", ["default", "complete", "historical"])
+@pytest.mark.parametrize("display", ["default", "complete", "deprecated-request", "historical"])
 def test_held_guard_checkpoint_binds_original_source_and_display(
     tmp_path, monkeypatch, provider, mode_matches, display,
 ):
@@ -1039,7 +1039,7 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
 
     from benchmark.runtime.checkpoint import held_quota_decision
     from benchmark.runtime.checkpoint_wake import CheckpointWake
-    from benchmark.runtime.codex import explicit_turn_display, turn_envelope_receipt
+    from benchmark.runtime.codex import Execution, explicit_turn_display, turn_envelope_receipt
     from benchmark.runtime.worker import heartbeat_body
     from loopx.control_plane.effect_runtime import effect_runtime_result
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
@@ -1074,7 +1074,8 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
            "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
            "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CHECKPOINT_REQUEST": str(declaration),
            "LOOPX_CONTEXT_DELIVERY": "off",
-           "LOOPX_COMPLETE_TURN": "1" if display == "complete" else "0"}
+           "LOOPX_COMPLETE_TURN": "1" if display == "complete" else "0",
+           "LOOPX_TURN_ENVELOPE": "1" if display == "deprecated-request" else "0"}
     session = CodexAgentSession(env, context="resume", sandbox="read-only", receipt={})
     _store_codex_cli_session(runtime, lineage=session.lineage, session_scope="agent",
         session_id="fixture-session", goal_ref=session.goal_ref, session_profile_digest=session.digest)
@@ -1083,11 +1084,14 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
                        else turn_envelope_receipt(explicit_turn_display(env)))
     receipt = {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID,
         "session": {"session_id": "fixture-session"}, **display_receipt}
-    if not historical:
+    if display == "deprecated-request":
+        assert receipt["turn_envelope_source"] == "explicit"  # Requested spelling, not delivered source.
+    elif not historical:
         assert receipt["complete_turn_source"] == ("explicit" if display == "complete" else "default")
     (tmp_path / "wakes" / TURN_ID).mkdir(parents=True)
 
-    with CheckpointWake(env, receipt) as host:
+    actual_execution = None if historical else Execution(complete_turn=True)
+    with CheckpointWake(env, receipt, guard_execution=actual_execution) as host:
         if historical:
             # Recreate a recorded v0 pending command via the product's legacy
             # CLI. The current benchmark writer never emits this command.
@@ -1149,14 +1153,9 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
             stdout, stderr = command_process.communicate(timeout=30)
             assert command_process.returncode == 0, (stdout, stderr)
             shown = json.loads(stdout)
-            if historical:
-                assert shown["schema_version"] == "loopx_turn_envelope_v0"
-                assert shown["detail_ref"]["captured_decision"]["path"] == str(held["path"])
-                signature = shown["action_signature"]
-                assert signature["matches"] is True
-                assert signature["source_decision_hash"] == source_decision["contract_binding"]["content_hash"]
-            else:
-                assert shown == source_decision
+            # Both spellings now return the captured complete source. The
+            # original spelling above remains part of the sealed replay audit.
+            assert shown == source_decision
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
     assert "thread/fork" not in calls

@@ -5,12 +5,15 @@ computed `quota should-run` decision. It gives an agent the next action and its
 safety contract without replaying every diagnostic lane in the full quota
 payload.
 
-This page describes the current versioned representation. The
+This page retains the historical v0 representation and recovery contract. The
 [unified-contract RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
-proposes replacing the live quota/envelope format choice with one complete
-contract, including differential delivery. Historical captures retain their
-original schema and signature. The explicit complete-v1 Host entry below does
-not switch existing quota or v0 consumers to the proposed unified default.
+replaces the active quota/envelope format choice with one complete contract,
+including differential delivery. In the C1 candidate, new quota calls use the
+complete v1 source by default, including the deprecated `--turn-envelope`
+spelling. Context delivery off keeps that source inline. The removed v0 display
+projector is not a fallback for new work. Historical captures keep their original
+schema, signature, recorded command and reader; the remaining v0 examples below
+explain those historical records, rather than a way to generate new v0 work.
 The proposed composition point precedes capture and encoding. Today's action
 signature compares its registered projection; equality alone does not establish
 complete source-clause preservation or qualify the unified contract.
@@ -19,21 +22,16 @@ also covers the direct Turn producer and final host prompts. Quota CLI output
 parity alone does not qualify those consumers. Historical v0 decoding remains
 separate from switching new admissions to a future unified version.
 
-In the C1 candidate, `quota should-run --context-delivery off --turn-envelope`
-keeps this bounded v0 view when Delta delivery is inactive. The same composition
-produces the complete decision and the compatibility view. A managed handoff
-checks and releases the exact complete capture before the CLI returns the v0
-view. Interrupted-tool recovery reads the complete original. When requested,
-`decision.json` retains the complete source and original settlement identity;
-the compatibility signature binds that source. Retire the view after the
-supported raw readers migrate. Keep historical decoding for the original
-recovery window.
+A managed handoff checks and releases the exact complete capture before output.
+Interrupted-tool recovery reads that complete original, with its original
+settlement identity. New heartbeat and checkpoint preflight producers request
+only the complete source. The frozen v0 builder remains for historical model
+comparisons and versioned recovery validation, not an active CLI display.
 
 Thin `heartbeat-prompt` now renders the complete guard for new captured work,
 including an exact saved loader with the old option. Regenerated bootstrap
-commands use `--complete-turn`. The direct `quota should-run` compatibility
-route above serves existing raw callers and original pending commands during
-their migration and recovery window.
+commands use the complete source. Direct quota accepts the deprecated spelling
+as an alias; sealed pending commands retain their original recovery reader.
 
 The C1 native candidate reuses advisory outcome navigation and the generic
 same-capture selector. Its existing native planner and full/delta encoder retain
@@ -98,19 +96,14 @@ The standalone complete-input adapter also uses the existing compact Host check;
 its unused full-source echo operation is retired. Model input still uses the
 original source, with no extra validation request or model-facing view.
 
-中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
-的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
-历史捕获保留原 schema 与签名。显式完整 Host 入口见下节；C1 的完整来源默认与
-关闭渐进后的兼容视图仍分别验收。
-
-在 C1 候选中，`quota should-run --context-delivery off --turn-envelope`
-在 Delta 未启用时返回有界 v0。同一次组合生成完整决策和兼容视图。托管交接先
-核验并放行同一份完整捕获，再由 CLI 返回 v0；工具中断时从完整原包恢复。
-若要求捕获，`decision.json` 保存完整来源与原结算身份，兼容视图的签名绑定
-该来源。支持的原始读取方迁移后再退役此视图，并在原恢复窗口内保留历史解码。
-薄 `heartbeat-prompt` 为新捕获工作生成完整 guard，覆盖仍带旧参数的已保存入口。
-重新生成的引导命令使用 `--complete-turn`。上面的直接 quota 兼容入口在迁移和恢复
-窗口内服务既有原始调用方及原待完成命令。
+中文：本页保留历史 v0 表示与恢复合同。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+取消活跃 quota/envelope 格式选择。C1 候选中的所有新 quota 调用默认使用完整 v1
+来源，包括已经废弃的 `--turn-envelope` 拼写；关闭上下文交付时将同一来源保持在
+inline。v0 展示 projector 已删除，不为新工作兜底。历史捕获保留原 schema、签名、
+原命令和 reader；下文其余 v0 示例说明历史记录，不再产生新的 v0 工作。
+托管 handoff 在输出前核验并放行同一完整捕获；工具中断时仍按原身份读取原包。
+新 heartbeat 与 checkpoint preflight 只请求完整来源。冻结的 v0 builder 仅服务
+历史模型对照与版本化恢复验证，不再作为活跃 CLI 展示入口。
 提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
 仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
 RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
@@ -178,9 +171,9 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
   --turn-instance-id <turn-id> --complete-turn --decision-output-dir ./complete-001
 ```
 
-The flag is mutually exclusive with legacy `--turn-envelope`. Ordinary quota
-without either flag or a managed handoff keeps its existing source, display and
-settlement. The explicit raw-off compatibility view remains v0.
+Ordinary quota and the deprecated `--turn-envelope` spelling now share the same
+complete source. `--complete-turn` additionally requests the qualified composed
+Host settlement recipe; a source spelling cannot choose a different owner.
 Context delivery is independent: `--context-delivery off` returns the explicit
 complete v1 document inline. A returned selection command and native lease
 preparation retain the selected source format through same-Turn reentry.
@@ -233,9 +226,8 @@ permission or execution allowance. User task time requirements remain task
 context; the caller's private current deadline and runtime guidance are not new
 model context. Actual live adoption and efficiency still require separate proof.
 
-中文：`--complete-turn` 为显式完整 v1 Host 入口，与旧 `--turn-envelope` 互斥。
-未指定这两个选项、也未使用托管 handoff 的普通 quota 保留既有来源、展示和结算。
-显式关闭渐进及差分交付并选择旧 envelope 时仍保留有界 v0。
+中文：普通 quota 和已经废弃的 `--turn-envelope` 拼写均使用同一完整 v1 来源。
+`--complete-turn` 另外请求合格的 Host 组合结算 recipe；来源拼写不得另选结算 owner。
 渐进/差分交付独立控制；关闭上下文交付时仍内联返回显式选择的完整 v1 文档。
 返回的选题命令和原生 lease 准备在同一 Turn 再次进入时保留已选的来源格式。
 显式选用完整来源的原生准备如果发现 ready capture 丢失版本和绑定，不会改用普通 reader。
@@ -739,19 +731,14 @@ Capture and display are independent. `--decision-output-root` saves complete
 decisions; `--decision-handoff-socket` optionally holds their output for a
 caller-owned checkpoint. Neither enables TurnEnvelope. This corrects the old
 renderer behavior where requesting capture also selected the short dispatcher.
-Existing capture callers that intentionally want the short view must now add
-`--turn-envelope` to `heartbeat-prompt`; the generated guard and thin regeneration
-command retain that explicit choice. Quota's existing explicit flag is unchanged.
-
-With that display opt-in, execute its guard, read the short action/contract/writeback fields, and use
-`detail_ref.full_decision` to read the **same invocation** when selection, replan,
-an `agent_context.detail_ref` or truncation requires detail. Replan history remains with the
-existing owner; this option neither invents another history store nor chooses a
-strategy. The renderer rejects full/compact/brief modes, missing Turn identity,
-native Goal-owned Turns and invalid roots. Stable bootstrap prompts cannot pin a
-Turn. Omit `--turn-envelope` to use the ordinary dispatcher, including when
-checkpoint capture remains enabled. Captured files retain the full decision in
-both display modes.
+New heartbeat guards and thin regeneration commands no longer emit the retired
+`--turn-envelope` spelling. Generic CLI keeps its original manual settlement;
+qualified native profiles keep their runtime-owned recipe. A historical saved
+bootstrap is still recognized byte-for-byte, while its next new guard uses the
+complete source. Read work context and required reads, then follow the returned
+same-capture selection/replan/recovery instructions. The renderer still rejects
+invalid modes, missing Turn identity and invalid capture roots. A stable bootstrap
+cannot pin an individual Turn.
 
 Capability planning context stays inline under the existing context owner's
 3 KiB bound, including when the envelope exceeds its diagnostic budget. Read it
@@ -798,20 +785,18 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-此前捕获目录同时启用短包的行为已修正。需要短包的调用者须对
-`heartbeat-prompt` 显式传 `--turn-envelope`；省略该开关时仍使用普通输入，
-选择、结算、身份与完整私有捕获不变。旧运行的实际输入与设置不得追溯改写。
+新 heartbeat guard 与 thin 再生命令不再输出已经废弃的 `--turn-envelope` 拼写。
+普通 CLI 保留原手动结算，合格 native profile 保留 runtime recipe。历史保存的
+bootstrap 仍按原字节识别，其后新 guard 使用完整来源。先读工作上下文与必读材料，
+再按返回的原捕获指令选择、重规划或恢复；原模式、Turn 与目录限制保留，稳定引导
+不得固定单次 Turn。旧运行实际输入、设置与 checkpoint 的原命令不得追溯改写。
 
-This is Python filesystem/command transport under the existing quota/context
-owner, not a new capability or Python decision rule. The shared benchmark
-heartbeat worker has a separate default-off `turn_envelope` option documented in
-[its runtime guide](../../../benchmark/runtime/RUNTIME.md). Native `/goal`, Turn
-driver, installed App automations, frontend and Lark are not switched by this
-research-runner setting. Real local worker/renderer/selection/settlement tests
-qualify transport; model token/IO costs, decision quality and long-run adoption
-still require a separately pinned experiment. Capture grants no additional
-read/write/lease authority. Keep captures private; disable the option in the
-next run and use ordinary file management to remove unneeded records.
+This is existing Python filesystem/command transport under the quota/context
+owner, not another capability or decision rule. The benchmark option now records
+only the caller's deprecated request spelling; new work always requests the
+complete source. Transport tests do not qualify model costs, decision quality or
+installed adoption. Capture grants no additional read/write/lease authority;
+keep its private evidence and original recovery identity.
 
 Whole-Goal requirements and selected work have different sources. After final
 delivery admission, the shared typed interaction owner adds these pre-work reads

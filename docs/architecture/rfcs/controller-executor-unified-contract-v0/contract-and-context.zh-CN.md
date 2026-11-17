@@ -27,8 +27,20 @@ native publisher 和显式完整 Host profile 可展示 runtime 负责的组合�
 并继续拒绝通过传输参数重写结算归属。写回已验证后，typed 读回也为无 Todo 的 replan
 投影原待扣额 closeout，保留历史 ACK 和一次性结算。C1 原规则继续区分观察到的 review 与
 真正绑定的选择；照搬 main 专用 fallback 会使这些用例回归，故未采用该冲突选择。
-显式 raw-off 保留 v0 视图，渐进交付校验完整 v1 来源。安装态／在途采用、独立评审、
-原 quota 成果及完整成本仍待验收。
+所有新 quota 展示现统一使用完整 v1 来源，包括上下文交付关闭时已经废弃的
+`--turn-envelope` 拼写。Off 将完整来源保持在 inline，不启用原生交付，也不选择结算
+归属。活跃 raw-v0 projector、第二份组合结果及 heartbeat／preflight 对应提示已删除，
+新 worker 请求完整来源，并将实际共用 `Execution` 交给 checkpoint 校验；请求拼写
+另留原回执，避免把新完整 pending guard 误判为旧模式。历史封存捕获、原 bootstrap
+命令识别和冻结的模型行为对照
+保留原 reader 与版本；旧 builder 不得成为新工作的 fallback。安装态／在途采用、
+独立评审、原 quota 成果及完整成本仍待验收。
+
+旧拼写的 Off 输出因完整交付而有意增大：隔离 File/SQLite CLI fixture 的 v0 stdout
+约 25.8 KB，现完整 stdout 约 50.9–51.0 KB；普通完整路径仍约 51.2–51.3 KB。
+这是相同 fixture 形态下实际 console／capture 字节，不是模型 token、验收成果、缓存
+或净成本。两种拼写均保留原 Turn，读取期间不扣额。冻结历史 v0 预算与失败不变，
+原 quota／C1 的匹配成果及完整成本资格仍未闭合。
 
 准入后的展示失败在回执需要分页时，复用已经通过窄输出资格检查的完整原捕获 reader；
 能够单页交付的回执保留其单页 reader。此前只固定回执
@@ -633,8 +645,8 @@ reader。本文不单独授权破坏性迁移。
 
 #### Turn 消费方准备与指令保真
 
-已独立合入的 Turn 切片让普通 quota producer 保持已记录契约；本 C1 父提案给 quota
-及 thin heartbeat 新增显式完整来源入口，普通 quota 仍沿用已记录契约。
+早期独立合入的 Turn 切片让普通 quota producer 保持已记录契约；当前 C1 候选已让
+新的普通 quota、Turn 及 thin heartbeat 工作默认使用完整来源。
 已记录的请求仍由原版本 reader 解读。当前 Turn 规划直接消费完整来源，
 发布自己的不可变 capture；新组合来源与较早 executor envelope 错配时继续拒绝。
 
@@ -661,6 +673,18 @@ Host 输入、缓存结果的任务校验和结算都使用日志里的原计划
 结算绑定。重试沿用日志里的 Turn key，匹配 Session 时不再返回或重算完整 action
 的哈希。新计划仍在生成 key 前规整 adaptive primary，并使用原有数字编码。旧格式
 及混合格式 reader 保留到未结工作及受支持的恢复窗口核清。
+
+当前规划、controller 接续、journal 检查／能力读取、原生准入探针和执行条件，共用从
+已校验完整来源提取的必要内部工作事实。这个内部视图复用既有路由、选择和写回 owner，
+不是另一份来源或模型契约。它保留完整编排和来源拥有的任务约束，不构造展示 capsule、
+模型 work context 或裁剪后的 peer 清单。controller 的当前工作身份也来自同一 typed
+选择 owner。
+
+历史 action-signature 前像仍明确保留为新建及待处理 v1 plan 的身份编码：在现有版本下
+改变由 Python 序列化的哈希，可能让同一已准入工作得到不同 Turn key。其构造仅用于
+生成 key、核验显式旧 adapter 和恢复已记录 capability 结果，不再提供当前执行事实。
+最后这一编码的退出需要带版本的 key／恢复迁移，不能仅因名字旧就删除。历史 v0 decoder、
+原来源数字精度、capture／Session 绑定、Off 和一次结算继续保留。
 升级验证用 File 和 SQLite 各恢复了两种原 writer 格式。Agent 不匹配、Session 缺失
 或 capture 被改动均在调用 Host 或扣额度前拒绝。有效重试续回原 Session，只结算一次；
 再次重放没有新效果。两份完整格式样本的 Session 匹配响应分别由 10,692 和 10,738
@@ -782,7 +806,7 @@ Benchmark checkpoint 预检按自身调用选择普通或完整来源校验，�
 | 启动器生成的手动 shell 和自定义外部驱动 | onboarding 和 bootstrap 命令选择同一个 `generic_cli` 入口。绑定后的 guard 返回同一 Turn 的写回和扣额计划。已有副本可重新生成，为新工作选择完整来源。原捕获沿用现有读取器。 |
 | 普通 quota 和 thin heartbeat | 新 guard 在 capture 前组合相同的完整契约，包含绑定 Turn 前的工作选择。JSON 和 Markdown 共用这一来源。结算归属沿所选 runtime 和原回执。已保存的无签名捕获沿原固定读取器恢复。 |
 | 显式 `--complete-turn` 和托管 handoff | 在选题和 lease 准备中保留经校验的完整来源。ready capture 丢失完整来源版本和绑定时，只允许回执诊断。 |
-| 显式 `--turn-envelope` | 渐进或差分开启时使用完整来源。上下文交付显式关闭、差分未启用时，CLI 展示同一次组合产生的有界 v0 兼容视图。EdgeBench 归档对照沿用原记录中的产品和 runner 版本。 |
+| 已废弃的 `--turn-envelope` 拼写 | 新 quota 调用在所有交付模式下使用同一完整 v1 来源。Off 仍为 inline，沿用原手动或合格 runtime 结算归属。新 heartbeat／preflight producer 不再请求 v0 视图。历史封存捕获与 EdgeBench 归档对照保留原版本及 reader。 |
 | 已记录的 v0 capture、plan 与 request | 保留原版本完整性／恢复 reader，直到未结准入工作及受支持恢复窗口核清。无效新来源不能选择该回退。 |
 
 在早期默认切换对照中，首个引用可以更小，但必要 reader 响应仍可能

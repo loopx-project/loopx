@@ -1,4 +1,4 @@
-"""Settlement remains executable and signed through the opt-in compact view."""
+"""Complete delivery preserves executable settlement; frozen v0 signatures stay verifiable."""
 from copy import deepcopy
 import hashlib
 import json
@@ -14,7 +14,6 @@ from loopx.control_plane.quota.turn_envelope import (
     assert_complete_turn_decision,
     build_turn_envelope,
     compose_turn_decision,
-    compose_turn_decision_with_raw_envelope,
     quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
@@ -31,7 +30,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("delivery", [None, "auto", "off"])
 @pytest.mark.parametrize("envelope", [False, True])
-def test_markdown_reads_complete_source_except_explicit_off_compatibility(
+def test_markdown_reads_same_complete_source_for_all_delivery_spellings(
     tmp_path, monkeypatch, record_property, provider, delivery, envelope,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -58,22 +57,16 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
     assert_complete_turn_decision(source)
-    if envelope and delivery == "off":
-        assert result.stdout.startswith("# LoopX Turn Envelope\n")
-        assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
-        assert "- should_run: `True`" in result.stdout
-        assert "- effective_action: `normal_run`" in result.stdout
-        assert not result.stdout.startswith("# LoopX Turn Envelope\n\n```json\n")
-        assert len(result.stdout) <= 4800
-    else:
-        # Follow the same pinned recovery as JSON; no second admission is
-        # needed to recover every field of this complete synthetic decision.
-        body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
-        record_property("context_delivery", json.dumps(cost))
-        shown = json.loads(body)
-        assert shown["should_run"] is True
-        assert shown["effective_action"] == "normal_run"
-        assert json.dumps(shown, ensure_ascii=False) == json.dumps(source, ensure_ascii=False)
+    # Follow the same pinned recovery as JSON when delivery is paged. Off
+    # carries the complete source inline, including the deprecated spelling.
+    body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
+    record_property("context_delivery", json.dumps(cost))
+    shown = json.loads(body)
+    assert shown["should_run"] is True
+    assert shown["effective_action"] == "normal_run"
+    assert json.dumps(shown, ensure_ascii=False) == json.dumps(source, ensure_ascii=False)
+    if delivery == "off":
+        assert not cost
     # Both readers recover the identical admitted source without a second guard.
     assert source["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
     assert source["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == TURN_ID
@@ -129,7 +122,11 @@ def test_markdown_keeps_original_turn_when_optional_private_transport_is_unsafe(
     assert _spend_run_count(runtime) == 0
 
 
-def test_compatibility_display_preserves_the_same_complete_source(tmp_path):
+@pytest.mark.parametrize("legacy_output", [False, True])
+def test_complete_composition_rejects_retired_display_without_losing_source(legacy_output):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+
     payload = _full_decision()
     payload["future_requirement"] = {
         "raw": 'Preserve the final stop: 汉🙂"\\\n',
@@ -137,15 +134,13 @@ def test_compatibility_display_preserves_the_same_complete_source(tmp_path):
     }
     before = deepcopy(payload)
     complete = compose_turn_decision(payload)
-    source, view = compose_turn_decision_with_raw_envelope(
-        payload, captured_decision_path=str(tmp_path / "decision.json"),
-    )
-    assert json.dumps(source, ensure_ascii=False) == json.dumps(complete, ensure_ascii=False)
-    assert json.dumps(source["future_requirement"], ensure_ascii=False) == json.dumps(
+    assert json.dumps(complete["future_requirement"], ensure_ascii=False) == json.dumps(
         before["future_requirement"], ensure_ascii=False,
     )
     assert payload == before
-    assert view is not None and view["schema_version"] == "loopx_turn_envelope_v0"
+    with pytest.raises(EffectRuntimeRejected, match="legacy quota display is retired"):
+        _turn_envelope_result("compose_complete", payload=payload, source_edits=True,
+            include_legacy_envelope=legacy_output)
 
 
 def _plan():
@@ -264,12 +259,10 @@ def test_generated_commands_settle_original_turn_once(
         full = json.loads(body)
         rc, envelope = _run_cli(registry, runtime, *args, "--context-delivery", "off", "--turn-envelope")
         assert rc == 0, envelope
-        assert envelope["schema_version"] == "loopx_turn_envelope_v0"
-        plan = envelope["writeback"]["settlement_plan"]
+        assert_complete_turn_decision(envelope)
+        plan = envelope["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert full["schema_version"] == "loopx_turn_envelope_v1"
     if ordinary_app:
-        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-
         assert_complete_turn_decision(full)
         assert not {"context_delivery", "reference_file", "first_read_command"} & full.keys()
         assert plan["schema_version"] == "quota_settlement_plan_v1"
@@ -281,9 +274,16 @@ def test_generated_commands_settle_original_turn_once(
     ]
     assert plan["ordered_steps"][-1]["conditional"] is True
     assert plan["host_handoff"]["inside_agent_settlement"] is False
-    spend_command = plan["ordered_steps"][2]["command_template"]
-    rc, premature = _run_generated_cli(spend_command, registry_path=registry)
-    assert rc != 0, premature
+    spend_step = plan["ordered_steps"][2]
+    runtime_spend = profile_args == ("--runtime-profile", "codex_app_ssh_goal")
+    assert spend_step["owner"] == ("runtime" if runtime_spend else "agent")
+    if runtime_spend:
+        assert "command_template" not in spend_step
+        assert plan["schema_version"] == "quota_settlement_plan_v2"
+    else:
+        spend_command = spend_step["command_template"]
+        rc, premature = _run_generated_cli(spend_command, registry_path=registry)
+        assert rc != 0, premature
     assert _spend_run_count(runtime) == 0
     writeback = plan["ordered_steps"][1]["command_template"]
     # A validated exclusion advances research without claiming the objective is met.
@@ -316,12 +316,23 @@ def test_generated_commands_settle_original_turn_once(
         registry_path=registry,
     )
     assert rc == 0, refreshed
-    # Recovery instructions must also execute verbatim, with no format repair.
-    owed_command = refreshed["settlement_owed"]["command"]
-    for replay, command in ((False, owed_command), (True, spend_command)):
-        rc, spent = _run_generated_cli(command, registry_path=registry)
-        assert rc == 0, spent
-        assert spent["settlement_result"]["ok"] is True
-        if replay:
-            assert spent["idempotent_replay"] is True
+    # Recovery follows the actual owner; the retired spelling cannot force
+    # a qualified native Host to expose the agent's manual spend command.
+    if runtime_spend:
+        assert refreshed["settlement_progress"]["state"] == "settled"
+        assert refreshed["settlement_identity"] == plan["identity"]
+        rc, replayed = _run_generated_cli(
+            writeback + " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks",
+            registry_path=registry,
+        )
+        assert rc == 0 and replayed["idempotent_replay"] is True, replayed
+        assert replayed["settlement_progress"]["state"] == "settled"
+    else:
+        owed_command = refreshed["settlement_owed"]["command"]
+        for replay, command in ((False, owed_command), (True, spend_command)):
+            rc, spent = _run_generated_cli(command, registry_path=registry)
+            assert rc == 0, spent
+            assert spent["settlement_result"]["ok"] is True
+            if replay:
+                assert spent["idempotent_replay"] is True
     assert _spend_run_count(runtime) == 1

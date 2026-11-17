@@ -138,51 +138,18 @@ def compose_quota_cli_source(
     compose: Callable[..., dict[str, object]],
     capability_context: list[dict[str, object]],
     share_inline_diagnostics: bool = False,
-) -> tuple[dict[str, object], bool, dict[str, object] | None]:
-    """Prepare one decided source and an optional bounded compatibility display."""
-    # The Host always holds the complete source. An explicit raw reader gets
-    # its bounded view only after that source has been released.
-    raw_envelope = (getattr(args, "turn_envelope", False)
-        and not activation["enabled"]
-        and activation.get("requested") == "off")
-    if not isinstance(payload.get("interaction_contract"), Mapping):
-        return payload, raw_envelope, None
-    if not raw_envelope:
-        # Reuse the complete composer's lossless diagnostic encoding for
-        # inline readers; native and compatibility views keep their layout.
-        inline_diagnostics = payload.get("ok") is True and (share_inline_diagnostics or (
-            getattr(args, "complete_turn", False)
-            and getattr(args, "context_delivery", None) == "off" and not activation["enabled"]
-            and capture_directory is None
-            and not getattr(args, "turn_instance_id", None) and not getattr(args, "begin_turn", False)))
-        return compose(payload, scheduler_execution_context=scheduler_context,
-            **({"capability_context": capability_context} if capability_context else {}),
-            **({"share_inline_diagnostics": True} if inline_diagnostics else {})), False, None
-
-    from ..control_plane.quota.turn_envelope import compose_turn_decision_with_raw_envelope
-
-    source, view = compose_turn_decision_with_raw_envelope(payload,
-        scheduler_execution_context=scheduler_context, capability_context=capability_context,
-        captured_decision_path=str(capture_directory / "decision.json") if capture_directory else None)
-    return source, True, view
-
-
-def raw_quota_turn_view(
-    source: dict[str, object], view: dict[str, object] | None,
 ) -> dict[str, object]:
-    """Finalize the display after the complete source has been captured."""
-    from ..control_plane.quota.error_codes import QuotaDecisionTransportError
-
-    if view is None:
-        if isinstance(source.get("interaction_contract"), Mapping):
-            raise QuotaDecisionTransportError(
-                "Bounded Turn envelope projection failed after guard evaluation. "
-                "Inspect the original capture or Turn receipt; do not rerun admission."
-            )
-        return {**source, "turn_envelope_skipped": "quota request failed; original diagnostic retained"}
-    if "host_poll_receipt" in source:
-        view["host_poll_receipt"] = source["host_poll_receipt"]
-    return view
+    """Prepare the complete source for every new quota delivery."""
+    if not isinstance(payload.get("interaction_contract"), Mapping):
+        return payload
+    inline_diagnostics = payload.get("ok") is True and (share_inline_diagnostics or (
+        getattr(args, "complete_turn", False)
+        and getattr(args, "context_delivery", None) == "off" and not activation["enabled"]
+        and capture_directory is None
+        and not getattr(args, "turn_instance_id", None) and not getattr(args, "begin_turn", False)))
+    return compose(payload, scheduler_execution_context=scheduler_context,
+        **({"capability_context": capability_context} if capability_context else {}),
+        **({"share_inline_diagnostics": True} if inline_diagnostics else {}))
 
 
 def _project_native_cli_settlement(payload: dict[str, object], *, explicit_complete: bool = False) -> dict[str, object]:

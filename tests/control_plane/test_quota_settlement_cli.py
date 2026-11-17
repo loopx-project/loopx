@@ -4696,10 +4696,7 @@ def test_visible_cli_goal_prompt_keeps_source_and_agent_spend(
 ) -> None:
     from hashlib import sha256
 
-    from loopx.control_plane.quota.turn_envelope import (
-        TURN_ENVELOPE_SCHEMA_VERSION,
-        assert_complete_turn_decision,
-    )
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -4752,7 +4749,11 @@ def test_visible_cli_goal_prompt_keeps_source_and_agent_spend(
         legacy_guard + " --turn-envelope", registry_path=registry_path, cwd=project,
     )
     assert rc == 0, compatibility
-    assert compatibility["schema_version"] == TURN_ENVELOPE_SCHEMA_VERSION
+    assert_complete_turn_decision(compatibility)
+    assert "context_delivery" not in compatibility
+    compatibility_agent = compatibility["interaction_contract"]["agent_channel"]
+    assert compatibility_agent["selection_required"] is True
+    assert compatibility_agent["delivery_allowed"] is False
 
     selection = cli["selection_command"]
     selection_guard = (selection["route_prefix"] + " " + selection["command_args_template"]).replace(

@@ -43,10 +43,7 @@ def test_context_delivery_preserves_the_canonical_settlement_contract(tmp_path, 
         source = json.loads(path.read_bytes())
         assert_complete_turn_decision(source)
         if mode == "off":
-            if alias:
-                assert result["schema_version"] == "loopx_turn_envelope_v0"
-            else:
-                assert result == source and "context_delivery" not in result
+            assert result == source and "context_delivery" not in result
         plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert plan["schema_version"] == "quota_settlement_plan_v1"
         assert plan["identity"] == source["heartbeat_receipt"]["settlement_identity"]

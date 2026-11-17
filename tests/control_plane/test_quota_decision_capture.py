@@ -31,7 +31,7 @@ def request(path, **overrides):
 
 @pytest.mark.parametrize("overrides", [
     {"turn_instance_id": None}, {"quota_command": "plan"}, {"format": "markdown"},
-    {"turn_envelope": True}, {"decision_handoff_socket": "/unused/socket"},
+    {"decision_handoff_socket": "/unused/socket"},
     {"context_delivery": "on", "codex_app": True},
 ])
 def test_prepared_reference_rejects_incompatible_delivery_before_guard(tmp_path, overrides):
@@ -42,6 +42,34 @@ def test_prepared_reference_rejects_incompatible_delivery_before_guard(tmp_path,
     with pytest.raises(QuotaCommandValidationError, match="prepared capture reference"):
         prepare_quota_capture(args, None)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_prepared_reference_accepts_alias_and_preserves_original_complete_capture(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _initialize_fixture_authority
+    from tests.control_plane.test_heartbeat_envelope_transport import read_original_capture
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    capture = tmp_path / 'prepared'
+    code, reference = _run_cli(registry, runtime, 'quota', 'should-run',
+        '--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--todo-id', TODO_ID,
+        '--turn-instance-id', TURN_ID, '--context-delivery', 'off', '--turn-envelope',
+        '--prepared-capture-reference', '--decision-output-dir', str(capture))
+    assert code == 0 and reference['ok'], reference
+    path = capture / 'decision.json'
+    original = path.read_bytes()
+    assert reference['capture_sha256'] == sha256(original).hexdigest()
+    source = json.loads(original)
+    assert_complete_turn_decision(source)
+    assert source['selected_todo']['todo_id'] == reference['selected_todo']['todo_id'] == TODO_ID
+    assert source['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+    assert read_original_capture(path, registry=registry, runtime=runtime) == original
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
 
 
 def test_disabled_capture_does_not_touch_disk(tmp_path):
@@ -362,12 +390,13 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("projection_fails", [False, True])
-def test_explicit_off_turn_envelope_preserves_bounded_view_and_complete_capture(
-    tmp_path, monkeypatch, provider, projection_fails,
+@pytest.mark.parametrize("legacy_spelling", [False, True], ids=["default", "turn-envelope-alias"])
+def test_explicit_off_keeps_complete_source_with_either_cli_spelling(
+    tmp_path, monkeypatch, provider, legacy_spelling,
 ):
     from loopx.cli import main
     from loopx.control_plane.quota import turn_envelope
+    from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_quota_settlement_cli import _initialize_fixture_authority, _spend_run_count
 
@@ -378,20 +407,12 @@ def test_explicit_off_turn_envelope_preserves_bounded_view_and_complete_capture(
     monkeypatch.chdir(project)
     bindings = ["--registry", str(registry), "--runtime-root", str(runtime)]
     guard = ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-             "--turn-instance-id", TURN_ID, "--codex-app", "--context-delivery", "off", "--turn-envelope"]
+             "--turn-instance-id", TURN_ID, "--codex-app", "--context-delivery", "off"]
+    if legacy_spelling:
+        guard.append("--turn-envelope")
 
     from contextlib import redirect_stdout
     from io import StringIO
-
-    if projection_fails:
-        compose = turn_envelope.compose_turn_decision_with_raw_envelope
-
-        def reject_view(payload, **options):
-            # The typed compatibility projector rejects this target; the
-            # original complete decision is still valid and must be saved.
-            return compose(payload, **{**options, "captured_decision_path": ""})
-
-        monkeypatch.setattr(turn_envelope, "compose_turn_decision_with_raw_envelope", reject_view)
 
     def deliver(output_format, *extra, expected=0):
         output = StringIO()
@@ -400,41 +421,69 @@ def test_explicit_off_turn_envelope_preserves_bounded_view_and_complete_capture(
         return output.getvalue()
 
     directory = tmp_path / "complete-capture"
-    output = deliver("json", "--decision-output-dir", str(directory), expected=int(projection_fails))
+    output = deliver("json", "--decision-output-dir", str(directory))
     raw = (directory / "decision.json").read_bytes()
     source = json.loads(raw)
     turn_envelope.assert_complete_turn_decision(source)
     shown = json.loads(output)
-    if projection_fails:
-        from hashlib import sha256
-
-        assert shown["error_code"] == "quota_decision_transport_failed"
-        assert shown["heartbeat_receipt"] == source["heartbeat_receipt"]
-        reference = shown["captured_decision"]
-        assert reference["path"] == str(directory / "decision.json")
-        assert reference["sha256"] == sha256(raw).hexdigest()
-        _assert_captured_receipts(reference["command"], source, cwd=project, env=os.environ, output_limit=64_000)
-        assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
-        assert _spend_run_count(runtime) == 0
-        return
-    assert shown["schema_version"] == "loopx_turn_envelope_v0"
-    assert shown["contract_capsule"] and shown["action_signature"]["matches"] is True
-    assert shown["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+    turn_envelope.assert_complete_turn_decision(shown)
+    assert shown == source
     identity = source["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
     assert identity["turn_instance_id"] == TURN_ID and identity["todo_id"] == TODO_ID
-    assert shown["action"]["selected_todo"]["todo_id"] == TODO_ID
-    assert shlex.split(shown["detail_ref"]["full_decision"]) == ["cat", "--", str(directory / "decision.json")]
+    assert shown["selected_todo"]["todo_id"] == TODO_ID
     before = _heartbeat_receipt_count(runtime, TURN_ID)
     markdown = deliver("markdown")
-    assert markdown.startswith("# LoopX Turn Envelope")
-    assert "effective_action: `normal_run`" in markdown
+    body, cost = read_cli_context_for_oracle(markdown, output_format="markdown")
+    restored = json.loads(body)
+    turn_envelope.assert_complete_turn_decision(restored)
+    assert not cost
+    assert restored["heartbeat_receipt"]["settlement_identity"] == identity
     assert _heartbeat_receipt_count(runtime, TURN_ID) == before == 1
     assert _spend_run_count(runtime) == 0
     assert (directory / "decision.json").read_bytes() == raw
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_off_selection_without_capture_preserves_delivery_and_original_turn(tmp_path, monkeypatch, provider, alias):
+    from loopx.cli import build_parser
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        _configure_selectable_alternative, _initialize_fixture_authority, _run_generated_cli, _spend_run_count,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    rc, source = _run_cli(registry, runtime, 'quota', 'should-run', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--turn-instance-id', TURN_ID, '--runtime-profile', 'generic_cli',
+        '--context-delivery', 'off', *(['--turn-envelope'] if alias else []), cwd=project)
+    assert rc == 0 and source['schema_version'] == 'loopx_turn_envelope_v1', source
+    selection = source['interaction_contract']['cli_channel']['selection_command']
+    words = shlex.split(selection['command_args_template'])
+    parsed = build_parser().parse_args(words)
+    assert parsed.context_delivery == 'off'
+    assert '--turn-envelope' not in words
+    command = selection['route_prefix'] + ' ' + selection['command_args_template'].replace('{todo_id}', TODO_ID)
+    rc, selected = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and selected['schema_version'] == 'loopx_turn_envelope_v1', selected
+    assert selected['selected_todo']['todo_id'] == TODO_ID
+    assert selected['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+    assert not {'context_delivery', 'reference_file', 'first_read_command'} & selected.keys()
+    assert source['heartbeat_receipt']['status'] == 'committed'
+    assert selected['heartbeat_receipt']['status'] == 'upgraded'
+    identity = selected['heartbeat_receipt']['settlement_identity']
+    before = _heartbeat_receipt_count(runtime, TURN_ID)
+    rc, replayed = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and replayed['heartbeat_receipt']['status'] == 'replayed', replayed
+    assert replayed['heartbeat_receipt']['settlement_identity'] == identity
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == before
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path, monkeypatch, provider):
+def test_real_guard_alias_preserves_source_and_read_without_reexecution(tmp_path, monkeypatch, provider):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from tests.control_plane.canonical_authority_fixture import (
         initialize_canonical_authority, isolate_sqlite_runtime,
@@ -463,26 +512,21 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
                               '--decision-output-dir', str(capture))
     assert code == 0, envelope
-    assert envelope['schema_version'] == 'loopx_turn_envelope_v0'
+    assert envelope['schema_version'] == 'loopx_turn_envelope_v1'
     saved = capture / 'decision.json'
     full = json.loads(saved.read_text())
     assert full['schema_version'] == 'loopx_turn_envelope_v1'
-    app = envelope['scheduler']['app_automation']
-    assert 'ack_cli_args' not in app
-    ref = app['ack_cli_args_detail_ref']
-    assert ref['detail_ref'] == 'full_decision.scheduler_hint.app_automation.ack_hint.cli_args'
-    assert 'request' not in ref
-    assert shlex.split(envelope['detail_ref']['full_decision']) == ['cat', '--', str(saved)]
+    assert envelope == full
+    source_args = full['scheduler_hint']['app_automation']['ack_hint']['cli_args']
+    assert source_args[source_args.index('--registry') + 1] == str(registry)
+    assert source_args[source_args.index('--turn-instance-id') + 1] == TURN_ID
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+    read_command = context_capture_read_command(saved, sha256(saved.read_bytes()).hexdigest())
     assert full['ok'] is True
     identity = full['interaction_contract']['cli_channel']['settlement_plan']['identity']
     assert identity['turn_instance_id'] == TURN_ID
     assert identity['todo_id'] == TODO_ID
     assert 'interaction_contract' in full
-    observed = envelope['detail_ref']['captured_decision']
-    assert (observed['goal_id'], observed['agent_id'], observed['turn_instance_id']) == (GOAL_ID, AGENT_ID, TURN_ID)
-    assert observed['path'] == str(saved)
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    assert envelope['action_signature'] == build_turn_envelope(full)['action_signature']
     before = _heartbeat_receipt_count(runtime, TURN_ID)
     assert before >= 1
     # Deliberately unusable displayed JSON does not require a new CLI evaluation.
@@ -491,15 +535,19 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     before_files = {p: p.read_bytes() for p in runtime.rglob('*') if p.is_file()}
     # Execute the actual advertised POSIX read command, including hostile path characters.
     if os.name != 'nt':
-        readback = subprocess.run(envelope['detail_ref']['full_decision'], shell=True,
-                                  cwd=tmp_path, capture_output=True, text=True, check=True)
-        assert json.loads(readback.stdout) == full
-        value = json.loads(readback.stdout)
-        for key in ref['detail_ref'].split('.')[1:]:
-            value = value[key]
-        assert value == full['scheduler_hint']['app_automation']['ack_hint']['cli_args']
-        assert value[value.index('--registry') + 1] == str(registry)
-        assert value[value.index('--turn-instance-id') + 1] == TURN_ID
+        readback = subprocess.run(read_command, shell=True, cwd=tmp_path,
+                                  capture_output=True, text=True, check=True)
+        page = json.loads(readback.stdout)
+        assert page['ok'] and page['offset'] == 0
+        assert page['sha256'] == sha256(saved.read_bytes()).hexdigest()
+        restored = page['content']
+        while not page['eof']:
+            result = subprocess.run(page['next_command'], shell=True, cwd=tmp_path,
+                                    capture_output=True, text=True, check=True)
+            page = json.loads(result.stdout)
+            assert page['offset'] == len(restored.encode())
+            restored += page['content']
+        assert json.loads(restored) == full
     else:
         assert json.loads(saved.read_text()) == full
     assert not (tmp_path / 'INJECTED').exists()
@@ -517,14 +565,13 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     assert json.loads((second / 'decision.json').read_text())['heartbeat_receipt']['status'] == 'replayed'
     assert json.loads(saved.read_text()) == full
 
-    assert fresh['action_signature']['source_decision_hash'] == json.loads(
-        (second / 'decision.json').read_text())['contract_binding']['content_hash']
-    assert shlex.split(fresh['detail_ref']['full_decision']) == ['cat', '--', str(second / 'decision.json')]
+    assert fresh == json.loads((second / 'decision.json').read_text())
+    assert fresh['contract_binding']['content_hash']
     # Missing old evidence fails locally; it never substitutes a new guard observation.
     saved.unlink()
     before = _heartbeat_receipt_count(runtime, TURN_ID)
     if os.name != 'nt':
-        failed = subprocess.run(envelope['detail_ref']['full_decision'], shell=True,
+        failed = subprocess.run(read_command, shell=True,
                                 cwd=tmp_path, capture_output=True, text=True)
         assert failed.returncode != 0
     assert not saved.exists()
@@ -1013,14 +1060,8 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
         'execution_authority_granted': False,
     }
     assert code == 0 and selected['ok'] is True, selected
-    if short_view:
-        assert selected['schema_version'] == 'loopx_turn_envelope_v0'
-        assert selected['detail_ref']['captured_decision']['path'] == str(saved[0])
-        assert selected['action_signature']['matches'] is True
-        assert selected['action_signature']['source_decision_hash'] == decision['contract_binding']['content_hash']
-    else:
-        assert selected['schema_version'] == 'loopx_turn_envelope_v1'
-        assert selected == observed['decision']
+    assert selected['schema_version'] == 'loopx_turn_envelope_v1'
+    assert selected == observed['decision']
     assert len(saved) == 1 and json.loads(saved[0].read_text()) == observed['decision']
 
 

@@ -3,7 +3,7 @@
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { settlementIdentityFromPlan } from "../effect_program.ts";
 import { jsonObject, type JsonObject } from "../runtime_decode.ts";
-import { COMPLETE_TURN_DECISION_VERSION, completePlanningFacts,
+import { COMPLETE_TURN_DECISION_VERSION, completeTurnRoutingFacts,
   turnEnvelopeRoute as typedTurnRoute } from "../quota/turn_envelope.ts";
 import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
@@ -168,6 +168,7 @@ export function decideLoopDisposition(params: JsonObject, requireCompleteDecisio
   const receipt = params.receipt == null ? null : object(params.receipt);
   let decision = object(params.decision);
   let route: LoopXTurnRouteValue = "contract_error";
+  let currentLineage: Lineage | null = null;
   let chosen: Lineage = lineage({});
   let effective = {...chosen};
   let retryState = "not_applicable";
@@ -201,16 +202,17 @@ export function decideLoopDisposition(params: JsonObject, requireCompleteDecisio
       case "envelope":
         if (requireCompleteDecision || decision.schema_version === COMPLETE_TURN_DECISION_VERSION ||
             has(decision, "contract_binding")) {
-          const checked = completePlanningFacts({payload: decision,
+          const checked = completeTurnRoutingFacts({payload: decision,
             source_number_tokens: params.decision_source_number_tokens});
-          decision = {...object(checked.work), goal_id: checked.goal_id, agent_id: checked.agent_id};
-          route = checked.route as LoopXTurnRouteValue;
+          decision = checked.work;
+          currentLineage = lineage(decision);
+          route = checked.route;
         } else route = typedTurnRoute(decision, jsonObject(params.historical_route_text) ?? undefined);
         requireThat(route !== "contract_error", "quota decision failed the shared envelope contract (schema or signature hashes)");
         if (object(decision.user).action_required === true) route = "user_action_required";
         break;
       case "decision_actor":
-        chosen = decisionLineage(decision);
+        chosen = currentLineage ?? decisionLineage(decision);
         requireThat(chosen.goal_id && chosen.agent_id, "fresh quota decision is missing goal/agent lineage");
         effective = {...chosen}; break;
       case "receipt_binding":

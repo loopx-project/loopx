@@ -703,7 +703,7 @@ def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> P
         or not getattr(args, "decision_output_dir", None) or not getattr(args, "turn_instance_id", None)
         or getattr(args, "decision_handoff_socket", None)
         or (not getattr(args, "defer_context_presentation", False) and
-            (getattr(args, "turn_envelope", False) or native_context_activation(args)["enabled"]))
+            native_context_activation(args)["enabled"])
     ):
         raise QuotaCommandValidationError("prepared capture reference requires an explicit Turn and raw JSON capture")
     if getattr(args, "defer_context_presentation", False) and (

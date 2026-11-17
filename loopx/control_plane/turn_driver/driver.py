@@ -434,6 +434,31 @@ def _bind_host_child_operations(
     return bound
 
 
+def _plan_child_work(
+    work: Mapping[str, Any], *, host: str, turn_key: str,
+    source_state_ref: str, delegation_context_source: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Adapt the admitted work to this Host's existing child protocol."""
+    raw = _child_host_operations(work, host=host)
+    topology = build_subagent_execution_topology(
+        turn_envelope=work, child_operations=raw,
+        turn_key=turn_key, source_state_ref=source_state_ref,
+    )
+    children = _bind_host_child_operations(bind_child_operations_to_topology(raw, topology))
+    payload: dict[str, Any] = {}
+    if children:
+        payload["child_operations"] = children
+        context = envelope_agent_context(
+            delegation_context_source, phase="before_delegate",
+            observations={"child_count": len(children)},
+        )
+        if context is not None:
+            payload["delegation_context"] = context
+    if topology:
+        payload["subagent_execution_topology"] = topology
+    return payload
+
+
 def build_loopx_turn_plan(
     turn_envelope: Mapping[str, Any],
     *,
@@ -490,7 +515,6 @@ def build_loopx_turn_plan(
             turn_instance_id=turn_instance_id,
             **({"inspect_plan": True} if inspect_plan else {}),
             **({"include_selected_work_basis": True} if include_selected_work_basis else {}))
-        envelope = _mapping(projection["work"])
     else:
         projection = _turn_envelope_result("driver_lineage", envelope=envelope,
             historical_route_text=_historical_route_text(envelope))
@@ -502,7 +526,8 @@ def build_loopx_turn_plan(
     )
     settlement_identity = None
     identity_error = None
-    if route is LoopXTurnRoute.REPLAN_REQUIRED or (route is LoopXTurnRoute.READY_FOR_HOST and not selected_todo):
+    has_selected_todo = bool(projection["todo_id"]) if current else bool(selected_todo)
+    if route is LoopXTurnRoute.REPLAN_REQUIRED or (route is LoopXTurnRoute.READY_FOR_HOST and not has_selected_todo):
         try:
             if current:
                 if projection.get("scoped_identity_error"):
@@ -516,7 +541,7 @@ def build_loopx_turn_plan(
         except (ValueError, RuntimeError) as exc:
             identity_error = str(exc)
             route = LoopXTurnRoute.CONTRACT_ERROR
-        if not selected_todo and identity_error is None:
+        if not has_selected_todo and identity_error is None:
             if settlement_identity is None:
                 # Historical inputs without a work binding safely waited.
                 # Preserve that decoder without weakening complete ordinary
@@ -544,9 +569,6 @@ def build_loopx_turn_plan(
         LoopXTurnRoute.REPAIR_REQUIRED,
         LoopXTurnRoute.REPLAN_REQUIRED,
     }
-    raw_child_operations = (
-        _child_host_operations(envelope, host=host) if would_invoke_host else []
-    )
     context_projection = execution_context.projection()
     transaction = build_loopx_turn_transaction_plan(
         planned=would_invoke_host,
@@ -560,20 +582,6 @@ def build_loopx_turn_plan(
         goal_ref=goal_ref,
         settlement_identity=settlement_identity,
     )
-    execution_topology = build_subagent_execution_topology(
-        turn_envelope=envelope,
-        child_operations=raw_child_operations,
-        turn_key=str(transaction.get("turn_key") or ""),
-        source_state_ref=str(
-            projection.get("action_source_hash") if current else
-            _mapping(envelope.get("action_signature")).get("source_hash") or ""
-        ),
-    )
-    child_operations = bind_child_operations_to_topology(
-        raw_child_operations,
-        execution_topology,
-    )
-    child_operations = _bind_host_child_operations(child_operations)
     payload = {
         "ok": route is not LoopXTurnRoute.CONTRACT_ERROR,
         "schema_version": COMPLETE_TURN_PLAN_SCHEMA_VERSION if current else LOOPX_TURN_PLAN_SCHEMA_VERSION,
@@ -622,23 +630,22 @@ def build_loopx_turn_plan(
             payload["_inspection_paths"] = projection["inspection_paths"]
     else:
         payload["turn_envelope"] = envelope
-    if child_operations:
-        payload["child_operations"] = child_operations
-        context = envelope_agent_context(
-            envelope,
-            phase="before_delegate",
-            observations={"child_count": len(child_operations)},
-        )
-        if context is not None:
-            payload["delegation_context"] = context
-    if execution_topology:
-        payload["subagent_execution_topology"] = execution_topology
+    if would_invoke_host:
+        # Use the checked source's orchestration with the validated actor.
+        payload.update(_plan_child_work(
+            {**supplied, "agent_id": projection["agent_id"]} if current else envelope,
+            host=host, turn_key=str(transaction.get("turn_key") or ""),
+            source_state_ref=str(projection["action_source_hash"] if current else
+                _mapping(envelope.get("action_signature")).get("source_hash") or ""),
+            delegation_context_source=_mapping(projection.get("delegation_context_source")) if current else envelope,
+        ))
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)
     if route is LoopXTurnRoute.CAPABILITY_ACTION_REQUIRED:
         payload["capability_action"] = {
             "status": "required",
-            "intent": _mapping(_mapping(envelope.get("action")).get("capability_intent")),
+            "intent": _mapping(projection.get("capability_intent") if current else
+                _mapping(envelope.get("action")).get("capability_intent")),
             "executed": False,
             "execution_owner": "capability_adapter",
             "reason": "Use the capability-owned command and its receipt before planning a host turn.",

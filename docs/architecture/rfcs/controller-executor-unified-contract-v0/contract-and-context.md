@@ -38,9 +38,28 @@ rewrite settlement ownership. After verified writeback, typed readback also
 projects the original pending-spend closeout for Todo-less replans, preserving historical ACK handling and
 once-only settlement. The existing C1 rule keeps an observed review from binding
 an otherwise unbound selection; integrating the main-specific fallback unchanged
-regressed those cases and was rejected. Explicit raw-off retains its v0 view;
-progressive delivery validates the complete v1 source. Installed/in-flight
-adoption, independent review and original-quota outcomes/full costs remain open.
+regressed those cases and was rejected. All new quota displays now use the
+complete v1 source, including the deprecated `--turn-envelope` spelling with
+context delivery off. Off keeps the complete source inline; it neither enables
+native delivery nor selects settlement ownership. The active raw-v0 projector,
+its second composition result and its heartbeat/preflight instructions are
+removed. New workers request the complete source. Their checkpoint verifier receives the
+actual shared `Execution`, independently of the caller's recorded spelling;
+otherwise a deprecated request could wrongly reject its complete pending guard.
+Historical sealed captures,
+recorded bootstrap recognition and frozen model-behavior comparisons retain
+their original readers and versions; the legacy builder cannot become a new-work
+fallback. Installed/in-flight adoption, independent review and original-quota
+outcomes/full costs remain open.
+
+The retired spelling's Off output intentionally grows because it now carries the
+complete source: an isolated File/SQLite CLI fixture changed from about 25.8 KB
+of v0 stdout to 50.9–51.0 KB of complete stdout. The ordinary complete path stayed
+about 51.2–51.3 KB. These are actual console/capture bytes on the same fixture
+shape, not model tokens, accepted outcomes, cache use or net cost. Both spellings
+retain the original Turn and zero spending during the reads. Frozen historical
+v0 budgets and failures remain unchanged; the original-quota/C1 matched outcome
+and full-cost qualification is still outstanding.
 
 After admission, a presentation failure reuses the prequalified bounded reader
 for the complete original capture when its receipt would fragment. Receipts that
@@ -875,9 +894,9 @@ the complete-source path; they do not increase the historical reader's budget.
 
 #### Turn consumer preparation and instruction parity
 
-The separately landed Turn slice left the ordinary quota producer on its recorded
-contract. This parent C1 proposal adds explicit complete-source quota and thin
-heartbeat entrypoints; ordinary quota stays on the recorded contract.
+The separately landed Turn slice initially left the ordinary quota producer on
+its recorded contract. This C1 candidate now makes the complete source the
+default for new ordinary quota, Turn and thin-heartbeat work.
 Recorded requests retain their original version-specific reader. Current Turn planning consumes
 its complete source directly and publishes its own immutable capture; pairing a
 newly composed source with an older executor envelope is rejected.
@@ -916,6 +935,23 @@ Turn key and no longer returns or hashes the full action to match a Session.
 New planning still uses the persisted number codec and normalizes the adaptive
 primary before deriving a key. Keep the raw and mixed historical readers
 until outstanding work and the supported recovery window are reconciled.
+
+Current planning, controller continuation, journal inspection/capability reads,
+native admission probes and execution conditions use one narrow internal work
+view from the checked complete source. This view reuses the existing route,
+selection and writeback owners; it is not another source or model contract.
+It keeps complete orchestration and source-owned task constraints, without
+constructing the display capsule, model work context or compact peer inventory.
+The controller takes current work identity from that same typed selection owner.
+
+The historical action-signature preimage remains an explicit identity codec for
+new and pending v1 plans: changing its Python-serialized hash under the existing
+version could give the same admitted work a different Turn key. Its construction
+is confined to key generation, explicit old-adapter verification and recorded
+capability-result recovery. It no longer supplies current execution facts.
+Retiring this last codec requires a versioned key/recovery migration; deleting it
+by name is not safe retirement. Historical v0 decoders, original source precision,
+capture/Session bindings, Off and once-only settlement remain unchanged.
 The upgrade check resumed two original writer formats on File and SQLite.
 Wrong Agent, missing Session and altered capture stopped before the Host or
 spend. A valid retry resumed the original Session, settled once and replayed
@@ -1085,7 +1121,7 @@ the capture's format fields.
 | Generated manual shell and custom external driver | Onboarding and bootstrap commands select the same `generic_cli` route. The bound guard returns the same-Turn writeback and debit plan. Re-render copied launchers to select the complete source for new work. Original captures retain their existing readers. |
 | Ordinary quota and thin heartbeat | New guards compose the same complete contract before capture, including work selection before a Turn is bound. JSON and Markdown follow the same source. The selected runtime and original receipt determine settlement. Saved unsigned captures retain their pinned recovery reader. |
 | Explicit `--complete-turn` and managed handoff | Keep the checked complete source through selection and lease preparation. If a ready capture loses its complete version and binding, it offers receipt diagnosis only. |
-| Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With context delivery explicitly off and Delta inactive, the CLI emits the bounded v0 view from the same composition. Archived EdgeBench comparisons use their recorded product and runner versions. |
+| Deprecated `--turn-envelope` spelling | New quota calls use the same complete v1 source in every delivery mode. Off stays inline, with the existing manual or qualified runtime settlement owner. New heartbeat and preflight producers no longer request a v0 view. Sealed historical captures and archived EdgeBench comparisons retain their recorded versions and readers. |
 | Recorded v0 captures, plans and requests | Keep their pinned integrity/recovery reader until outstanding admitted work and the supported recovery window are reconciled. An invalid new source cannot select this fallback. |
 
 In the earlier default-cutover comparison, a first reference

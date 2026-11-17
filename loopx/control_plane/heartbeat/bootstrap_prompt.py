@@ -90,7 +90,7 @@ def _goal_command(
     turn_envelope = getattr(args, "turn_envelope", False)
     if turn_envelope and preserve_turn_envelope:
         command.append("--turn-envelope")
-    elif turn_envelope or getattr(args, "complete_turn", False):
+    elif getattr(args, "complete_turn", False):
         command.append("--complete-turn")
     if legacy:
         if args.codex_app:

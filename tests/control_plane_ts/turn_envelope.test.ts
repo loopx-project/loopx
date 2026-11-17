@@ -383,6 +383,47 @@ test("complete planning and historical readers share all admitted route facts", 
   }
 });
 
+test("complete execution keeps full peer facts beyond historical display budgets", () => {
+  for (const adaptive of [false, true]) {
+    const source = payload();
+    const peer = {schema_version: "task_orchestration_contract_v2", mode: "task_scoped_peer",
+      eligible_peer_lanes: Array.from({length: 30}, (_, index) => ({agent_id: `peer-${index}`,
+        requirement: "Read the original dependency and stop before any unauthorized effect. ".repeat(8)})),
+      future_constraint: {allowed: false, evidence: null, order: ["read", "verify", "execute"]}};
+    source.task_orchestration_contract = adaptive ? {
+      schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: "todo-1",
+      peer_activation_diagnostic: peer} : peer;
+    const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+    const before = structuredClone(complete);
+    const header = {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`};
+    const work = evaluateTurnEnvelope({operation: "plan_work", payload: complete, complete_host_request: header});
+    const planning = evaluateTurnEnvelope({operation: "planning_facts", payload: complete});
+    assert.deepEqual((work.changes as JsonObject[]).find(edit =>
+      JSON.stringify(edit.path) === '["task_orchestration_contract"]'),
+    {path: ["task_orchestration_contract"], from: ["task_orchestration_contract"]});
+    assert.equal(Object.hasOwn(planning, "work"), false);
+    // The old preimage remains an identity codec for already-admitted v1 work.
+    // Complete execution must not use its compacted peer view as source facts.
+    const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
+    const historical = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, envelope});
+    assert.deepEqual(planning.action_signature, historical.action_signature);
+    assert.deepEqual(complete, before);
+    assert.throws(() => evaluateTurnEnvelope({operation: "plan_work", payload: {...complete, state: "changed"},
+      complete_host_request: header}), /integrity mismatch/);
+  }
+});
+
+test("complete execution selection preserves source-owned future constraints", () => {
+  const source = payload();
+  const selected = source.selected_todo as JsonObject;
+  selected.future_constraint = {allowed: false, unknown: null, order: ["read", "stop"]};
+  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const header = {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`};
+  const result = evaluateTurnEnvelope({operation: "execution_context", payload: complete, complete_host_request: header});
+  assert.deepEqual((result.changes as JsonObject[]).find(edit =>
+    JSON.stringify(edit.path) === '["selected_todo"]'), {path: ["selected_todo"], from: ["selected_todo"]});
+});
+
 test("complete planning refuses the retired dual input even when the adapter agrees", () => {
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
@@ -1231,6 +1272,9 @@ test("pending capability action outranks stale replan commands and remains signe
   const signed = JSON.parse(JSON.stringify(turnEnvelopeActionSignatureDocument(envelope)));
   assert.deepEqual((signed.action as JsonObject).capability_intent, source.pending_capability_intent);
   const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const planning = evaluateTurnEnvelope({operation: "planning_facts", payload: contract});
+  assert.equal(planning.route, "capability_action_required");
+  assert.deepEqual(planning.capability_intent, source.pending_capability_intent);
   const completeEnvelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
   const host = evaluateTurnEnvelope({operation: "host_context", payload: contract, envelope: completeEnvelope});
   assert.equal(Object.hasOwn(host, "decision"), false); // Do not echo the checked source over the bridge.
