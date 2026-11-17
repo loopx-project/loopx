@@ -71,9 +71,8 @@
       "lines": 2047
     },
     "loopx/chat_runtime.py": {
-      "any_count": 38,
-      "dict_any_count": 0,
-      "lines": 2524
+      "any_count": 29,
+      "dict_any_count": 0
     },
     "loopx/chat_server.py": {
       "any_count": 25,
