@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from ...project_prompt import shell_arg_for_host
 from .decision_summary import compact_quota_decision
 from .should_run_packet import reference_duplicate_fallback_guidance
 from .turn_envelope import _apply_context_projection_changes
@@ -506,6 +507,19 @@ def compact_quota_should_run_cli_payload(
     share_authoring = (not include_vision_detail and isinstance(writeback, dict)
         and bool({"vision_authoring", "vision_authoring_ref"}.intersection(writeback)))
     if not include_todo_summary_detail:
+        recall = payload.get("reward_memory_recall")
+        experiment = recall.get("experiment") if isinstance(recall, dict) else None
+        goal_id = payload.get("goal_id")
+        if (isinstance(goal_id, str) and goal_id and isinstance(experiment, dict) and experiment.get("enabled") is False
+                and recall.get("status") == "disabled" and recall.get("context") is None
+                and recall.get("provider_call_count") == 0):
+            # Keep all authority and recall flags while moving disabled
+            # configuration diagnostics to their capability's existing readback.
+            experiment = dict(experiment)
+            experiment.pop("config_runtime_route", None)
+            experiment.pop("host_coverage", None)
+            experiment["detail_ref"] = f"reward-memory experiment-status --goal-id {shell_arg_for_host(goal_id)}"
+            compact = {**compact, "reward_memory_recall": {**recall, "experiment": experiment}}
         warning = payload.get("next_action_projection_warning")
         if isinstance(warning, dict):
             compact = dict(compact)
