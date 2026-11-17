@@ -1,9 +1,9 @@
 # RFC: Sparse Working Memory at Context Compaction (v0)
 
-- **RFC status:** Accepted (upon merge)
+- **RFC status:** Retired
 - **Supersedes / closes:** none
-- **Delivery maturity:** Partial: deterministic native restoration and Workbench opt-in; semantic consolidation and task benefit unqualified.
-- **Feature status:** Experimental; independently opt-in and off by default.
+- **Delivery maturity:** Experiment: retired; task benefit unqualified.
+- **Feature status:** Retired; kernel execution and Workbench activation removed.
 - **Authors / owners:** AI-assisted proposal; context presentation, native-host, history-working-set and T02 maintainers.
 - **Created:** 2026-11-16
 - **Last normative revision:** 2026-11-17
@@ -13,7 +13,9 @@
 
 ## Document map and maintenance contract
 
-Sections 1–12 define this bounded design; §4 records preimplementation code facts and §5.5 defines the implemented first profile. Accepted status takes effect only upon merge; it does not certify task benefit or product promotion. Execution evidence lives in the [ledger](ledger/sparse-compaction-working-memory-v0/2026-11-17-native-kernel-and-workbench.md), following the [ledger contract](ledger/README.md); maintain both language mirrors together.
+This RFC is retired. Sections 1–12 remain the historical experimental design, not an active feature or implementation plan. Preserve the [original implementation ledger](ledger/sparse-compaction-working-memory-v0/2026-11-17-native-kernel-and-workbench.md) and the [retirement decision](ledger/sparse-compaction-working-memory-v0/2026-11-17-retirement.md); maintain both language mirrors together.
+
+**Current decision:** Task effectiveness and complete-cost benefit remain unqualified, and the requester explicitly withdrew the experiment. Remove sparse-view generation, compaction save/restore branches and the Workbench entry. Retain only strict compatibility decoding of saved `compaction_memory` settings: old values are neither advertised nor editable and trigger no execution; sibling settings remain readable, writable and transactionally restorable. Reads do not rewrite old files. Existing immutable memories, original sources and their exact readers retain their original lifetime; no automatic deletion is introduced. Reintroducing the experiment requires a new proposal and qualification evidence.
 
 **Request versus proposal:** The requester asks to retain LoopX-recognizable structured information during context compaction, expects a sparser representation, identifies **FSoft-AI4Code/CodeWiki** as a reference, raises Manus's use of compression as memory as a research lead, confirms an **experimental feature**, and authorizes kernel implementation with a Workbench switch. Concrete design choices remain AI-selected implementation proposals pending review; that authorization does not certify the schema or benefit. “Compaction” here means conversation-context reduction, not model-weight compression.
 

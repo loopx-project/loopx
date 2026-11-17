@@ -1042,15 +1042,6 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                         "hookEventName": event["hook_event_name"],
                         "additionalContext": " ".join(filter(None, [existing_context, preparation_context])),
                     }
-                if (event["hook_event_name"] in ("PreCompact", "PostCompact")
-                        or event["hook_event_name"] == "SessionStart" and event.get("source") == "compact"):
-                    from ..capabilities.machine_configuration.compaction_memory import compaction_memory_enabled
-                    from ..paths import effective_runtime_root
-
-                    if compaction_memory_enabled(effective_runtime_root(registry_path, runtime_root_arg)):
-                        from ..control_plane.turn_driver.compaction_memory import compaction_memory_hook
-
-                        payload = compaction_memory_hook(directory, event, payload, profile=activation["scenario"])
             else:
                 payload = {}
         except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):

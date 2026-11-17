@@ -734,6 +734,28 @@ These commands open no Session, invoke no model and create no Goal. `/help`
 shows role-specific commands and the existing Settings → Lark entry for workspace,
 executor and revocation, including supported images and unavailable media/attached-host boundaries.
 
+The bound Steward's `/triage`, `/gates`, `/todos` and `/triage all` use the
+existing scoped query and durable delivery path without starting a model Turn.
+Its App callback consumer dispatches both Steward query cards and typed operation
+confirmation cards; it does not create another subscription. Query callbacks
+retain the original Chat binding, source grants and Session. Operation callbacks
+use the existing operation handler and the controller's coordination root,
+including its original proposal, confirmation, claim and result-card readback.
+The Chat action store is not a fallback operation authority. An unavailable or
+changed App fails closed. Unknown callback shapes are ignored, and source
+validation and duplicate handling remain with each protocol's existing owner.
+An explicitly configured standalone operation consumer must be coordinated before
+cutover; this routing slice neither stops it nor transfers a configured managed
+wake policy. An unconfigured managed wake remains unauthorized.
+
+The mixed-protocol regression uses one physical callback stream and a separate
+Chat/coordination-root fixture with the real Core operation store and synthetic
+provider/executor. It verifies wrong-chat rejection, one execution on replay,
+original-card result readback, binding revocation and no extra query model Turn.
+File and SQLite source-query regressions remain required. This is source and
+packaged-path qualification; installed-service cutover and real client clicks
+remain open acceptance.
+
 Regression coverage uses the production native filesystem store, durable queue,
 bound request and provider admission/reconciliation paths with a synthetic
 provider and protocol executor. It qualifies queue/stop/readback and duplicate
