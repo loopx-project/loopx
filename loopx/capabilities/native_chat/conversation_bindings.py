@@ -289,14 +289,18 @@ class ChatConversationBindings:
         if not sessions:
             raise ValueError("the original steward Session is unavailable")
         session = max(sessions, key=lambda item: (item.get("last_activity_at") or "", item["session_id"]))
-        fresh = self.controller.store.load_session(session["session_id"])
-        if fresh is None or fresh.get("status") == "closed":
-            raise ValueError("the original steward Session is unavailable")
-        expected = {**self._session_observation(session), "status": fresh.get("status")}
-        if self._session_observation(fresh) != expected:
-            raise ValueError("the original steward Session is unavailable")
-        self._recheck_local_bindings(current)
-        return fresh
+        # Close uses the same Session fences. Keep it from committing between
+        # this read and the final grant decision; grant revocation still races
+        # freely and is detected by the version check. All provider/Core IO has
+        # already completed, and background grant inspection remains nonblocking.
+        with self.controller.store.read_session_fenced(session["session_id"]) as fresh:
+            if fresh is None or fresh.get("status") == "closed":
+                raise ValueError("the original steward Session is unavailable")
+            expected = {**self._session_observation(session), "status": fresh.get("status")}
+            if self._session_observation(fresh) != expected:
+                raise ValueError("the original steward Session is unavailable")
+            self._recheck_local_bindings(current)
+            return fresh
 
     def _revoke_delivery_sources(self, binding_id: str) -> None:
         if self.controller is not None:

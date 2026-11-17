@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections import OrderedDict
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -38,7 +38,7 @@ from .control_plane.chat_turn_acceptance import (
     AcceptedManagedTurn,
     plan_managed_turn_acceptance,
 )
-from .file_lock import exclusive_file_lock, write_json_atomic
+from .file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
 
 
 CHAT_STORE_SCHEMA_VERSION = "loopx_chat_store_v1"
@@ -393,6 +393,28 @@ class ChatSessionStore(ChatIngressStore):
     def load_session(self, session_id: str) -> dict[str, Any] | None:
         payload = _read_json(self._session_path(session_id))
         return payload if payload.get("schema_version") == CHAT_SESSION_SCHEMA_VERSION else None
+
+    @contextmanager
+    def read_session_fenced(self, session_id: str) -> Iterator[dict[str, Any] | None]:
+        """Keep Session state stable through a caller's local decision.
+
+        Reuse the writer fences without waiting for ongoing work or changing
+        its holder record. Callers must keep provider IO outside this scope.
+        """
+        path = self._session_path(session_id)
+        if not path.exists():
+            yield None
+            return
+        lock = self._session_lock(session_id)
+        if not lock.acquire(blocking=False):
+            raise ValueError("chat session is changing; retry")
+        try:
+            with try_exclusive_file_lock(path, preserve_holder=True) as held:
+                if held is None:
+                    raise ValueError("chat session is changing; retry")
+                yield self.load_session(session_id)
+        finally:
+            lock.release()
 
     def reserve_loopx_outcome_request(
         self, session_id: str, *, turn_id: str, operation_id: str,
