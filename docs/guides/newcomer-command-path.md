@@ -3,12 +3,15 @@
 LoopX should feel like one product path before it feels like a CLI catalog.
 For a first-time user, the default surface is:
 
-1. Install or repair the CLI.
-2. Ask an agent to connect the current project.
-3. Use the host's LoopX command entry to start useful work.
+1. Install LoopX and its entry for the assistant you use.
+2. Open the project in that assistant.
+3. Give it a task through the LoopX entry and review the result.
 
 The full command set remains available for operators and contributors, but it
 should not be the first thing a newcomer has to understand.
+
+Start with [your first task in an assistant you already use](../product/use-cases/community/README.md)
+([简体中文](../product/use-cases/community/README.zh-CN.md)).
 
 For a task-oriented walkthrough, see
 [long-running coding agents with Codex and Claude Code](long-running-coding-agents.md).
@@ -44,7 +47,7 @@ matches the surface you already use:
 | Surface | Start with | What keeps it moving |
 | --- | --- | --- |
 | Codex App | `$loopx <task text>` or `/skills` -> `loopx` in the project thread | The app heartbeat automation. Let the agent install or refresh the generated LoopX heartbeat body; start at the bootstrap cadence, then follow `quota should-run.scheduler_hint`. |
-| Codex CLI | `codex` from the project root, then paste `loopx codex-cli-bootstrap-message --project .` output | Current verified Codex CLI builds do not load user-installed `/loopx` or `/prompts:loopx` commands. Keep the executor visible, then set the generated `/goal <thin task_body>`. |
+| Codex CLI | Open `codex` from the project root and use the installed `$loopx` skill | Use a build that exposes native `/goal` and keep the session available. If the skill is missing, use the optional setup below. |
 | Claude Code | Install LoopX, then `/loopx <task text>` | The installer registers lightweight slash-command skills. Enable the opt-in adapter only when Claude Code's native `/loop` should be gated by LoopX `should_run`. |
 | OpenCode | Install the OpenCode surface, then `/loopx <task text>` | The bridge writes commands, plugin, runtime, and pinned dependencies. After todos are written, call `loopx_goal_activate` to bind the quota-gated goal loop. |
 | Other agent or shell | `loopx start-goal --guided --project . --goal-text "<task text>" --host-surface <exact-host>` | The guided packet previews the same transaction an agent should execute: inspect or connect state, plan todos, refresh status, activate a host loop, run quota, and ack scheduler hints when needed. If the surface has no runner hook, LoopX can track state but the user drives it manually. |
@@ -53,15 +56,17 @@ If you already own the Agent runner or workflow supervisor, use
 [Embed LoopX In Your Agent Runner](custom-agent-runner-integration.md) instead
 of reconstructing the lifecycle from the full CLI catalog.
 
-## One CLI Quickstart
+<a id="one-cli-quickstart"></a>
 
-The [five-minute SQLite exercise](../product/use-cases/community/README.md)
-creates a disposable Goal and follows one Todo through a lease and
-evidence readback. See the [community FAQ](../product/use-cases/community/faq.md)
-for model replay, context measurements and shared authority.
+## Optional manual setup
 
-Use this when an agent asks for the manual shell path, or when you are setting
-up a fresh terminal without an agent driving the first step:
+The [SQLite developer exercise](../product/use-cases/community/manual-cli.md)
+shows a Goal, a Todo, a lease, and a result read from a fresh process.
+The [community FAQ](../product/use-cases/community/faq.md) explains model
+replay, context measurements, and shared authority.
+
+Use the following when troubleshooting a missing host entry or setting up a
+terminal without an assistant:
 
 ```bash
 python3 -m pip install --upgrade loopx

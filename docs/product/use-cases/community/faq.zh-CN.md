@@ -1,17 +1,17 @@
 # LoopX 社区常见问题
 
-[English](faq.md) · [五分钟入门](README.zh-CN.md)
+[English](faq.md) · [在助手里试做一个任务](README.zh-CN.md)
 
 ## 状态存在哪里
 
-一台电脑可以先用本地 SQLite。[入门示例](README.zh-CN.md)在未配置过的独立运行目录中新建
+一台电脑可以先用本地 SQLite。[SQLite 开发者练习](manual-cli.zh-CN.md)在未配置过的独立运行目录中新建
 Goal，LoopX 会为它创建一个 SQLite 权威数据库，保存 Todo、租约和操作回执等
 工作状态。数据库打开期间可能有 WAL 和共享内存附属文件。Git 文件、项目注册表
 及宿主的会话材料各有自己的位置。
 
 在 Goal 所属项目运行 `loopx --format json todo list --goal-id <goal-id>`，SQLite 路径会
 在 `authority_read.source_authority` 返回 `sqlite_v0`。已有 Goal 继续使用原来记录的
-存储；要切换时先看[存储选择与迁移](../../../reference/local-authority-provider-selection.md#新-goal-的权威存储)。
+存储；要切换时先看[存储选择与迁移](../../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)。
 模型和工具由 Agent 宿主运行。宿主退出后，LoopX 保留工作状态，下一次运行据此
 判断哪些工作可以接续。
 
@@ -53,17 +53,17 @@ Goal，LoopX 会为它创建一个 SQLite 权威数据库，保存 Todo、租约
 374,449 字节，含 CLI JSON 封装为 630,550 字节，相对约 12.53 MB 的原包
 分别为 **3.0%** 和 **5.0%**。全部 213 次唤醒还包含 101 次新会话或压缩后
 的基线读取。整轮模型 Token、成本和任务结果各有自己的测量口径。
-[公开聚合与来源版本](https://github.com/loopx-project/loopx/blob/f38fae05bb9a1c2cc54a2641359224cc253d32ac/apps/presentation/site/public/blog/data/long-horizon-audit.json)。
+[公开聚合与来源版本](https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/apps/presentation/site/public/blog/data/long-horizon-audit.json)。
 
 **2026 年 11 月 12 日 22:40（北京时间）**的 EdgeBench 快照里，Context ON
 在 **十题中的七题**领先或微弱领先。Rust 原生分数为 27.1801 对 27.1757，
 显示到两位小数时打平。Portfolio、Codec 和 OpenTTD 由 OFF 领先。只有四组
 报告的用时接近 18 小时且相差不超过 15 分钟，其余六组涉及历史运行、早停或
 核验不完整。七比三描述这份快照；要单独识别上下文交付的影响，需要两臂
-完整的版本、配置、评估器和预算记录。
-[原评审与证据缺口](https://github.com/loopx-project/loopx/pull/8760#pullrequestreview-5905813288)。
+完整的版本、配置、评估器和预算记录。ANN OFF 的 3,746 QPS 和两臂实际时长也尚未核实。
+[修订后的分数表与来源](https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/apps/presentation/site/public/blog/zh/context-delivery/index.html#L114-L186)。
 
-原生入口的适用条件可查 [2.2.0 发布说明](https://github.com/loopx-project/loopx/releases/tag/v2.2.0)
+原生入口的适用条件可查 [2.3.0 发布说明](https://github.com/loopx-project/loopx/releases/tag/v2.3.0)
 并核对自己安装的宿主。`main` 上的后续改动和研究测量分别有各自的版本。
 
 ## 多人能否共用 PostgreSQL、异步等待审批
@@ -73,8 +73,10 @@ Goal，LoopX 会为它创建一个 SQLite 权威数据库，保存 Todo、租约
 由 PostgreSQL 保存事务与回执。写入时用 CAS 比较当前版本，已有更新便拒绝本次
 过期写入。服务若在提交后丢了响应，先用原操作身份查回执，再决定是否重试。
 候选已有独立客户端的真实后端测试；跨机器部署仍需该宿主与服务组合的实际验收。
+[当前源码的限定读取候选](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
+校验明确获准的 Todo 与访问者，并拒绝写入。
 
-[PR #8747](https://github.com/loopx-project/loopx/pull/8747)是跨人协作的资源访问设计。
+[尚未合入的 PR #8747](https://github.com/loopx-project/loopx/pull/8747)提出了更广的跨人资源访问设计。
 当前候选按租户、Goal、执行者和允许的操作授予粗粒度范围，同时绑定存储实例。
 提案要求同时满足主体授权、凭据范围、资源 ACL、适用的委派与来源许可。授权
 缺失或无法核验时拒绝访问；资源权限、执行租约和预算仍分别核验。
@@ -82,7 +84,7 @@ Goal，LoopX 会为它创建一个 SQLite 权威数据库，保存 Todo、租约
 审批可以只卡一道动作，例如是否发布已经核过的说明。把发布 Todo 留在等待状态，
 给审批人看具体目标和所需决定；独立的核验 Todo 可以按自己的准入继续。审批只
 解除所指的 Gate，发布步骤仍需适用的执行授权。
-[工作图与 Gate 范围](../../../book/chapters/work-graph-and-authority.md)。
+[工作图与 Gate 范围](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/book/chapters/work-graph-and-authority.md#L31-L43)。
 
 [社区助手验收题](golden-queries.md)用这些资料核对上手和边界（CQ01–03、CQ05、CQ08）、
 机制与实验（CQ11、CQ14）、协作与 FAQ 更新（CQ15、CQ20）。引用答案前，先核对

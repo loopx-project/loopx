@@ -1,11 +1,11 @@
 # LoopX community FAQ
 
-[简体中文](faq.zh-CN.md) · [Five-minute quickstart](README.md)
+[简体中文](faq.zh-CN.md) · [Try a task in your assistant](README.md)
 
 ## Where does the state live?
 
 For one computer, start with local SQLite. A new Goal using the unconfigured
-defaults shown in the [quickstart](README.md) gets one SQLite authority
+defaults shown in the [SQLite developer exercise](manual-cli.md) gets one SQLite authority
 database in the selected runtime. It holds the durable work state, including
 Todos, leases and operation receipts. SQLite may create WAL and shared-memory
 sidecars while open. Git files, the registry and host session artifacts live in
@@ -66,7 +66,7 @@ read body and 5.0% including CLI JSON**. It sums 374,449 and 630,550 bytes
 against approximately 12.53 MB of full packets for **112 in-cycle
 continuations**. The 213 total wakes also include 101 new-session or
 post-compaction baseline reads. End-to-end model tokens, cost and task outcomes
-have their own measurements. [Aggregate and source revision](https://github.com/loopx-project/loopx/blob/f38fae05bb9a1c2cc54a2641359224cc253d32ac/apps/presentation/site/public/blog/data/long-horizon-audit.json).
+have their own measurements. [Aggregate and source revision](https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/apps/presentation/site/public/blog/data/long-horizon-audit.json).
 
 The **November 12, 2026, 22:40 CST** EdgeBench snapshot lists Context ON ahead
 or marginally ahead on **7 of 10 rows**. Rust is a small native-score edge
@@ -75,9 +75,10 @@ Codec and OpenTTD. Only four reported pairs are within 15 minutes of one another
 near 18 hours. The other six involve historical runs, early stops or incomplete
 verification. Treat the tally as a description of this snapshot. Isolating
 the effect requires the exact versions, treatment, evaluator and budgets for
-both arms. [Source and provenance review](https://github.com/loopx-project/loopx/pull/8760#pullrequestreview-5905813288).
+both arms. The public aggregate also leaves ANN OFF's 3,746 QPS and both
+actual durations unverified. [Revised score table and provenance](https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/apps/presentation/site/public/blog/context-delivery/index.html#L114-L206).
 
-Check the [2.2.0 release](https://github.com/loopx-project/loopx/releases/tag/v2.2.0)
+Check the [2.3.0 release](https://github.com/loopx-project/loopx/releases/tag/v2.3.0)
 and your installed host for the supported native path. Later changes on
 `main` and research measurements carry their own revisions.
 
@@ -91,9 +92,10 @@ prevents an outdated writer from committing against a newer state. If a
 response is lost, read back the original operation under the same identity
 before retrying. Evidence for the candidate includes real-backend tests with
 independent clients, but enabling cross-host execution requires its own deployed
-host and service qualification.
+host and service qualification. The [current scoped-read candidate](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
+adds explicit Todo and audience checks. Its scoped listener rejects writes.
 
-[PR #8747](https://github.com/loopx-project/loopx/pull/8747) proposes resource
+[Open PR #8747](https://github.com/loopx-project/loopx/pull/8747) proposes broader resource
 access control for cross-person collaboration. The first candidate's coarse
 scope is tenant, Goal, actor and allowed operations, pinned to a store
 incarnation. The proposal intersects principal grants, credential scope,
@@ -105,7 +107,7 @@ A human Gate can name one decision, such as whether to publish an already
 reviewed note. Keep the publication Todo waiting with the exact decision
 and target visible. An independent verification Todo can continue under its
 own admission. Approval resolves the named Gate. The publish step still needs
-applicable execution authority. [Work graph and Gate scope](../../../book/en/chapters/work-graph-and-authority.md).
+applicable execution authority. [Work graph and Gate scope](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/book/en/chapters/work-graph-and-authority.md#L31-L43).
 
 The [community assistant evaluation](golden-queries.md) uses these sources for
 onboarding and boundaries (CQ01–03, CQ05, CQ08), versioned mechanisms and
