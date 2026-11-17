@@ -121,6 +121,9 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
         shutil.copyfile(ROOT / "pyproject.toml", root / "pyproject.toml")
         (root / "loopx").mkdir()
         shutil.copyfile(ROOT / "loopx/__init__.py", root / "loopx/__init__.py")
+        shutil.copyfile(ROOT / "loopx/release_metadata.py", root / "loopx/release_metadata.py")
+        with (root / "loopx/__init__.py").open("a") as initializer:
+            initializer.write('\nraise RuntimeError("artifact inspection executed the candidate")\n')
         artifacts = [*packages.iterdir(), root / "dist/SHA256SUMS"]
         before = {path.name: digest(path) for path in artifacts}
         env = {**os.environ, "RELEASE_TAG": identity.tag, "GITHUB_SHA": correction,
