@@ -6,7 +6,7 @@
 
 **Start with one goal. Keep long-running agent work verifiable.**
 
-Tell the Agent you already use what you want done. LoopX preserves goals,
+Tell your agent what you want to accomplish. LoopX preserves goals,
 progress, decisions and verifiable results so work can continue across sessions.<br>
 <sub>An open, harness-neutral control plane for 24/7 always-on agents across Codex, Claude Code, DeepSeek Harness and other runtimes—scaling from local SQLite workflows to multi-agent teams.</sub>
 
