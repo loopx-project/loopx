@@ -13,7 +13,53 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from loopx.cli_commands.update_artifact import extract_artifact, file_hash, validate_manifest
+from loopx.cli_commands.update_artifact import extract_artifact, file_hash, validate_default_contract, validate_manifest
+
+
+def observe_default_contract(source: Path) -> dict:
+    """Observe the candidate's real default writer in an isolated release fixture.
+
+    No model runs, active Goal or saved operator configuration participates.
+    Explicit complete-contract opt-in is intentionally not the default probe.
+    """
+    source = source.resolve()
+    with tempfile.TemporaryDirectory(prefix="loopx-default-contract-") as raw:
+        scratch = Path(raw).resolve()
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith("LOOPX_") and key not in {
+                   "CODEX_HOME", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"}}
+        env.update(PYTHONPATH=str(source), TMPDIR=str(scratch), TEMP=str(scratch), TMP=str(scratch),
+                   CODEX_HOME=str(scratch / "home/codex"))
+        result = subprocess.run([sys.executable, "-c", r'''
+import json, subprocess, sys
+from pathlib import Path
+import loopx
+if Path(loopx.__file__).resolve().parents[1] != Path(sys.argv[2]):
+    raise ValueError("Default contract probe imported another source")
+from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
+    _build_fixture, TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID, TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID)
+try:
+    fixture = _build_fixture(Path(sys.argv[1]))
+    result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+        "--registry", str(fixture.global_registry_path), "--runtime-root", str(fixture.runtime_root),
+        "quota", "should-run", "--goal-id", TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID,
+        "--agent-id", TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID, "--context-delivery", "off"],
+        cwd=fixture.project_root, capture_output=True, text=True, encoding="utf-8", timeout=60, check=True)
+    payload = json.loads(result.stdout)
+    if payload.get("ok") is not True or payload.get("goal_id") != TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID:
+        raise ValueError("Default writer probe did not return its original Goal")
+    schema = payload.get("schema_version")
+    print(json.dumps({"surface": "complete_turn" if schema == "loopx_turn_envelope_v1" else "quota_packet",
+        "schema_version": schema,
+        "interaction_schema_version": payload.get("interaction_contract", {}).get("schema_version")}))
+finally:
+    restart_effect_runtime(wait_for_exit=True)
+''', str(scratch / "fixture"), str(source)], cwd=source, env=env, capture_output=True,
+            text=True, encoding="utf-8", timeout=120)
+        if result.returncode:
+            raise ValueError("Runtime default contract could not be qualified through its isolated CLI")
+        return json.loads(result.stdout)
 
 
 def qualify(directory: Path) -> dict:
@@ -65,6 +111,9 @@ def qualify(directory: Path) -> dict:
         if not doctor.get("ok") or not skills.get("ok"):
             raise RuntimeError("Installed runtime/skills readback failed")
         release = cli.resolve().parents[1]
+        default_contract = validate_default_contract(observe_default_contract(release))
+        if manifest.get("default_contract") != default_contract:
+            raise ValueError("Observed runtime default contract does not match the candidate")
         for name in ("LICENSE", "NOTICE", "LICENSE-MIT"):
             assert (release / name).read_bytes() == (source / name).read_bytes()
         source_record = json.loads((release / "release.json").read_text())["source"]
@@ -122,6 +171,7 @@ finally:
             env={**env, "PYTHONPATH": str(release)}, cwd=release,
             check=True, timeout=15, stdout=subprocess.DEVNULL)
         return {"ok": True, "source_revision": manifest["source_revision"], "bytes": manifest["size"],
+            "default_contract": default_contract,
             "channel": manifest["channel"], "sha256": manifest["sha256"],
             "clean_install": results[0] == 0, "upgrade": results[1] == 0,
             "doctor": True, "skills": True, "frontend_bundle_contract": True, "frontend_http": True,
