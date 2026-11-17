@@ -115,6 +115,25 @@ export function GoalResearchTimeline({timeline, complete, zh, selectedIds, selec
   const groupedIds = new Set(dayGroups.flatMap(group => group.nodes.map(node => node.id)));
   const swarm = timeline.singles.filter(id => !groupedIds.has(id)).map(id => timeline.nodes.get(id)!).filter(item => item.first !== null);
   const unknownTime = [...timeline.nodes.values()].filter(item => item.first === null).length;
+  const routeParents = new Map<string, TimelineNode[]>();
+  const routeEdges = new Map<string, (typeof timeline.edges)[number][]>();
+  const manyRoutes = timeline.routes.length > 1;
+  if (manyRoutes) {
+    // Routes join known edge endpoints; preserve source order in the indexes.
+    for (const item of timeline.nodes.values()) {
+      if (item.routeId === null || !item.node.latest.parent_id) continue;
+      const parents = routeParents.get(item.routeId) ?? [];
+      parents.push(item);
+      routeParents.set(item.routeId, parents);
+    }
+    for (const edge of timeline.edges) {
+      const routeId = timeline.nodes.get(edge.from_node)?.routeId;
+      if (routeId == null || routeId !== timeline.nodes.get(edge.to_node)?.routeId) continue;
+      const edges = routeEdges.get(routeId) ?? [];
+      edges.push(edge);
+      routeEdges.set(routeId, edges);
+    }
+  }
   const phaseNote = timeline.phases.length === 1
     ? (zh ? "全部记录归入同一阅读分组，仅为阅读组织，不是预声明的评估窗口。" : "All records share one reading group, for reading only; not a pre-declared evaluation window.")
     : copy.phaseNote;
@@ -185,10 +204,12 @@ export function GoalResearchTimeline({timeline, complete, zh, selectedIds, selec
         const first = members[0]!, last = members.at(-1)!;
         const position = new Map(members.map(item => [item.node.id, item.first ?? start]));
         const x = (id: string) => ((position.get(id)! - start) / span) * 1000;
+        const parents = manyRoutes ? routeParents.get(route.id) ?? [] : [...timeline.nodes.values()];
+        const edges = manyRoutes ? routeEdges.get(route.id) ?? [] : timeline.edges;
         const arcs = [
-          ...[...timeline.nodes.values()].filter(item => item.routeId === route.id && position.has(item.node.id) && item.node.latest.parent_id && position.has(item.node.latest.parent_id))
+          ...parents.filter(item => item.routeId === route.id && position.has(item.node.id) && item.node.latest.parent_id && position.has(item.node.latest.parent_id))
             .map(item => ({key: `parent:${item.node.id}`, from: item.node.latest.parent_id, to: item.node.id, kind: "is-grouping", title: ""})),
-          ...timeline.edges.filter(edge => position.has(edge.from_node) && position.has(edge.to_node))
+          ...edges.filter(edge => position.has(edge.from_node) && position.has(edge.to_node))
             .map(edge => ({key: edge.event_id, from: edge.from_node, to: edge.to_node, kind: edge.edge_type === "refutes" ? "is-refutation" : "", title: `${edge.edge_type}: ${edge.summary}`})),
         ];
         return <div className="research-route" key={route.id} role="group" aria-label={`${members.length} · ${first.node.latest.title}`}>
