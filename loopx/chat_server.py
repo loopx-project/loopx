@@ -927,6 +927,9 @@ class ChatRequestHandler(
             }
         )
 
+    def _project_queue_reply_history(self, store: object, session: dict[str, object], rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        return project_private_reply_history(store, session, rows)
+
     @effect_runtime_request_scope()
     def _session_snapshot(self, session_id: str) -> None:
         try:
