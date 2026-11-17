@@ -42,6 +42,10 @@ from .capabilities.pr_review_queue.review_contract import (
     CODE_AREAS as CODE_AREAS,
     BEHAVIORAL_POLICY_AREAS as BEHAVIORAL_POLICY_AREAS,
 )
+from .capabilities.pr_review_queue.scope_budget import (
+    assess_pr_scope_budget,
+    pr_scope_budget_risk_note,
+)
 from .control_plane.runtime.time import now_utc_iso
 from .presentation.markdown import as_dict as _as_dict
 from .presentation.markdown import as_list as _as_list
@@ -712,7 +716,13 @@ def _checks(pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _risk_notes(pr: dict[str, Any], files: list[dict[str, Any]], *, wait_for_ci: bool = True) -> list[str]:
+def _risk_notes(
+    pr: dict[str, Any],
+    files: list[dict[str, Any]],
+    *,
+    wait_for_ci: bool = True,
+    scope_budget: Mapping[str, object] | None = None,
+) -> list[str]:
     notes: list[str] = []
     state = str(pr.get("state") or "").upper()
     if state == "MERGED" or pr.get("mergedAt") or pr.get("merged_at"):
@@ -733,6 +743,9 @@ def _risk_notes(pr: dict[str, Any], files: list[dict[str, Any]], *, wait_for_ci:
     checks = _checks(pr)
     if wait_for_ci and checks.get("failures"):
         notes.append("Failing status checks block a clean merge decision.")
+    hold_note = pr_scope_budget_risk_note(scope_budget)
+    if hold_note:
+        notes.append(hold_note)
     return notes
 
 
@@ -939,6 +952,27 @@ def _normalize_pr(
     conclusion = _review_conclusion(pr, reviewer_login=reviewer_login,
         behavior_bearing=bool({item["area"] for item in files} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS)))
     independent = conclusion.pop("independent_review", None)
+    changed_file_count = max(0, int(pr.get("changedFiles") or len(files) or 0))
+    raw_additions = pr.get("additions")
+    raw_deletions = pr.get("deletions")
+    addition_count = max(
+        0,
+        int(raw_additions)
+        if raw_additions is not None
+        else sum(int(f["additions"]) for f in files if isinstance(f.get("additions"), int)),
+    )
+    deletion_count = max(
+        0,
+        int(raw_deletions)
+        if raw_deletions is not None
+        else sum(int(f["deletions"]) for f in files if isinstance(f.get("deletions"), int)),
+    )
+    scope_budget = assess_pr_scope_budget(
+        pr,
+        changed_files=changed_file_count,
+        additions=addition_count,
+        deletions=deletion_count,
+    )
     item: dict[str, Any] = {
         "number": number,
         "title": _redact_text(pr.get("title"), limit=180),
@@ -976,17 +1010,20 @@ def _normalize_pr(
         "mergeability": str(pr.get("mergeable") or "UNKNOWN").upper(),
         "motivation": _motivation(pr),
         "scale": {
-            "changed_files": int(pr.get("changedFiles") or len(files) or 0),
+            "changed_files": changed_file_count,
             "additions": int(pr.get("additions") or 0),
             "deletions": int(pr.get("deletions") or 0),
         },
+        "scope_budget": scope_budget,
         "areas": _area_counts(files),
         "key_files": files[:10],
         "commit_headlines": _commit_headlines(pr),
         "checks": checks,
         "wait_for_ci": wait_for_ci,
         "review_depth": _review_depth(files),
-        "risk_notes": _risk_notes(pr, files, wait_for_ci=wait_for_ci),
+        "risk_notes": _risk_notes(
+            pr, files, wait_for_ci=wait_for_ci, scope_budget=scope_budget
+        ),
         "metadata_risk_hint": _metadata_risk_hint(pr, files, checks, wait_for_ci=wait_for_ci),
         "main_regression_analysis": _main_regression_analysis(pr, files, wait_for_ci=wait_for_ci),
     }

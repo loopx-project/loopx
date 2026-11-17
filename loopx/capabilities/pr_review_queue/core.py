@@ -119,7 +119,15 @@ def _pr_snapshot(
         for key, value in snapshot.items()
         if key != "review_ready_age_hours"
     }
-    return snapshot | {"fingerprint": _fingerprint(fingerprint_snapshot)}
+    scope_budget = item.get("scope_budget")
+    return snapshot | {
+        "fingerprint": _fingerprint(fingerprint_snapshot),
+        **(
+            {"scope_budget": scope_budget}
+            if isinstance(scope_budget, Mapping)
+            else {}
+        ),
+    }
 
 
 def _previous_observation(value: Any) -> Mapping[str, Any]:

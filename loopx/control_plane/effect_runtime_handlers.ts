@@ -493,6 +493,7 @@ export function createEffectRuntimeHandlers(
     ["scheduler.monitor_batch.replay", lazyHandler(() => import("./scheduler/monitor_batch.ts"), ({replayLegacyMonitorBatch}) => replayLegacyMonitorBatch)],
     ["scheduler.monitor_target.select", lazyHandler(() => import("./scheduler/monitor_successor.ts"), ({selectMonitorTodoRequest}) => selectMonitorTodoRequest)],
     ["capabilities.issue_fix.monitor_reconciliation.plan", lazyHandler(() => import("./capabilities/issue_fix_monitor_reconciliation.ts"), ({planIssueFixMonitorReconciliation}) => planIssueFixMonitorReconciliation)],
+    ["capabilities.change_scope_budget.assess", lazyHandler(() => import("./capabilities/change_scope_budget.ts"), ({assessChangeScopeBudget}) => assessChangeScopeBudget)],
     ["capabilities.change_quality.validation_gate", lazyHandler(() => import("./capabilities/change_quality_validation.ts"), ({qualifyChangeQualityValidation}) => qualifyChangeQualityValidation)],
     ["capabilities.pr_review.approval_closeout.plan", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({planPrReviewApprovalCloseout}) => planPrReviewApprovalCloseout)],
     ["capabilities.pr_review.conclusion.select", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({selectPrReviewConclusion}) => selectPrReviewConclusion)],

@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.effect_runtime import effect_runtime_result
 from ...extensions.process_runtime import retire_owned_process
 
 CHANGE_QUALITY_SCOPE_SCHEMA_VERSION = "change_quality_scope_v0"
@@ -183,6 +184,60 @@ def _hash_untracked_file(digest: Any, repo_root: Path, relative_path: str) -> No
     digest.update(b"\0")
 
 
+def _numstat_totals(repo_root: Path, *args: str) -> tuple[int, int]:
+    """Sum line additions and deletions from ``git diff --numstat -z`` output."""
+
+    result = _git(repo_root, *args)
+    if result.returncode != 0:
+        detail = bytes(result.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise ValueError(f"git {' '.join(args)} failed: {detail}")
+    tokens = bytes(result.stdout or b"").split(b"\0")
+    additions = 0
+    deletions = 0
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        if not token:
+            continue
+        parts = token.split(b"\t", 2)
+        if len(parts) < 3:
+            continue
+        added, deleted, path = parts
+        if path == b"":
+            # A rename/copy entry in ``--numstat -z`` emits two path tokens next.
+            index += 2
+        if added.isdigit():
+            additions += int(added)
+        if deleted.isdigit():
+            deletions += int(deleted)
+    return additions, deletions
+
+
+def _untracked_line_count(repo_root: Path, relative_path: str) -> int:
+    path = repo_root / relative_path
+    if path.is_symlink():
+        return 1
+    if not path.is_file():
+        return 0
+    with path.open("rb") as handle:
+        head = handle.read(8192)
+        if b"\0" in head:
+            return 0
+        lines = head.count(b"\n")
+        last_byte = head[-1:] if head else b""
+        while chunk := handle.read(1024 * 1024):
+            lines += chunk.count(b"\n")
+            last_byte = chunk[-1:]
+    if last_byte and last_byte != b"\n":
+        lines += 1
+    return lines
+
+
+def _rev_list_count(repo_root: Path, *args: str) -> int:
+    return int(_required_git_text(repo_root, "rev-list", *args))
+
+
 def build_change_quality_scope(
     *,
     repo_path: Path,
@@ -244,6 +299,39 @@ def build_change_quality_scope(
     for relative_path in sorted(untracked):
         _hash_untracked_file(digest, repo_root, relative_path)
 
+    committed_add, committed_del = _numstat_totals(
+        repo_root, "diff", "--numstat", "-z", committed_range, "--"
+    )
+    staged_add, staged_del = _numstat_totals(
+        repo_root, "diff", "--numstat", "-z", "--cached"
+    )
+    unstaged_add, unstaged_del = _numstat_totals(
+        repo_root, "diff", "--numstat", "-z"
+    )
+    untracked_add = sum(
+        _untracked_line_count(repo_root, relative_path)
+        for relative_path in untracked
+    )
+    additions = committed_add + staged_add + unstaged_add + untracked_add
+    deletions = committed_del + staged_del + unstaged_del
+    commit_count = _rev_list_count(
+        repo_root, "--count", f"{base_commit}..{head_commit}"
+    )
+    merge_commit_count = _rev_list_count(
+        repo_root, "--merges", "--count", f"{base_commit}..{head_commit}"
+    )
+    scope_budget = effect_runtime_result(
+        "capabilities.change_scope_budget.assess",
+        {
+            "changed_files": len(changed_files),
+            "additions": additions,
+            "deletions": deletions,
+            "commit_count": commit_count,
+            "merge_commit_count": merge_commit_count,
+            "request_changes_rounds": None,
+        },
+    )
+
     return {
         "schema_version": CHANGE_QUALITY_SCOPE_SCHEMA_VERSION,
         "base_ref": normalized_base_ref,
@@ -252,6 +340,7 @@ def build_change_quality_scope(
         "scope_fingerprint": digest.hexdigest(),
         "changed_files": changed_files,
         "changed_file_count": len(changed_files),
+        "scope_budget": scope_budget,
         "sources": {
             "committed": committed,
             "staged": staged,

@@ -295,3 +295,70 @@ def test_public_cli_owner_save_restart_cross_goal_and_clear(tmp_path, capsys, mo
     saved = json.loads(registry.read_text())["goals"][0]["control_plane"]["pull_request_review"]
     assert saved["owner_logins"] == []
     assert saved["agent_orders"] == {"a": "forward", "b": "reverse"}
+
+
+def test_large_scope_feature_pr_preserves_fair_queue_order_and_surfaces_diagnostics():
+    make = runpy.run_path(
+        str(Path(__file__).parents[1] / "test_pr_review_github_scan.py")
+    )["_queue_pr"]
+    prs = [
+        make(1, author="other", ready_at="2026-09-01T00:00:00Z", updated_at="2026-09-01T00:00:00Z"),
+        make(2, author="other", ready_at="2026-09-02T00:00:00Z", updated_at="2026-09-02T00:00:00Z"),
+        make(3, author="reviewer", ready_at="2026-09-01T00:00:00Z", updated_at="2026-09-01T00:00:00Z"),
+        make(4, author="reviewer", ready_at="2026-09-02T00:00:00Z", updated_at="2026-09-02T00:00:00Z"),
+        make(5, author="reviewer", ready_at="2026-09-03T00:00:00Z", updated_at="2026-09-03T00:00:00Z"),
+        make(6, author="other", ready_at="2026-09-03T00:00:00Z", updated_at="2026-09-03T00:00:00Z"),
+    ]
+    # PR #5 is a cohesive large feature (latest owner push) with multiple review rounds.
+    prs[4].update(
+        changedFiles=42,
+        additions=3200,
+        deletions=120,
+        reviews=[
+            {
+                "state": "COMMENTED",
+                "body": "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)",
+            }
+            for _ in range(5)
+        ],
+    )
+    # PR #6 is a net-subtraction cleanup across 45 files, so it stays exempt.
+    prs[5].update(changedFiles=45, additions=200, deletions=3000)
+
+    forward = build_pr_review_packet(
+        pull_requests=prs,
+        repository="owner/repo",
+        reviewer_login="reviewer",
+        source="fixture",
+        review_order="forward",
+        limit=100,
+    )
+    reverse = build_pr_review_packet(
+        pull_requests=prs,
+        repository="owner/repo",
+        reviewer_login="reviewer",
+        source="fixture",
+        review_order="reverse",
+        limit=100,
+    )
+
+    assert _sequence(forward) == [1, 2, 6, 3, 4, 5]
+    assert _sequence(reverse) == [5, 4, 3, 6, 2, 1]
+    assert all("accretion_hold" not in entry for entry in reverse["review_sequence"])
+
+    mega = next(row for row in reverse["pull_requests"] if row["number"] == 5)
+    cleanup = next(row for row in reverse["pull_requests"] if row["number"] == 6)
+    assert mega["scope_budget"]["status"] == "large_scope"
+    assert "split_required" not in mega["scope_budget"]
+    assert mega["review_plan"]["applicability"]["large_scope"] is True
+    assert any("Large scope / high churn" in note for note in mega["risk_notes"])
+    assert cleanup["scope_budget"]["status"] == "net_subtraction"
+    assert cleanup["review_plan"]["applicability"]["large_scope"] is False
+
+    observed = build_pull_request_review_queue_observation(
+        repository="owner/repo",
+        pull_requests=reverse["pull_requests"],
+        result_completeness={"complete": True},
+        review_order="reverse",
+    )
+    assert observed["candidate"]["number"] == 5

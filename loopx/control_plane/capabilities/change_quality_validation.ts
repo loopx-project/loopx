@@ -5,7 +5,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireBoolean, requireInteger, requireJsonObject, requireNonEmptyString,
+import {jsonObject, requireBoolean, requireInteger, requireJsonObject, requireNonEmptyString,
   requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 
 export type ChangeQualityValidationStatus = "passed" | "failed" | "skipped";
@@ -109,6 +109,15 @@ export function qualifyChangeQualityValidation(input: JsonObject): JsonObject {
     if ((row.status === "failed" && (row.required || !attributed)) || (row.status === "skipped" && row.required)) {
       blocking.push(ref);
     } else if (row.status !== "passed") risks.push(ref);
+  }
+  const scope = jsonObject(input.scope);
+  const scopeBudget = scope ? jsonObject(scope.scope_budget) : null;
+  if (scopeBudget) {
+    if (scopeBudget.status === "large_scope") {
+      risks.push("scope_budget:large_scope");
+    } else if (scopeBudget.status === "elevated_scope") {
+      risks.push("scope_budget:elevated_scope");
+    }
   }
   return {validation: rows, blocking_codes: blocking, risk_codes: risks};
 }

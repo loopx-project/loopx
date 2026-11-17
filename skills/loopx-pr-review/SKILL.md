@@ -104,7 +104,7 @@ An explicitly authorized fresh audit uses the same exact-head override above.
    with the remote readback and rerun `--check-result`; matching does not certify reasoning.
 5. Re-read the remote head immediately before verdict and publication; restart evidence if it changed.
 
-Each PR needs independent evidence and a standalone card; a queue table is a preface only.
+Each PR needs independent evidence and a standalone card; a queue table is a preface only. Each PR carries `scope_budget` (`change_scope_budget_assessment_v0`): `net_subtraction` (`deletions > additions`, `additions <= 1500`) is exempt from file-count and churn warnings; `elevated_scope` (`prefer_smaller_slice`) and `large_scope` (`verify_goal_proportionality` on high additions, `>=5` review rounds, `>=40` commits, or `>=3` mainline merges) are non-blocking diagnostics—cohesive large features remain eligible for normal queue ordering, `verdict="proportionate"`, and `APPROVE`, while accidental bloat or unrelated scope drift should still receive `disproportionate` / `simplify_now`.
 
 For managed review, pass `--goal-id GOAL` and execute the packet's current
 `validation_matrix`: its `wait_for_ci`, `validation_source` and
