@@ -2109,11 +2109,18 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     assert lease_rc == 0, lease
     assert lease["acquired"] is True
     assert lease["source_authority"] == f"{provider}_v0"
+    read_rc, blocked_context = _run_cli(
+        registry_path, runtime, "checkpoint-context", "--purpose", "delivery_result",
+        "--goal-id", GOAL_ID, *binding, cwd=project,
+    )
+    assert read_rc == 0, blocked_context
+    assert blocked_context["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
     refresh_rc, refresh = _run_cli(
         registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
         "--classification", "peer_hard_lease_blocker",
         "--delivery-batch-scale", "single_surface",
         "--delivery-outcome", "outcome_gap", *binding,
+        "--delivery-read-context", blocked_context["read_context_id"],
         "--progress-result-class", "blocked",
         "--progress-blocker-id", "blocker:peer-hard-lease",
         "--progress-evidence-id", "evidence:peer-hard-lease",
