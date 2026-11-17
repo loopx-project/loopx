@@ -781,12 +781,13 @@ class ManagerInspection:
             "next_offset": end
             if isinstance(matched, int) and page and end < matched
             else None,
-            "unknown": matched is None or portfolio_unknown or (view == "portfolio" and bool(oversized))
+            # An omitted record is incomplete evidence in every view, even
+            # when an exact Todo has no further row page to read.
+            "unknown": matched is None or portfolio_unknown or bool(oversized)
             or ("window_start" in arguments and (
                 source.get("window_complete") is False
                 or bool(source.get("coverage", {}).get("invalid_delivery_records"))
-                or bool(source.get("coverage", {}).get("invalid_index_records"))
-                or bool(oversized)))
+                or bool(source.get("coverage", {}).get("invalid_index_records"))))
             or (
                 view == "handoffs"
                 and (

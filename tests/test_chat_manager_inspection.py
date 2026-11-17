@@ -442,6 +442,50 @@ def test_oversized_portfolio_retains_recoverable_owner_decisions(tmp_path, monke
     assert tool.read(TOOL_NAME, reference)["rows"][0]["title"] in expected
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_oversized_exact_todo_is_unknown_without_exposing_private_detail(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    text = "[P0] Review the proposal before proceeding."
+    note = "Preserve the accepted decision and its stop condition. " * 650
+    created = add_goal_todo(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+        role="user", text=text, note=note, task_class="user_gate",
+        operation_id="oversized-exact-decision-fixture",
+    )
+    assert created["ok"], created
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    todo_id = before["todos"][0]["todo_id"]
+    records = []
+    tool = ManagerInspection(
+        context={"goals": [{"goal_id": "goal-a"}]}, registry_path=registry,
+        runtime_root=runtime, owner_scope=True, scope_valid=lambda: True,
+        record=records.append,
+    )
+    overview = tool.read(TOOL_NAME, {"view": "todos", "goal_id": "goal-a"})
+    assert overview["unknown"] is False and overview["rows"][0]["content_truncated"] is True
+    exact = {"view": "todos", "goal_id": "goal-a", "todo_id": todo_id}
+    result = tool.read(TOOL_NAME, exact)
+    assert result["ok"] and result["matched"] == 1
+    assert result["rows"][0]["status"] == "oversized_record"
+    assert result["oversized_rows"] == [0] and result["next_offset"] is None
+    assert result["unknown"] is True
+    assert note not in json.dumps(result) and len(json.dumps(result)) < 24000
+    tool.owner_scope = False
+    external = tool.read(CONTEXT_TOOL_NAME, exact)
+    assert external["unknown"] is False and external["rows"][0]["title"] == text
+    assert "continuation" not in external["rows"][0]
+    assert external["oversized_rows"] == []
+    assert len(records) == 3
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+
+
 def test_agent_work_summary_bounds_content_without_inventing_execution():
     summary = agent_work_summary({"agent_id": "worker", "source_verified": True,
                                   "todos": [{"todo_id": "todo_1", "title": "x" * 25000,
