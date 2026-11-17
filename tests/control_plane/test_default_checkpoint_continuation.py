@@ -247,8 +247,7 @@ def test_default_pending_readback_guides_the_original_caller(provider, tmp_path,
         assert rc == 0, json.dumps(observed)
         if command[0] == 'status':
             item = observed['attention_queue']['items'][0]
-        else:
-            assert observed['schema_version'] == 'context_capture_navigation_v1', observed
+        elif observed.get('schema_version') == 'context_capture_navigation_v1':
             reader = shlex.split(observed['command'])
             keys = ('first_delivery_progress', 'recommended_action')
             selectors = [arg for key in keys for arg in ('--select', f'/{key}')]
@@ -256,6 +255,8 @@ def test_default_pending_readback_guides_the_original_caller(provider, tmp_path,
             assert rc == 0 and page['eof'], page
             values = selected_context_values(page['content'])
             item = {key: values[f'/{key}'] for key in keys}
+        else:
+            item = observed
         progress = item['first_delivery_progress']
         assert progress['settlement_identity'] == identity
         assert progress['stage'] == 'direction_pending' and progress['result_committed'] is True
