@@ -119,9 +119,12 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
         (root / "scripts").mkdir()
         shutil.copyfile(SCRIPT, root / "scripts/release_artifacts.py")
         shutil.copyfile(ROOT / "pyproject.toml", root / "pyproject.toml")
-        (root / "loopx").mkdir()
+        (root / "loopx/control_plane/testing").mkdir(parents=True)
         shutil.copyfile(ROOT / "loopx/__init__.py", root / "loopx/__init__.py")
-        shutil.copyfile(ROOT / "loopx/release_metadata.py", root / "loopx/release_metadata.py")
+        shutil.copyfile(
+            ROOT / "loopx/control_plane/testing/release_metadata.py",
+            root / "loopx/control_plane/testing/release_metadata.py",
+        )
         with (root / "loopx/__init__.py").open("a") as initializer:
             initializer.write('\nraise RuntimeError("artifact inspection executed the candidate")\n')
         artifacts = [*packages.iterdir(), root / "dist/SHA256SUMS"]
