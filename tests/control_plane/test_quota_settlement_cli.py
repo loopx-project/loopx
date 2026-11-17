@@ -5309,7 +5309,9 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     actions = cli["next_cli_actions"]
     assert len(actions) == 1
     if profile == "codex_app_ssh_goal":
-        assert actions[0].endswith("--begin-turn")
+        argv = shlex.split(actions[0])
+        assert "--begin-turn" in argv and "--turn-instance-id" not in argv
+        assert argv[argv.index("--context-delivery") + 1] == "off"
     else:
         assert "--turn-instance-id" in actions[0]
         assert "--begin-turn" not in actions[0]
@@ -7643,34 +7645,27 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert len(actions) == 1
     assert "refresh-state" not in actions[0]
     assert "spend-slot" not in actions[0]
+    assert_complete_turn_decision(unbound)
+    argv = shlex.split(actions[0])
+    assert argv[argv.index("--context-delivery") + 1] == "off"
+    assert argv[argv.index("--delta-delivery") + 1] == "off"
+    agent = unbound["interaction_contract"]["agent_channel"]
+    assert agent["must_attempt"] is True
+    assert agent["delivery_allowed"] is False
+    assert unbound["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
     if profile == "codex_cli":
-        assert_complete_turn_decision(unbound)
-        argv = shlex.split(actions[0])
-        assert argv[argv.index("--context-delivery") + 1] == "off"
-        assert argv[argv.index("--delta-delivery") + 1] == "off"
         assert argv[argv.index("--turn-instance-id") + 1] == "<unique-work-iteration-id-reuse-on-retry>"
-        envelope = unbound
     else:
-        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-        assert actions[0].endswith("--begin-turn")
-        envelope = build_turn_envelope(unbound)
-        assert envelope["action"]["primary_action"] == actions[0]
-        assert envelope["action"]["must_attempt"] is True
-        assert envelope["action"]["delivery_allowed"] is False
-        assert envelope["writeback"]["next_cli_actions"] == actions
-        assert envelope["writeback"]["spend_after_validation"] is False
-        assert envelope["replan_action_packet"] is None
+        assert "--begin-turn" in argv and "--turn-instance-id" not in argv
     from loopx.control_plane.turn_driver import build_loopx_turn_plan
 
-    plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
+    plan = build_loopx_turn_plan(unbound, host="codex-cli", execution_mode="interactive-visible")
     assert plan["route"]["kind"] == "blocked"
     assert plan["route"]["would_invoke_host"] is False
     assert not any(plan["effects"].values())
 
     bind_guard = actions[0].replace("<unique-work-iteration-id-reuse-on-retry>", TURN_ID)
-    if profile == "codex_cli":
-        bind_guard += f" --decision-output-dir {shlex.quote(str(tmp_path / 'replan-capture'))}"
+    bind_guard += f" --decision-output-dir {shlex.quote(str(tmp_path / 'replan-capture'))}"
     bound_rc, bound = _run_generated_cli(bind_guard, registry_path=registry_path)
 
     assert bound_rc == 0, bound
