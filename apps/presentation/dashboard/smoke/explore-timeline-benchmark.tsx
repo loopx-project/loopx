@@ -27,7 +27,10 @@ if (fixturePath === "--make-fixture") {
       edge_type: index % 3 === 0 ? "refutes" : "supports", summary: "Recorded relationship"}));
     if (index % 25 === 0) many.push(event("edge", `dangling-${index}`, {from_node: parent, to_node: `missing-${index}`, edge_type: "supports"}));
     if (index % 5 === 0) many.push(event("finding", `finding-${index}`, {node_id: parent,
-      status: index % 2 === 0 ? "refuted" : "confirmed", summary: "Recorded finding", evidence_refs: [`evidence:fixture-${index}`]}));
+      status: index % 2 === 0 ? "refuted" : "confirmed", recorded_at: index % 50 === 0 ? "unknown" : stamp(when),
+      summary: index % 10 === 0
+        ? "Input revision: fixture Applicability: local rendering Observation: recorded relationship Interpretation: Outcome: changed retained: - source context changed: - next route stopped: - previous route"
+        : "Recorded finding", evidence_refs: [`evidence:fixture-${index}`]}));
   }
   for (let index = 0; index < 800; index++) {
     const goal = "synthetic-one-route", when = stamp(start + index * 300_000);
