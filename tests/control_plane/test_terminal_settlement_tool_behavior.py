@@ -42,6 +42,32 @@ def _latest_quota_packet(request: Mapping[str, Any]) -> dict[str, Any]:
     raise AssertionError("scripted model did not receive the real quota packet")
 
 
+def test_missing_context_reference_returns_a_bounded_failed_receipt(tmp_path, monkeypatch):
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    fixture = _build_fixture(tmp_path / "oracle")
+    missing_reader = tmp_path / "missing" / "current.reader.json"
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command.replace(
+            '"${LOOPX_TURN:?}"', "missing-reader-turn")),
+        ScriptedExecToolAction(command=shlex.join([
+            "loopx", "--format", "json", "quota", "context-read",
+            "--reference-file", str(missing_reader),
+        ])),
+    ])
+
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="missing-reader", fixture_root=tmp_path / "actor")
+
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "tool_execution_failed"
+    assert receipt["observed_tool_sequence"] == ["quota_should_run", "tool_execution_failed"]
+    assert receipt["settlement_receipt_steps"] == []
+    assert len(transport.requests) == 2
+    assert str(missing_reader) not in json.dumps(receipt)
+    assert not receipt["boundary"]["external_writes_executed"]
+
+
 def _writeback_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     packet = _latest_quota_packet(request)
     command = packet["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
