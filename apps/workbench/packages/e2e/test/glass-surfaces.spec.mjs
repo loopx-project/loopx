@@ -62,7 +62,10 @@ test('glass chrome has scrolling content behind it without hiding either end of 
         assert.equal(solid.box.split('|')[1], 'none', 'the composer card is opaque');
         assert.ok(bounds.scroller.bottom <= bounds.input.top + 1, 'a wide screen ends the conversation above the composer');
       }
-      await scroller.evaluate(el => { el.scrollTop = 0; });
+      // A direct scrollTop write leaves automatic bottom-pinning enabled for late history updates.
+      await scroller.hover();
+      await page.mouse.wheel(0, -await scroller.evaluate(el => el.scrollHeight));
+      await page.waitForFunction(() => document.querySelector('.main > .scroller').scrollTop === 0);
       bounds = await measure();
       assert.ok(bounds.thread.top >= bounds.top.bottom, 'the first message starts below the header');
       await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
