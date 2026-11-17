@@ -573,6 +573,7 @@ jobs:
           path: |
             output/playwright/personal-workspace/acceptance-results.json
             output/playwright/personal-workspace/qualification.json
+            output/playwright/personal-workspace/attached-host-pending-queue*.png
           if-no-files-found: error
           retention-days: 7
 
