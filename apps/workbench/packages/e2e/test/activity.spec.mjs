@@ -167,7 +167,8 @@ test('the list by activity: what wants attention first, then by day; the choice 
 
   await page.reload();
   const toggle = page.getByRole('button', { name: '按活动查看' });
-  await toggle.waitFor({ timeout: 10_000 });
+  // The button renders before the refreshed thread list supplies its activity count.
+  await toggle.and(page.locator('[title*="1 个对话有新动静"]')).waitFor({ timeout: 10_000 });
   assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
   assert.equal(await toggle.locator('.activity-badge').count(), 0, 'no dot on the button');
   assert.match(await toggle.getAttribute('title'), /1 个对话有新动静/, 'a thread finished out of sight is counted in the hint');

@@ -8,10 +8,22 @@ test('thread deep links survive connection, open on desktop/mobile in both theme
   const daemon = await startDaemon(); const browser = await launchBrowser();
   try {
     const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title: 'Deep link thread' }) })).json();
-    await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'Deep link content' }) });
-    while ((await (await api(daemon, `/api/threads/${thread.id}`)).json()).status === 'running') await new Promise(resolve => setTimeout(resolve, 20));
-    await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'personal-notify' }) });
-    while ((await (await api(daemon, `/api/threads/${thread.id}`)).json()).status === 'running') await new Promise(resolve => setTimeout(resolve, 20));
+    const say = async text => {
+      const response = await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text }) });
+      assert.equal(response.status, 202, await response.clone().text());
+      assert.ok((await response.json()).turnId, 'the fixture message started a turn');
+      for (;;) {
+        const current = await (await api(daemon, `/api/threads/${thread.id}`)).json();
+        // An idle turn can still hold the send queue while automatic handover checks its model.
+        if (current.status !== 'running' && !['checking', 'preparing', 'countdown'].includes(current.autoHandover?.state)) {
+          assert.equal(current.status, 'idle', 'the fixture turn completed successfully');
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    };
+    await say('Deep link content');
+    await say('personal-notify');
     const shots = join(import.meta.dirname, '../shots/push'); mkdirSync(shots, { recursive: true });
     for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       assert.equal((await api(daemon, `/api/threads/${thread.id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) })).status, 200);
