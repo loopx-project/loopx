@@ -1,8 +1,9 @@
 # 打包单会话 heartbeat 对照
 
 本文是 [controller/executor RFC](../../controller-executor-unified-contract-v0.zh-CN.md#9-验证与验收)
-的测量检查点，不代表 C1 验收或提升默认。[英文镜像](2026-10-28-packaged-heartbeat.md)
-记录相同范围和结果。
+测量检查点的导航摘要，不代表 C1 验收或提升默认，也不宣称与原账本正文逐句语义等价。
+[英文镜像](2026-10-28-packaged-heartbeat.md)记录相同范围和结果。
+完整原样、仅追加的历史时序、反例与验证边界保留在冷归档 [2026-10-28-packaged-heartbeat.raw-archive.zh-CN.md](2026-10-28-packaged-heartbeat.raw-archive.zh-CN.md)（`sha256: 690a8f178288a0ea8d0520d5189be8781084690d395af1bcec91b1a6066fa5ce`）。
 
 ## 来源、负载与收敛范围
 

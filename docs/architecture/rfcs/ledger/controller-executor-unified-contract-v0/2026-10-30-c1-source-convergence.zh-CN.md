@@ -4,12 +4,13 @@
 - **状态：** 未合并的集成证据；C1 仍处于开放状态。
 - **来源：** 尚未合入的 C1 统一分支及其对 `main` 各检查点的集成（另见 [打包 heartbeat 对照](2026-10-28-packaged-heartbeat.zh-CN.md)）。
 - **语言镜像：** [English](2026-10-30-c1-source-convergence.md)
+- **完整仅追加原始归档：** [2026-10-30-c1-source-convergence.raw-archive.zh-CN.md](2026-10-30-c1-source-convergence.raw-archive.zh-CN.md)（`sha256: b371a2b464e88401615ee78fd93fd36d54bba08f836a86322ae7b717b8a1325c`）——原样保留完整历史时序、反例与验证边界；本摘要仅作导航索引，不宣称全文逐句语义等价。
 
 ## 已合入与未合入的收敛边界
 
 | 边界／Owner | 当前 C1 状态 | 保留兼容性与退出门禁 |
 | --- | --- | --- |
-| 完整来源 `work_contract`（`compose_turn_decision`、`completePlanningFacts`） | **C1 未合入：** 统一守卫、Host、driver、MCP、Benchmark、Kiro、DSH、SSH 及已绑定 `generic_cli`（`quota_settlement_plan_v2`、沿 `#8691` 共享 `task_context`）。 | 无 Turn 观察（`--scheduler-observation`）、显式 `--turn-envelope` v0 短视图（`EdgeBench` 及显式兼容调用方）与历史 v0 捕获保留显式读取器，直至替代路径与恢复窗口验收完毕。 |
+| 完整来源 `work_contract`（`compose_turn_decision`、`completePlanningFacts`） | **C1 未合入：** 统一守卫、Host、driver、MCP、Benchmark、Kiro、DSH、SSH 及已绑定 `generic_cli`（`quota_settlement_plan_v2`、沿 `#8691` 共享 `task_context`）。 | 无 Turn 观察（`--scheduler-observation`）、仅存于 `model_behavior_corpus.py` 的 `build_turn_envelope` 旧对照构造器（现直接转发同一 TypeScript 操作）、显式 `--turn-envelope` v0 短视图（`EdgeBench`）及历史 v0 plan／capture／回执保留显式边界，直至最后受支持对照调用方与恢复窗口退出。 |
 | 文件优先渐进／差分与字段复用（`#7560`、`#7627`、`#7935`、`#8186`） | **已合入 `main` 并由 C1 采用：** 单次调用初始计划、已观测字段复用与摘要绑定文件差分替代已退役的未合入原型 `outcome_context_projection_v0` 强制阅读计划。 | 部分或截断读取永不建立基线；`context_delivery=off` 配 `delta_delivery=auto` 不发布渐进导航；普通 CLI 默认采用仍须 §9 验收。 |
 | 数值保真（`#7557`、`#7633`、`#7643`、[数值检查点](2026-10-29-complete-numeric-integrity.zh-CN.md)） | **主干 owner + C1 传输：** 稀疏数值标记（`1.0` 与 `1`、`-0.0`、大整数）与 `hash_codec` v1/v2 经 TypeScript 修改计划保留原 Python JSON 值。 | 持久化 Python JSON／action-hash 原像保持不变以兼容既有 Turn key；精确字节 capture 摘要仍与 JS 归一化哈希分离。 |
 | 原生选区与重放检查点（`codex_context_history.py`） | **C1 未合入：** 将 hook 重放（`native_resume`／`selected_resume`）绑定物理 inode／区间摘要与仅追加记录字节覆盖，支持连续 resume 保留已核验选区。 | 缺少输出、Todo／正文变更、非仅追加尾部或压缩强制重读；`cli_version` 仅表征原写入者版本，不证明模型保留。 |
@@ -25,7 +26,7 @@ Python 保留持久化 action-hash 数值编码）。
 | --- | --- | --- |
 | Turn CLI 与启动决策 → plan | 直接传递完整来源；planner 拒绝同时携带完整来源和 v0 adapter 的输入。 | 默认检查保留完整来源、portfolio 与写回且不可执行（`12,388 → 26,524 B` 读回增量）。 |
 | Capture → Host / `turn_driver` / MCP / DSH / Ark | `host_dispatch_context` 与 `driver_lineage` 在派发、session 谱系或完成意图前一次校验完整来源与 `selectedWorkTodo`。 | 省略合同保留历史 v0 解码；显式 `null`、非对象、畸形或与来源不一致的 `work_contract` 在 Host／写回／扣额前拒绝。 |
-| Journal 写入、检查与恢复 | 通过共享 TypeScript reader 校验 v1 与过渡期 `v0+work_contract`；在 `turn/start` 前施加 hard-lease 执行键与锁共享。 | 缺来源的 v0 记录在支持恢复窗口内保留原身份校验与原字节（`14` 组 File/SQLite plan JSON `-29.33%`，journal 字节 `-28.32%`，最终 Host 字节相等）。 |
+| Journal 写入、检查与恢复 | 通过共享 TypeScript reader 校验 v1 与过渡期 `v0+work_contract`；在 `turn/start` 前施加 hard-lease 执行键、锁共享与 stdio 桥派发前到期校验（拒绝时等桥正常退出不强杀）。 | 缺来源的 v0 记录在支持恢复窗口内保留原身份校验与原字节（`14` 组 File/SQLite plan JSON `-29.33%`，journal 字节 `-28.32%`，最终 Host 字节相等）。 |
 
 ## 当前 quota 与 managed-controller 切换
 

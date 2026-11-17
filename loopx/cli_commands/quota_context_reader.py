@@ -368,9 +368,9 @@ def compact_selection_fits_one_page(reference_file: Path, content: bytes, *, out
                                    reader_argv: list[str] | None) -> bool:
     """Measure the actual compact receipt frame without widening its channel."""
     try:
-        return _capture_page(reference_file, content, "", offset=0, size=max(1, len(content)),
+        return bool(_capture_page(reference_file, content, "", offset=0, size=max(1, len(content)),
             output_limit=output_limit, instruction=False, select=[], reference_file=reference_file,
-            reader_argv=reader_argv, compact_reader=True)["eof"]
+            reader_argv=reader_argv, compact_reader=True)["eof"])
     except ValueError:
         return False
 

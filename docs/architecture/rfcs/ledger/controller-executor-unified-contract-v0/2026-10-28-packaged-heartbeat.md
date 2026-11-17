@@ -1,8 +1,9 @@
 # Packaged single-session heartbeat comparison
 
-This is a measurement checkpoint for the [controller/executor RFC](../../controller-executor-unified-contract-v0.md#9-validation),
-not acceptance of C1 or a default promotion. The [Chinese mirror](2026-10-28-packaged-heartbeat.zh-CN.md)
-records the same scope and results.
+This is a navigation summary of the measurement checkpoint for the [controller/executor RFC](../../controller-executor-unified-contract-v0.md#9-validation),
+not acceptance of C1 or a default promotion, and does not claim full prose equivalence with the raw ledger.
+The [Chinese mirror](2026-10-28-packaged-heartbeat.zh-CN.md) records the same scope and results.
+Complete verbatim append-only historical chronology, counterexamples, and validation bounds remain preserved in [2026-10-28-packaged-heartbeat.raw-archive.md](2026-10-28-packaged-heartbeat.raw-archive.md) (`sha256: 52b9cb9e0139d5820ba5404bb71084e27045ddcf759e436a720cf728c6d07599`).
 
 ## Source, workload, and convergence scope
 
