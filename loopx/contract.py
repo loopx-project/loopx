@@ -506,6 +506,25 @@ def _git_query_bytes(*arguments: str) -> _GitBytesAnswer | None:
     return _GitBytesAnswer(returncode=process.returncode, stdout=stdout, stderr=stderr)
 
 
+_GIT_NO_REPOSITORY_DIAGNOSTIC = (
+    b"fatal: not a git repository (or any of the parent directories): .git"
+)
+
+
+def _git_reports_missing_repository(stderr: bytes) -> bool:
+    """Whether Git's whole answer is its canonical "no repository" diagnostic.
+
+    Discovery has exactly this answer outside a repository.  A broken linked
+    worktree answers ``not a git repository: <target>`` instead, and a refusal
+    may quote any path - including one that itself contains this phrase - so a
+    substring match would turn a repository Git could not read into a clean
+    empty scan.  The probes run with a fixed C locale, so the canonical text is
+    the only form Git can answer here.
+    """
+
+    return stderr.strip() == _GIT_NO_REPOSITORY_DIAGNOSTIC
+
+
 def _git_worktree_root(path: Path) -> Path | None:
     """Return the worktree root, or None when Git says this is not one.
 
@@ -525,11 +544,12 @@ def _git_worktree_root(path: Path) -> Path | None:
         raise GitProbeUnavailable("git did not answer the worktree probe")
     if answer.returncode != 0:
         # Only Git's own "this is not a repository" is a negative answer. A
-        # refusal - unsafe ownership, a blocked index, a corrupt repository -
-        # also exits nonzero, and reading it as "not a worktree" drops every
-        # tracked file below the target: an explicit scan of a pruned directory
-        # then reports a clean empty boundary instead of an unknown one.
-        if b"not a git repository" not in answer.stderr:
+        # refusal - unsafe ownership, a blocked index, a corrupt repository, a
+        # broken linked-worktree metadata link - also exits nonzero, and reading
+        # it as "not a worktree" drops every tracked file below the target: an
+        # explicit scan of a pruned directory then reports a clean empty
+        # boundary instead of an unknown one.
+        if not _git_reports_missing_repository(answer.stderr):
             raise GitProbeUnavailable(
                 "git refused the worktree probe: "
                 + answer.stderr.decode("utf-8", "replace").strip()[:200]

@@ -302,3 +302,59 @@ def test_a_literal_git_read_drops_only_the_pathspec_mode(
 
     assert not [key for key in environment if "PATHSPECS" in key]
     assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="linked worktrees need POSIX metadata")
+def test_a_broken_linked_worktree_is_not_a_clean_selected_scan(
+    tmp_path: Path,
+) -> None:
+    """A worktree whose gitdir link is gone is unreadable, not empty.
+
+    Git answers `fatal: not a git repository: <target>` here.  That names the
+    broken link, so matching a substring would turn a repository Git cannot
+    read into a successful scan of zero files.
+    """
+
+    repo = _repository(tmp_path)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", str(linked)], check=True
+    )
+    (linked / ".git").write_text(
+        f"gitdir: {tmp_path / 'missing-worktree-gitdir'}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(contract.GitProbeUnavailable):
+        contract._git_worktree_root(linked)
+
+    boundary = contract.scan_public_boundary([linked])
+    assert boundary["ok"] is False
+    assert str(linked.resolve()) in boundary["unavailable_git_probes"]
+    assert "ACTIVE_GOAL_STATE.md" in boundary["unavailable_git_probes"]
+
+
+def test_a_refusal_quoting_the_no_repository_phrase_is_not_an_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only Git's whole canonical diagnostic means "no repository here"."""
+
+    answer = contract._GitBytesAnswer(
+        returncode=128,
+        stdout=b"",
+        stderr=(
+            b"fatal: detected dubious ownership in repository at "
+            b"'/scratch/not a git repository: decoy'\n"
+        ),
+    )
+    monkeypatch.setattr(contract, "_git_query_bytes", lambda *_: answer)
+
+    with pytest.raises(contract.GitProbeUnavailable):
+        contract._git_worktree_root(tmp_path)
+
+    canonical = contract._GitBytesAnswer(
+        returncode=128,
+        stdout=b"",
+        stderr=b"fatal: not a git repository (or any of the parent directories): .git\n",
+    )
+    monkeypatch.setattr(contract, "_git_query_bytes", lambda *_: canonical)
+    assert contract._git_worktree_root(tmp_path) is None
