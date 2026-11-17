@@ -17,6 +17,7 @@ import pytest
 
 from benchmark.runtime.research_probe import run_probe
 from canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 import test_quota_settlement_cli as fixture
 
 
@@ -42,15 +43,15 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
 
     def cli(*args):
         code, packet = fixture._run_cli(registry, runtime, *args, cwd=project)
-        assert code == 0, packet
+        assert code == 0, json.dumps(packet)
         return packet
 
-    def execute(command, **values):
-        for name, value in values.items():
-            command = command.replace("<" + name + ">", shlex.quote(str(value)))
-        assert "<" not in command, command
-        code, packet = fixture._run_generated_cli(command, registry_path=registry, cwd=project)
-        assert code == 0, packet
+    def execute(command, *, expected_code=0, **values):
+        replacements = {f"<{name}>": str(value) for name, value in values.items()}
+        argv = [replacements.get(word, word) for word in shlex.split(command)]
+        assert not any(word.startswith("<") for word in argv), argv
+        code, packet = fixture._run_generated_cli(shlex.join(argv), registry_path=registry, cwd=project)
+        assert code == expected_code, json.dumps(packet)
         return packet
 
     cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--execution-replan-after-turns", "1",
@@ -122,6 +123,32 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         "observation": "The independently evaluated feasible route costs two.",
         "interpretation": "The allowed direct edge is an informative next comparison; feasibility alone is not closeout.",
         "status": "tentative", "evidence_refs": observed["evidence_refs"], "execution_observation": observed}))
+    writeback_words = shlex.split(checkpoint)
+    result_command = shlex.join([
+        *writeback_words[:writeback_words.index("--agent-vision-json")],
+        "--explore-result-json", str(result),
+        "--delivery-read-context", guard["delivery_result_context"]["read_context_id"],
+        "--no-global-sync", "--suppress-external-sinks",
+    ])
+    rejected_command = result_command
+    for key, value in dict(validated_progress="bookkeeping", scale="single_surface",
+                           outcome="surface_only").items():
+        rejected_command = rejected_command.replace("<" + key + ">", shlex.quote(str(value)))
+    rejected_code, rejected = fixture._run_generated_cli(rejected_command, registry_path=registry, cwd=project)
+    assert rejected_code == 1 and not rejected.get("appended")
+    assert fixture._spend_run_count(runtime) == 0
+    fields = dict(validated_progress="route_feedback_verified", scale="implementation", outcome="outcome_progress")
+    retained = execute(result_command, **fields)
+    assert retained["settlement_identity"] == plan["identity"]
+    assert retained["vision_checkpoint"]["satisfied"] is False
+    spend_command = plan["ordered_steps"][2]["command_template"]
+    code, premature_spend = fixture._run_generated_cli(spend_command, registry_path=registry, cwd=project)
+    assert code == 1 and premature_spend["appended"] is False, json.dumps(premature_spend)
+    assert fixture._spend_run_count(runtime) == 0
+    direction = cli("checkpoint-context", *binding, "--purpose", "supplement_checkpoint",
+        "--todo-id", fixture.TODO_ID, "--turn-instance-id", plan["identity"]["turn_instance_id"])
+    assert direction["settlement_identity"] == plan["identity"]
+    assert direction["basis"]["todo"]["status"] == "open"
     patch = {"vision_summary": "Minimize route cost under the original graph and authority.",
         "acceptance_summary": "Retain a valid route and compare useful allowed alternatives before closeout.",
         "advancement_policy": "repeat_until_closed"}
@@ -131,25 +158,18 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         "path_delta": {"outcome": "continue", "prior_assumption": "The retained route is feasible.",
             "observed_reality": "Released validation confirms cost two; the permitted direct edge is untested.",
             "retained": ["Original optimization objective and current feasible route."], "evidence_refs": [evidence]}}))
-    result_command = (checkpoint + " --explore-result-json " + shlex.quote(str(result))
-        + " --no-global-sync --suppress-external-sinks")
-    rejected_command = result_command
-    for key, value in dict(validated_progress="bookkeeping", scale="single_surface",
-                           outcome="surface_only", file=vision).items():
-        rejected_command = rejected_command.replace("<" + key + ">", shlex.quote(str(value)))
-    rejected_code, rejected = fixture._run_generated_cli(rejected_command, registry_path=registry, cwd=project)
-    assert rejected_code == 1 and not rejected.get("appended")
-    assert fixture._spend_run_count(runtime) == 0
-    refreshed = execute(result_command, validated_progress="route_feedback_verified",
-        scale="implementation", outcome="outcome_progress", file=vision)
-    execute(result_command, validated_progress="route_feedback_verified",
-        scale="implementation", outcome="outcome_progress", file=vision)
+    direction_command = checkpoint + " " + shlex.join([
+        "--checkpoint-read-context", direction["read_context_id"],
+        "--no-global-sync", "--suppress-external-sinks",
+    ])
+    refreshed = execute(direction_command, **fields, file=vision)
+    execute(direction_command, **fields, file=vision)
     assert fixture._classification_count(runtime, "route_feedback_verified") == 1
     persisted = json.loads(Path(refreshed["json_path"]).read_text())
     assert persisted["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
     assert persisted["agent_vision"]["path_delta"]["evidence_refs"] == [evidence]
-    execute(plan["ordered_steps"][2]["command_template"])
-    execute(plan["ordered_steps"][2]["command_template"])
+    execute(spend_command)
+    execute(spend_command)
     assert fixture._spend_run_count(runtime) == 1
     retained_todo = cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]
     assert retained_todo["status"] == "open" and retained_todo["completion_validation_required"]
@@ -157,20 +177,24 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         lease_after = cli("task-lease", "inspect", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)
         assert lease_after["lease"]["idempotency_key"] == lease_before["lease"]["idempotency_key"]
         assert lease_after["lease"]["lease_epoch"] == lease_before["lease"]["lease_epoch"]
-    if preexisting_feedback:
-        code, refused_completion = fixture._run_cli(registry, runtime, "todo", "complete", *binding,
-            "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-1",
-            "--claim-operation-id", "route-original-execution", "--evidence", "probe:route-1", cwd=project)
-        assert code == 1 and refused_completion.get("validation_blocked_completion"), refused_completion
-        assert cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]["status"] == "open"
     # A new Host wake has a new Turn and the same Goal/Agent/Todo lane. The
     # ordinary cadence reads the material result; raw experiment counts do not.
     review = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
         "--turn-instance-id", "route-review")
     assert any(t["kind"] == "periodic_review_due" for t in review["autonomous_replan_obligation"]["triggers"])
     selection = review["interaction_contract"]["cli_channel"]["selection_command"]
-    review = execute(selection["route_prefix"] + " "
+    execute(selection["route_prefix"] + " "
         + selection["command_args_template"].format(todo_id=fixture.TODO_ID))
+    review = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
+        "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-review")
+    review_result, review_read, review_decision, review_spend = review["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    retained_review = execute(review_result + " " + shlex.join([
+        "--delivery-read-context", review["delivery_result_context"]["read_context_id"],
+        "--no-global-sync", "--suppress-external-sinks",
+    ]))
+    review_context = execute(review_read)
+    assert retained_review["settlement_identity"] == review_context["settlement_identity"]
+    assert review_context["basis"]["todo"]["status"] == "open"
     control = review["replan_action_packet"].get("stride_control")
     packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "active", "vision_patch": patch,
         "todo_delta": ["retain:" + fixture.TODO_ID], "path_delta": {"outcome": "continue",
@@ -178,28 +202,58 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
             "observed_reality": "The scoped validation retains a cost-two route; one allowed direct route remains untested.",
             "retained": ["Original objective and feasible incumbent."],
             "changed": ["Compare the allowed direct route on the same graph."], "evidence_refs": [evidence]}}
-    if strategy == "off":
-        assert control is None
-    else:
-        assert control
-        finding = next(row for row in control["explore_basis"]["finding_refs"]
+    def stride_decision(basis):
+        finding = next(row for row in basis["explore_basis"]["finding_refs"]
             if row.get("execution_observation", {}).get("candidate_sha256") == observed["candidate_sha256"])
-        decision = control["minimal_example"]
+        decision = dict(basis["minimal_example"])
         decision.update(action="switch", next_probe={"scope": "Compare the permitted direct route.",
             "prediction": "The independently checked route cost falls from two to one.",
             "adoption_criterion": "Same graph, valid endpoints and a lower actual route cost.",
             "cost_bound": "One local process and existing settlement; no new evaluation authority.",
             "minimum_evidence": "Exact route bytes and evaluator output."})
-        decision["explore_review"] = {"revision": control["explore_basis"]["revision"], "disposition": "used",
+        decision["explore_review"] = {"revision": basis["explore_basis"]["revision"], "disposition": "used",
             "considered_refs": [finding["finding_id"]], "reason": "The measured feasible candidate leaves the direct edge untested."}
-        packet["stride_decision"] = decision
+        return decision
+
+    decision_command = review_decision + " --no-global-sync --suppress-external-sinks"
+    decision_inputs = {
+        "path-to-evidence-linked-goal-vision-replan-contract-v0.json": vision,
+        "read-context-id": review_context["read_context_id"],
+    }
+    if strategy == "off":
+        assert control is None
+    else:
+        # Retaining this Turn's result revises the Stride review basis.
+        # The rejection exposes the exact facts for a fresh judgment.
+        packet["stride_decision"] = stride_decision(control)
+        vision.write_text(json.dumps(packet))
+        stale = execute(decision_command, expected_code=1, **decision_inputs)
+        assert stale["appended"] is False and fixture._spend_run_count(runtime) == 1
+        assert stale["settlement_recovery"]["settlement_identity"] == retained_review["settlement_identity"]
+        transition = stale["replan_transition"]
+        assert transition["reason_code"] == "stride_review_basis_mismatch"
+        reference = transition["context_recovery"]
+        if "path" in reference:
+            pointers = ("/replan_context", "/stride_control")
+            page = cli("quota", "context-read", "--capture-file", reference["path"],
+                "--capture-sha256", reference["sha256"], "--page-bytes", "64000",
+                "--max-page-output-bytes", "64000",
+                *(arg for pointer in pointers for arg in ("--select", pointer)))
+            assert page["eof"], page
+            values = selected_context_values(page["content"])
+            current_context, current_control = (values[pointer] for pointer in pointers)
+        else:
+            current_context, current_control = reference["replan_context"], reference["stride_control"]
+        assert current_context["obligation_id"] == transition["obligation_id"]
+        assert "Minimize route cost" in current_context["core_goal"]["objective"]
+        assert current_context["context_id"] == current_control["reference_context_id"]
+        assert current_context["context_id"] != control["reference_context_id"]
+        packet["stride_decision"] = stride_decision(current_control)
     vision.write_text(json.dumps(packet))
-    review_plan = review["interaction_contract"]["cli_channel"]["settlement_plan"]
-    acknowledged = execute(review_plan["ordered_steps"][1]["command_template"]
-        + " --agent-vision-json " + shlex.quote(str(vision)) + " --no-global-sync --suppress-external-sinks",
-        validated_progress="route_comparison_decided", scale="implementation", outcome="outcome_progress")
+    acknowledged = execute(decision_command, **decision_inputs)
     assert acknowledged["autonomous_replan_ack"]["semantic_delta"]["accepted"]
-    execute(review_plan["ordered_steps"][2]["command_template"])
+    execute(review_spend)
+    assert fixture._spend_run_count(runtime) == 2
     next_guard = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
         "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-2")
     assert next_guard["should_run"] and next_guard["selected_todo"]["todo_id"] == fixture.TODO_ID
@@ -210,6 +264,13 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     assert changed["candidate_sha256"] != observed["candidate_sha256"]
     assert json.loads((project / "probe-2.json.stdout").read_text()) == {"valid": True, "cost": 1}
     assert first["cost"] == 2  # Retain the original result; no hindsight rewrite.
+    result_read_id = next_guard["delivery_result_context"]["read_context_id"]
+    if preexisting_feedback:
+        code, refused_completion = fixture._run_cli(registry, runtime, "todo", "complete", *binding,
+            "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-2",
+            "--claim-operation-id", "route-original-execution", "--evidence", "probe:route-2",
+            "--delivery-read-context", result_read_id, cwd=project)
+        assert code == 1 and refused_completion.get("validation_blocked_completion"), json.dumps(refused_completion)
     terminal = dict(packet, state="no_followup", path_delta={"outcome": "stop",
         "prior_assumption": "The retained route could still be improved.",
         "observed_reality": "The direct route now has cost one.", "stopped": ["This comparison is complete."],
@@ -217,7 +278,9 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     terminal.pop("stride_decision", None)
     vision.write_text(json.dumps(terminal))
     refused_command = next_guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1][
-        "semantic_closeout_command_template"] + " --no-global-sync --suppress-external-sinks"
+        "semantic_closeout_command_template"] + " " + shlex.join([
+        "--delivery-read-context", result_read_id, "--no-global-sync", "--suppress-external-sinks",
+    ])
     for key, value in dict(validated_progress="unvalidated_completion", scale="implementation",
                            outcome="primary_goal_outcome", file=vision).items():
         refused_command = refused_command.replace("<" + key + ">", shlex.quote(str(value)))
