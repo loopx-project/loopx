@@ -20,7 +20,8 @@ import {todoUpdateAdmissionRejection} from "./todo_update_admission.ts";
 import { createHash } from "node:crypto";
 import {acceptanceWorkGuard, acceptanceCompletionRequirements, acceptanceCompletionEvidence,
   acceptanceCriterionFailure, acceptanceSourceBinding, acceptedCompletionResult,
-  acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
+  acceptanceValidationEffects, selectedWorkCompletionVerification,
+  type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -590,6 +591,15 @@ async function commitTerminalResult(
       events: [],
       receipts: [],
     };
+  if (result.changed === true && result.goal_acceptance_completion !== undefined) {
+    const verified = selectedWorkCompletionVerification(commit.next_projection, input.goal_id, input.todo_id,
+      input.operation_id, canonicalAuthorityObject(result.goal_acceptance_completion, "task acceptance evidence"));
+    if (verified !== null) {
+      commit.next_projection = {...commit.next_projection, goal_acceptance: verified};
+      const projectionDigest = canonicalAuthoritySha256(commit.next_projection);
+      commit.events = commit.events.map(event => ({...event, next_projection_sha256: projectionDigest}));
+    }
+  }
   commit.receipts = [{
     schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RECEIPT_SCHEMA,
     operation_id: input.operation_id,

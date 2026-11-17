@@ -301,6 +301,16 @@ Concurrent or repeated apply does not rerun a consumed intent; if a started chec
 has no matching native receipt, the result stays uncertain until explicitly
 reconciled. Readback never runs checks. A stored successful receipt cannot
 certify changed files, independent reviewer identity, adoption or Goal completion.
+Managed Chat preparation uses `loopx:python` to bind a pinned `.py` checker to
+the interpreter running LoopX. Resolution happens only at execution; the saved
+definition contains no machine path. Retrying an older saved preparation keeps
+its original argv and review basis.
+If a check contract selects a single Task and that Task passes every criterion
+with recorded oracle versions, its completion also records verification for
+that exact selected scope. Overview reads the original operation and artifact
+versions without running the checker again. A changed or unreadable artifact
+still invalidates the current pass in Overview. A broader contract or an
+incomplete set of versioned checks keeps its existing verification.
 A later finished/cancelled plan does not resurrect an older draft.
 
 Prepared plans bind the reviewed acceptance configuration and declared work,
@@ -342,7 +352,12 @@ Goal、Agent 与运行目录由宿主固定，暂停、过期 Turn 或撤销配�
 概览将同一个交付检查交互放在“方向”正文中，先于工作和成果列表；目标、条件和当前结果
 使用同一验收读回。桌面展开检查细节，窄屏默认折叠条件、版本记录与高级迁移入口，但不折叠
 必需动作、命令影响或失败反馈。已有配置的重查使用次要按钮，待采用方案保留明确的采用决定。
+当检查合同只选中一个任务，且该任务完成时通过全部条件并记录检查器与产物版本，任务完成会同步
+保存该范围的检查结果。概览直接读回原操作和产物版本。产物已变化或读不到时，概览会反映
+当前状态。范围更广或版本证据不全的合同保留已有验证记录。
 待采用方案绑定实际审阅的验收规则与工作声明；备注或明确范围外的工作变化，不要求重复准备。
+托管会话准备检查时用 `loopx:python` 将固定的 `.py` 检查器绑定到运行 LoopX 的解释器；
+执行时才解析，保存的定义不含本机路径。重试旧的已存方案仍保留其原命令与审阅依据。
 覆盖任务要求、所有者配置或 Goal 实例变化仍使方案失效。TypeScript 判断依据，写入继续使用
 当前 provider CAS；原操作与配置依据由原生回执保留。旧方案维持原来的严格版本检查。
 

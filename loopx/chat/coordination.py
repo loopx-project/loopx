@@ -10,9 +10,10 @@ from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
-import shutil
 import stat
 import sys
+
+from ..control_plane.goals.acceptance_oracle_io import ORACLE_HOST_PYTHON, oracle_host_python
 
 PROJECT_COORDINATION_GUIDANCE = (
     "This conversation concerns only the selected LoopX Goal. Read its current work, "
@@ -51,7 +52,7 @@ def check_preparation_tool():
         "Read retained requirements with loopx_context_read first. Select an existing "
         "independent checker from this Goal workspace using [python3, relative.py] or "
         "[relative/executable], without options or extra arguments. The host pins its "
-        "actual source bytes and verifies python3 resolves to the host interpreter. Each oracle "
+        "actual source bytes and uses the LoopX runtime's Python for Python scripts. Each oracle "
         "is {kind: owner_pinned_oracle, source_id, input_refs, output_refs}; name the "
         "explicit delivery files in output_refs. Do not invent a checker or replace "
         "owner intent. The host supplies Goal, Agent, workspace and runtime identity. "
@@ -169,12 +170,6 @@ class _GoalSessionCheckPreparation:
         if self._current_identity() != self.identity:
             raise ValueError("the original managed Goal lifetime or Agent scope changed")
 
-    @staticmethod
-    def _python_interpreter():
-        executable = shutil.which("python3")
-        if executable is None or Path(executable).resolve() != Path(sys.executable).resolve():
-            raise ValueError("the supported python3 token is unavailable for this host interpreter")
-
     def _document(self, document):
         # Accepted document syntax, requirements, scope and oracle semantics
         # remain with the TS owner. Only invocation/source IO is narrowed here.
@@ -189,10 +184,10 @@ class _GoalSessionCheckPreparation:
             argv = criterion.get("validation_argv")
             if (not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv)):
                 raise ValueError("select an immediate Python script or direct pinned executable")
-            if len(argv) == 2 and argv[0] in {"python", "python3", sys.executable} and argv[1].endswith(".py"):
+            python_tokens = {"python", "python3", sys.executable, ORACLE_HOST_PYTHON}
+            if len(argv) == 2 and argv[0] in python_tokens and argv[1].endswith(".py"):
                 source = argv[1]
-                self._python_interpreter()
-                criterion["validation_argv"] = ["python3", source]
+                criterion["validation_argv"] = [ORACLE_HOST_PYTHON, source]
             elif len(argv) == 1 and "/" in argv[0]:
                 source = argv[0]
             else:
@@ -227,8 +222,11 @@ class _GoalSessionCheckPreparation:
             if _workspace_file(self.workspace, source, required=True) != digest:
                 raise ValueError("the checker source changed during preparation")
             self._current()
-        if any(row["validation_argv"][0] == "python3" for row in criteria):
-            self._python_interpreter()
+        if any(row["validation_argv"][0] == ORACLE_HOST_PYTHON for row in criteria):
+            try:
+                oracle_host_python()
+            except FileNotFoundError as exc:
+                raise ValueError("the LoopX runtime's Python is unavailable") from exc
         return document
 
     def __call__(self, tool, arguments):
@@ -245,10 +243,18 @@ class _GoalSessionCheckPreparation:
                 raise ValueError("prepare_check accepts only its stable operation_id and acceptance document; the host supplies actor and source identity")
             document = self._document(arguments["document"])
             self._current()
+            # Resolve retries from before host-bound Python was explicit without
+            # replacing the original approved argv or review basis.
+            legacy_document = {**document, "criteria": [
+                {**row, "validation_argv": ["python3", row["validation_argv"][1]]}
+                if row["validation_argv"][0] == ORACLE_HOST_PYTHON else row
+                for row in document["criteria"]
+            ]}
             return prepare_acceptance_check(registry_path=self.registry_path,
                 runtime_root=str(self.runtime_root), goal_id=self.original["goal_id"],
                 agent_id=self.original["managed_agent_id"], document=document,
-                operation_id=arguments["operation_id"], execute=True)
+                operation_id=arguments["operation_id"], execute=True,
+                legacy_document=legacy_document)
         except (ActionConflictError, ValueError) as exc:
             return {"ok": False, "error": "collaboration_request_rejected",
                 "next_action": f"Check preparation was refused ({exc}). Read the original Goal and saved proposal; retry an operation only with unchanged intent and sources. A new intent needs a new operation id. Preparation cannot change authority or run the check."}

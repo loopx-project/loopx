@@ -1,7 +1,7 @@
 import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {Pause, Play, Settings2, Users, X} from "lucide-react";
-import {fetchLoopXMode, updateLoopXMode, fetchManagedTaskEntry, startManagedTaskTurn,
+import {fetchLoopXMode, updateLoopXMode, fetchManagedTaskEntry, readManagedTaskValidation, startManagedTaskTurn,
   type ManagedConversationTarget, type ManagedTaskEntry, type ManagedTaskTurn, type LoopXModeSnapshot, type LoopXModeSettings} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import {GoalTeamWork} from "./goal-team-work";
@@ -43,7 +43,8 @@ function observedTaskTurn(read: ManagedTaskEntry | null, attempt: TaskAttempt | 
 }
 
 function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["managed"]>) {
-  const zh = useWorkspaceI18n().locale === "zh-CN";
+  const {locale, t} = useWorkspaceI18n();
+  const zh = locale === "zh-CN";
   const storageKey = `loopx-managed-task:${JSON.stringify([target.goalId, target.agentId, target.sessionId])}`;
   const [retained, setRetained] = useState<{attempt: TaskAttempt | null; unreadable: boolean}>(() => {
     try {return {attempt: readTaskAttempt(storageKey), unreadable: false};} catch {return {attempt: null, unreadable: true};}
@@ -123,6 +124,8 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
   const creation = read?.task.creation_request;
   const originalCreation = creation && creation.operation_id === attempt?.operationId ? creation : undefined;
   const turn = observedTaskTurn(read, attempt);
+  const validation = !busy && attempt && turn?.client_turn_id === `managed.${attempt.operationId}`
+    && turn.loopx_request.todo_id === read?.task.todo_id ? readManagedTaskValidation(turn) : undefined;
   const creationPending = Boolean(originalCreation && !turn);
   const waiting = creationPending || Boolean(turn && !terminalTaskTurn(turn.status));
   const running = turn?.status === "running";
@@ -178,6 +181,7 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
         <ContextHelp label={zh ? "当前任务与检查" : "Current Task and checks"}>
           <p>{zh ? "在原会话推进当前任务，使用已确认的检查和现有额度。" : "Advance the current Task in its original conversation using its confirmed checks and existing allowance."}</p>
           {read?.task.state === "ready" ? <p>{zh ? `${read.task.observation.check_count} 项检查 · ${read.task.observation.pinned_file_count} 个固定来源文件` : `${read.task.observation.check_count} checks · ${read.task.observation.pinned_file_count} pinned source files`}</p> : null}
+          {validation && validation.status !== "passed" ? <p>{validation.summary}</p> : null}
         </ContextHelp>
         <button type="button" className="goal-loopx-primary" disabled={busy || waiting || !ready && !error}
           onClick={() => error ? setRefresh(value => value + 1) : void start()}>
@@ -187,6 +191,9 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
         </button>
       </div>
     </div>
+    {validation ? <p role="status" className="goal-loopx-task-check" data-status={validation.status}>
+      {t(`task.latestCheck.${validation.status}`)}
+    </p> : null}
     {error ? <p className="personal-composer-error" role="alert">{error}</p> : null}
     {read && !ready && (!waiting || creationPending && read.task.state === "ready") && !read.task.canonical_done
       ? <p role="status">{read.task.reason || read.reason || (zh ? "当前任务暂不能执行，请读取检查或原会话状态。" : "The Task cannot run yet. Read its checks or original conversation state.")}</p> : null}
