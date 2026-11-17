@@ -137,6 +137,41 @@ def test_explicit_candidates_do_not_discover_other_roots(tmp_path: Path, monkeyp
     ) == [root]
 
 
+def test_default_conflict_guides_status_to_each_registered_goal_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+):
+    current, _legacy = _conflicting_default_roots(tmp_path, monkeypatch)
+    registry, _source_runtime, _state = promoted_create_fixture(tmp_path / "source")
+    source_payload = json.loads(registry.read_bytes())
+    source_payload["goals"][0].update(
+        domain="software", adapter={"kind": "read_only_project_map_v0", "status": "connected-read-only"},
+    )
+    registry.write_text(json.dumps(source_payload), encoding="utf-8")
+    global_registry = _declare_target(current, registry)
+    global_payload = json.loads(global_registry.read_bytes())
+    global_payload["common_runtime_root"] = str(current)
+    global_registry.write_text(json.dumps(global_payload), encoding="utf-8")
+    monkeypatch.delenv("LOOPX_REGISTRY", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    args = ["--format", "json", "status", "--goal-id", DEFAULT_CONFLICT_GOAL]
+    with pytest.raises(SystemExit, match="Both default LoopX runtime roots") as conflict:
+        main(args)
+    assert main(["--registry", str(global_registry), *args]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["ok"] is True and status["contract"]["errors"] == []
+
+    assert main(["--registry", str(global_registry), "--runtime-root", str(current), *args]) == 1
+    forced = json.loads(capsys.readouterr().out)
+    assert forced.get("error_code") == "canonical_authority_required", forced
+    assert forced["authority_read"]["goal_id"] == DEFAULT_CONFLICT_GOAL
+
+    advice = paths.default_runtime_route()["recommended_action"]
+    assert "Use --registry alone" in advice
+    assert "explicit single-runtime" in advice
+    assert str(conflict.value).endswith(advice)
+
+
 @pytest.mark.parametrize("missing_path_key", ["json_path", "markdown_path"])
 def test_route_projection_with_missing_artifact_is_not_current(
     tmp_path: Path,

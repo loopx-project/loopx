@@ -27,6 +27,13 @@ establish an equal-budget efficiency gain or a general performance guarantee.
 
 ## Research Index
 
+- [Benchmark portfolio priority ranking and Bitter-Lesson boundary (2026-11)](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#38-external-benchmark-survey-and-priority-ranking-2026-11)
+  ([中文](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.zh-CN.md#38-外部-benchmark-调研与优先级排序2026-11-更新)):
+  updated P0/P1/P2/Control-Only ranking across EdgeBench and 20 external
+  benchmarks, engineering readiness and platform constraints, and the
+  Raw-Artifact Reset Baseline contract requiring matched, fully costed evidence
+  for causal claims while separating self-authored retrieval from the five
+  governed control-plane failure regimes.
 - [Budgeted research planning: goals, theory and design rationale](budgeted-research-planning.md)
   ([中文](budgeted-research-planning.zh-CN.md)): why conditional plans, costly
   measurements and causal comparisons serve better long-budget outcomes; links

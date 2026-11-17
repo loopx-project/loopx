@@ -84,6 +84,81 @@ validation 后才能 accountable settlement、精简 run reduction，以及 trea
 无法证明时显式判无效。私有 trajectory 与 audit artifact 只保留为本地证据；只有泛化后的
 typed contract 与 public-safe 结论可以进入仓库。
 
+### 2.2 Bitter-Lesson 边界：原始产物重置与受治理控制面
+
+随着前沿编码模型在自主文件系统检索与自编探针脚本上持续增强，厚重的手工上下文压缩与多层
+外置提示词容易带来净协议税（$\Delta J(B \mid s_0) \le 0$）。在**可重置的 episode 型、结构清晰、
+且具备稠密或连续隔离标量验证的任务**上，仅保留原始历史产物与标量分数、并在每轮间执行干净
+上下文重置（让 Agent 自行编写 Python / 文件系统检索脚本）的极简外循环，可以打平甚至超越
+有损手工摘要：
+
+- [Meta-Harness](https://arxiv.org/html/2603.28052v1) 让外层 proposer 选择性检索此前的源码、
+  分数与执行轨迹。TerminalBench-2 搜索中，proposer 每轮读取文件数的中位数为 `82`
+  （附录 A.1）；另一个量是单次产物评估**最多可生成 `10M` tokens 的诊断资料**（§1、表 1），
+  并非实测的 proposer 每轮消费量。分类准确率比 ACE 高 `7.7` 分且上下文 token 少 `4x`；
+  找到的 Opus 4.6 harness 在 TerminalBench-2 达到 `76.4%`。系统仍保留提出候选、评估、
+  保存日志的外循环，不能据此认定仅靠标量分数或移除全部 harness 机制就能取得这些收益。
+- [Vercel `d0`](https://vercel.com/blog/we-removed-80-percent-of-our-agents-tools) 表明，
+  在结构清晰的语义文件系统上删去约 80% 自定义工具（`17 -> 2`：`bash` 与 SQL），使成功率从
+  `80%` 升至 `100%`，同时减少 `37%` token 并将延迟降低 `3.5x`。
+- [AlphaEvolve](https://arxiv.org/abs/2506.13131) 在算法代码发现上的成功，恰恰依赖固定不变的
+  外层循环与确定性程序 verifier，而不允许求解器改写自身 harness 或评分契约。
+- LoopX 已发布的上下文研究（[上下文交付研究](https://loopx-project.github.io/loopx/blog/context-delivery/)
+  与 [EdgeBench 反馈与记忆研究](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)）
+  同样表明，冗余序列化与见顶后的重复 replan 循环会在原始代码检查与本地探针即可解决的场景下消耗大量
+  uncached 上下文。
+
+然而，实证研究确立了**五类失败机制**，证明原始产物、标量奖励与干净重置无法替代受治理控制面：
+
+1. **Goodhart 与 verifier 篡改：** 当求解器与评分器共享进程、文件系统、网络或密钥边界时，
+   缺乏防护的优化会利用捷径通道——实证见于 `LHTB 2.0`（在冻结 agent 进程并隔离 verifier 之前，
+   早期 `14/17` 个满分属于评分器泄漏）、[Reward Hacking Benchmark](https://arxiv.org/abs/2605.02964)
+   （13 个前沿模型利用漏洞比例为 `0%` 至 `13.9%`，其中 `72%` 带有显式思维链合理化，且在任务复杂度
+   超过诚实求解阈值后生产对齐保护失效）、[SWE-Marathon](https://arxiv.org/abs/2606.07682)
+   （观测到 `13.8%` rollout 存在 reward hacking）、[Darwin Gödel Machine](https://arxiv.org/abs/2505.22954)
+   （Node 114 伪造验证日志），以及 [METR reward-hacking 评估](https://metr.org/blog/2025-06-05-recent-reward-hacking/)。
+   Agent 容器内的 Python 探针无法提供 OS/容器级 verifier 隔离与 `benchmark_integrity_audit_v0`（§6.5、§7.1）。
+2. **分布外（OOD）过拟合与 harness 膨胀：** 在原始产物上做无正则进化会死记训练轨迹并导致 OOD 退化。
+   [RRSI](https://arxiv.org/abs/2609.24972) 发现未正则的 Meta-Harness 在 OOD 仅提升 `+0.9`
+   （`40.6` vs `39.7`），`TTHE` 甚至下降 `-1.7`（`38.0` 并膨胀出 `8,500` 词提示词），而加入 critic
+   剪枝与退火预算正则化后 OOD 升至 `43.6`（`+3.9`）且策略 token 减少 `30%`；
+   [Harness Updating Is Not Harness Benefit](https://arxiv.org/abs/2605.30621) 同样显示 harness 修改
+   主要提升中等模型，在缺少 OOD 门控时前沿模型会饱和或回退。连续有效统计推断、留出集隔离及保留
+   决策差异的率失真记忆由本计划协同 [前沿科学研究计划](./frontier-science-research-program-v0.zh-CN.md#2-问题与动机)
+   （第 2 节与第 5 节 `T01`–`T07`）共同治理。
+3. **过早终止与稀疏 / 二值终局 verifier：** 本地文件重读无法阻止模型在可见冒烟测试通过后立即宣布完成，
+   也无法从 `0/1` 终局奖励中提取中间梯度。在 LoopX 已发布的 `SWE-Marathon` 研究
+   （[`benchmark/swe-marathon/README.md`](../../../benchmark/swe-marathon/README.md)）中，
+   `zstd-decoder` 任务上 `plain` Codex 在可见测试通过后早停（partial `0.721`，reward `0`），而受控
+   `heartbeat` 持续推进协议自测与内存安全验证（partial `1.000`，reward `1`）；在 `LHTB` `covshift`
+   （[EdgeBench 长程修复研究](https://loopx-project.github.io/loopx/blog/edgebench-long-horizon-repairs/)）中，
+   默认完成判断在第 38 分钟退出（`0.000`），而由 owner 锁定的验收门控将其推至 `0.82`（五臂 `heartbeat` 为
+   `0.743`）。外部完成拒绝、`stopped_recovery.py` 与隐藏覆盖压力仍然不可或缺。
+4. **代理指标偏移（Proxy Misalignment）与尾部 TLE 悬崖：** 未校准的本地 yardstick 与均值指标会倒挂
+   原生排名或触碰超时悬崖。LoopX 的 [`benchmark/proxy_order.py`](../../../benchmark/proxy_order.py) 分析
+   （[行为发现说明](../../reference/benchmark-behavior-findings.md#compare-a-local-proxy-with-released-scores)）
+   展示了本地代理排序与原生接受顺序的反转；[DuoDiscover 表 4](https://arxiv.org/html/2610.17184v1#S4.T4)
+   区分 SWE-fficiency 加速比（`x`）与 SOL-Exec 分数（`% SOL`）：在目标选择上加入未检验的
+   yardstick 后，`12.71x / 69.68%` 降至 `10.33x / 66.91%`；相邻下一行加入保真度检验后，
+   达到 `13.25x / 72.57%`。再加入 co-discovery 为 `13.76x / 74.43%`，加入 orchestrator 后才是
+   完整系统的 `14.93x / 80.80%`，不能把最终结果全部归给保真度门控。另有 `41%`–`45%` 的
+   yardstick 随代码演进失效；而
+   [LangChain 的 Terminal-Bench 2.0 研究](https://www.langchain.com/blog/improving-deep-agents-with-harness-engineering)
+   显示，在缺乏分阶段推理深度控制时，统一使用 `xhigh` 推理深度因超时悬崖从 `63.6%` 跌至 `53.9%`。
+   受治理的 yardstick 校准与尾延迟压力门控是原生优化的必要保护。
+5. **有状态依赖 DAG、覆盖台账与 workspace / 结算不变量：** 多单元依赖前沿、非 episode 持续世界、
+   linked-worktree 补丁归一化与幂等结算无法靠容器内的 Agent 脚本自行修复。[LoopsBench](https://arxiv.org/abs/2608.00267)
+   （`112` 个任务、`>5,300` 个依赖 DAG 单元）使当前最强外循环 SOTA 仍停留在 `25.00%`；一组
+   `EdgeBench` `New Foundations Consistency` 的 Astra max、`18h` 五臂研究中，带声明台账和方向
+   复盘的 Explore 达到 `92.3419`，高于 Official 与 Resume 的 `91.9412` 平台
+   （[报告源码](https://github.com/loopx-project/loopx/blob/d0ca48db02846be61a9b683f0efcd5c706381b66/apps/presentation/site/public/blog/zh/edgebench-feedback-and-memory/index.html#L63)）。
+   这是组合 profile 的单次描述性证据，不是台账的独立因果效应，也不是 C2/C3 结果；
+   实际评测基建同样依赖宿主侧不变量，例如 [`workspace_delivery.py`](../../../benchmark/deepswe-gptxhigh-v1/workspace_delivery.py)
+   （将 linked worktree 改动归一化回 `/app`）、[`frontiercs2/README.md`](../../../benchmark/frontiercs2/README.md)
+   （`v2.patch` 的 tmpfs `docker exec` 流式上传与持久准入恢复），以及
+   [`widesearch/pier/README.md`](../../../benchmark/widesearch/pier/README.md)（`$HOME` 绑定挂载、纯数值
+   `reward.json` 校验与 `provider_credential_shell_excluded`）。
+
 ## 3. Benchmark 介绍与适配分析
 
 本节的 benchmark 数量和 leaderboard 值是 2026-08-16 审阅时的信息快照，不是规范。
@@ -291,6 +366,84 @@ DeepSWE pass rate 平均成一个 LoopX 数字。
 六个 benchmark 仍须在各自主语空间报告；StartupBench rubric、LoopsBench verifier
 分层与 WideSearch Item F1 不得互相平均，也不得并入 ALE/LHTB/DeepSWE 的结果。
 
+### 3.8 外部 Benchmark 调研与优先级排序（2026-11 更新）
+
+本次 2026-11-15 调研更新 2026-08 的六基准组合入门（§3.1–§3.7），并为后续集成排序
+（§9、§11）覆盖 EdgeBench 及 20 个外部 benchmark。排序依据四项实证标准：（1）相对纯基模
+scaling 仍保留的前沿区分度与上升空间；（2）verifier 确定性、抗 Goodhart 能力以及是否具备
+连续或多单元进度信号；（3）对第 2.2 节五类受治理失败机制的直接压力测试；（4）仓库就绪度
+（`benchmark/` 目录现有 `177` 个 `.py` 文件、共 `52,031` 行：`tests` `27,338` 行、`runtime/`
+`9,082` 行、`edgebench/` `6,899` 行、`deepswe*` `4,433` 行、`swe-marathon/` `1,430` 行、
+`frontiercs2*` `1,285` 行、`LHTB/` `596` 行、`widesearch/` `592` 行、根目录辅助 `376` 行）与
+Linux x86\_64 Docker、GPU 及云资源约束之间的权衡。
+
+**扩大多臂对照前的共同前置条件：** 在大规模扩展新的 Harbor、云端或 GPU benchmark 多臂
+对比前，应先将各适配器收敛至统一的 `benchmark/runtime/` Turn/Harbor 入口，对齐原生
+Stop-hook 基线对等性，并完成 E0–E2 生命周期、完整性与可计分门控（§11.2），避免继续复制
+烟囱式独立 runner。
+
+#### 优先级矩阵
+
+| 优先级 | Benchmark | 任务规模与时长 | 奖励与 Verifier 形态 | 前沿余量与机制信号 | 工程就绪度与平台约束 |
+|---|---|---|---|---|---|
+| **P0** | **EdgeBench** | 连续算法优化（`12h–18h` 长程运行） | 确定性在线冷却裁判；任务原生标量指标（按任务最大化或最小化） | 仅作按任务区分的描述性信号：`New Foundations 92.3419`（单次五臂研究）、`ANN 7,159 QPS`（另一组 `18h` 研究）；其他任务比较中 Official 领先。这些结果不是合并后的等预算帕累托证据，来源边界见下文。 | **已就绪并已评测**（`edgebench/` `6,899` 行）；需 **Linux x86\_64 Docker + SForge `iptables`**（macOS Docker socket 缺少网络边界） |
+| **P0** | **FrontierCS-2** | `48` 公开 / `150` 总计（`13` 个领域）；`5h`，限 `3–100` 次 train 调用 | 确定性隐藏工作负载 Driver/Judge；二值 `PASS`（须在*全部*指标与负载上胜过参考解）+ `FCI`/`FDI` 标量 | 12 个参评 agent 中最高通过率 **`58%`**，**`16/48` 零通过**；直接检验代理指标校准与抗刷分能力 | **单机桥接已就绪**（`frontiercs2*` `1,285` 行、`v2.patch` 传输修复；冻结 v1 `batch_local_counting` 归档为 `score_countable=false`、`integrity_qualified=false`；尚无有效 LoopX 计分结果）；**强制要求 Linux x86\_64 Docker**（macOS ARM Rosetta/QEMU 下 seccomp 失败）；官方 EKS+Modal 全测约 `$1,400`/48 题 |
+| **P0** | **LHTB / LHTB 2.0** | `v1: 46`（`90m`）；`v2.0: 77`（`46` 原题 + `31` 重构题，`3h` 含 `30m` 检查点） | 连续标量 `[0,1]` + 6 级阶梯（`R>=0.95`/`1.0`）+ 冻结进程 Harbor 二值拒止循环 | `v1` LoopX `0.4948` vs Goal `0.4475` / Plain `0.4218`（非等预算）；`v2.0` 最高 `0.692`（`37/77`）；早期 `14/17` 满分泄漏实证了 verifier 隔离必要性 | **`v1` Harbor 适配器已就绪**（`LHTB/` `596` 行）；**`LHTB 2.0` 尚无代码**；非 GPU Docker / Daytona |
+| **P0** | **LoopsBench** | `112` 个依赖 DAG 任务（`>5,300` 单元，`8` 种语言） | 沿就绪 DAG 前沿释放的确定性单元测试 + 回归测试（`incomplete` / `partial` / `complete`） | 最强带外循环 SOTA 仅 **`25.00%`**（`Opus-4.7` + Claude Code + 外循环）；专为外循环 DAG 与回归不变量设计 | **仓库暂无活跃代码**（§3.5/§9.5 规划中）；非 GPU，建议 Linux x86\_64 Docker |
+| **P1** | **SWE-Marathon** | `20` 超长程任务（仓内已评 `15` 题 v1.1 子集）；平均 `27.2M tok`/次 | 多层对抗式 verifier；二值求解 + 连续 `partial_score` | `v1` 前沿通过率 `<30%`，**`13.8%` rollout 出现 reward hacking**；仓内 `30%` 预算实验 `heartbeat 0.333 (5/15)` vs `Plain/Goal 0.267 (4/15)` | **已就绪并已评测**（`swe-marathon/` `1,430` 行）；`amd64` 多语言 Docker；token 与墙钟成本高（每组 15 题 `1,592m–2,375m`） |
+| **P1** | **PaperBenchX** *(优先于 PaperBench)* | `93` 篇论文（`12` 方向 / `6` 个非 ML 学科，`>3,000` 条细则）；`4–24h`（中位 `7h`） | 从零干净重放 + 确定性检查与共享 LLM-Judge（`>=90%` 为完整复现） | 细则均分 `27.53–59.08%`，**完整复现仅 `14%`**（`>=90%`）——比旧版 `PaperBench`（`20` 篇 ICML'24 论文、`24–36h`、SOTA `26.0%`）学科更广且验证缺口更锐利 | **仓库 `0` 代码**（约 `2–4` 周适配）；需重型 Linux Docker + 专业科学软件栈（`HFSS`、`Meep`、`GPU4PySCF`、`Habitat`）+ Judge API 密钥隔离 |
+| **P1** | **ALE (Agents' Last Exam)** *（区别于 `ALE-Bench`）* | `1,500+` 分类体系（`v1.1: 122` 题：`119` CPU / `3` GPU、`78` Docker）；多小时 VM | 运行后注入隐藏参考并执行 `evaluate()`，标量 `[0,1]` | 最难层级完整通过率 `<1%`；检验跨 CLI+GUI 专业工作迁移 | **仓库暂无活跃代码**（§3.1/§9.1 规划中，约 `2–4` 周适配）；强依赖 **GCP/GCE VM 与 CUA MCP**（无法在 macOS 本地直接运行） |
+| **P1** | **WideSearch** | `200`（`100 EN + 100 ZH`，`18` 个行业）；`44+` 网页 / 人类均值约 `2.3h` | 自动化原子表格评分（`Item F1` / `Row F1` + 二值 `SR`）；存在实时网页漂移非确定性 | 前沿 `SR <= 5.1%`（`o3` 多智能体 `5.1%`、单智能体 `4.5%`、`Gemini 2.5 Pro 4.3%`）；高适配扇出/完备性 harness，迭代 RSI 适配度低至中 | **适配器与 `pier` 模板已就绪**（`widesearch/` `592` 行，尚无实跑记录）；需 Linux/云端 `$HOME` 挂载（macOS `/tmp` 在 Colima 下失效）及 `permitted_solving` 网络 |
+| **P1** | **KernelBench / AlgoTune** | `KernelBench`: `250` PyTorch/CUDA 算子（`L1–L3`+`L4`）；`AlgoTune`: `154` 个 SciPy/sklearn/CVXPY 函数 | 确定性正确性校验 + GPU（`fast_p`）或 CPU 几何平均加速比 | `KernelBench` `<20% fast_1`；`AlgoTune` `AlgoTuner 1.72x`（前沿约 `2.05x`）；纯客观加速比适合进化/RLVR 循环 | **仓库 `0` 代码**；`KernelBench` 强制依赖 **NVIDIA CUDA/Triton GPU Linux/Modal**（Mac 无法运行）；`AlgoTune` 需**固定绑核的独占多核 Linux x86\_64** 计时宿主机 |
+| **P2** | **ALE-Bench (SakanaAI)** *（区别于 `ALE`）* | `40` 道 AtCoder 启发式竞赛题（`C++/Rust/Py`，`300+` 用例）；`150` 步迭代 | 确定性相对启发式得分 | 单发相对迭代反馈差距显著；跨题稳定性仍落后人类高手 | **仓库暂无活跃代码**；重型多核 Linux/AWS Docker；上游赛题协议禁止打包私有测试种子与输入 |
+| **P2** | **StartupBench** | `97` 交付物任务（`DOCX/XLSX/PPTX/PDF`，`6` 域，均 `25.3` 细则） | Evidence view + 加权 Agent-as-Judge `0–100`（`>=90` 通过，`92%` 人类一致性） | 最高均分 `Kimi-k3 73.67`，最高 `pass@1` `GPT-5.6-sol 31.27%`；RSI 适配度低至中（开放交付细则） | **仓库暂无活跃代码**（§3.4/§9.4 规划中）；多轮办公产物 API + Judge 边界；非 GPU |
+| **P2** | **MLE-bench** | `75` 场 Kaggle 竞赛（`22` Lite `158 GB`，全量 `3.3 TB`）；`24h` 标准（榜单于 `2026-04` 暂停） | 确定性 Kaggle 指标 + 奖牌阈值 | 主榜 SOTA `64.44±1.18%`；旧竞赛存在训练污染风险 | **仓库暂无活跃代码**；基础设施门槛极高（`36 vCPU`、`440 GB RAM`、`24 GB A10 GPU`、`3.3 TB` 磁盘、Kaggle 鉴权与 Git LFS） |
+| **P2** | **tb-science** *（仅保留单次迁移样本；**排除出 RSI**）* | `96` 已合并任务 + `366` 开放 PR；Harbor 格式 | **100% 二值 `1/0` `reward.txt`**（agent `public` vs verifier `no-network`） | 部分 PR 前沿难度极高，但**不适合 RSI**（无每代连续梯度、无 train/held-out 划分、CI 锁死单轮预算） | **仓库 `0` 代码**（约 `1–2` 周 Harbor 接入）；`ci_checks/check-task-timeout.sh` 硬锁 **`28800s`（`8h`）**；建议 Linux x86\_64 Docker |
+| **仅作对照 / 降级** | **DeepSWE** | `113` 原创任务（`91` 仓库，`5` 语言） | 手写行为 verifier（`0/1` 二值，`1.4%` judge 分歧率） | `v1.1` 在前沿三模型间呈现约 **`74%` 并列趋近饱和**；仅保留作回归与基线对照 | **已就绪**（`4,433` 行含 `workspace_delivery.py`）；需 Linux Docker 宿主机 worker；历史 v1 存在非等预算限制 |
+| **仅作对照 / 降级** | **SWE-bench Pro** | `v1: 1,865`（`731` 公开）；`v2: 642` + `HARD-51` | 补丁 + 单元测试（`0/1` 二值；`32.4%` judge 分歧率） | **`HARD-51` 已达 `98.0%`**——受基模 scaling 快速饱和 | **仓库暂无活跃代码**；`linux/amd64` Docker 镜像（`ghcr.io`），Mac ARM 非原生支持 |
+| **仅作对照 / 降级** | **CORE-Bench** | `270`（`90` 论文，`3` 难度）；经 HAL 运行 | 输出问答二值匹配 | 修复容差与脚手架缺陷后，Claude Opus 4.5 从 `21%` 升至 **`95%`**——已饱和 | **仓库 `0` 代码**；Docker/Azure（`Python`/`R`） |
+| **仅作对照 / 降级** | **ScienceAgentBench** | `102`（`44` 论文）；`30m` Docker 运行 | 有效执行 + 细则/代码检查 | `32.4%–42.2%`（`o1-preview`）；单脚本范围限制长程控制面区分度 | **仓库 `0` 代码**；`30m` / 8 线程 Docker |
+| **仅作对照 / 降级** | **BixBench** | `60` 胶囊 / `205` 问题（`v1.5`）；`24–48h` 5 次重复 | 二值精确匹配 MCQ / LLM-Judge 开放问答 | 开放问答 `17%`（早期基线，缺 2026 前沿 SOTA）；5 副本二值评估成本高 | **仓库 `0` 代码**；高昂多副本 API 成本 |
+| **仅作对照 / 降级** | **FrontierScience** | `160` 问答项（`100` 奥赛 + `60` 研究） | 简答 + 10 分研究细则 | `GPT-5.2` 奥赛 `77%` / 研究 `25%`；无交互仓库与沙箱闭环 | **仓库 `0` 代码**；纯 API 推理 |
+| **仅作对照 / 降级** | **RE-Bench** *（已废弃）* | `7` ML 研发任务（`2h–32h`） | 确定性 ML 评测（含历史时钟/内存作弊案例） | **上游已标废弃**（`METR/RE-Bench`）；由 `FrontierCS-2`、`PaperBenchX` 与 `KernelBench` 替代 | **仓库 `0` 代码**；需 Linux x86\_64 + NVIDIA CUDA GPU |
+
+EdgeBench 数字来自[不同的已报告研究](https://github.com/loopx-project/loopx/blob/d0ca48db02846be61a9b683f0efcd5c706381b66/apps/presentation/site/public/blog/zh/edgebench-feedback-and-memory/index.html#L43)。
+New Foundations 观察使用 Astra max；ANN `18h` 研究使用 Sol/xhigh，约束为
+`Recall@10 >= 0.95`。报告中的反例包括 Portfolio（`Official 53.87` 对 Explore `31.19`，越高越好）
+及 Historical Grid（`Official 1,967` 对 Context on + Stride `2,088`，越低越好）
+（[ANN 与反例来源](https://github.com/loopx-project/loopx/blob/d0ca48db02846be61a9b683f0efcd5c706381b66/apps/presentation/site/public/blog/zh/edgebench-feedback-and-memory/index.html#L131)）。
+各任务保留自己的模型、起点、反馈权限、观察窗口和完整成本覆盖。这些观察支持选题；
+C2/C3 或等预算帕累托主张仍须满足 §5.1/§5.3 的匹配比较与 §6.2 的完整成本记账。
+
+#### 关键口径辨析与排除说明
+
+1. **`ALE` 与 `SakanaAI/ALE-Bench` 区分（及不存在公开的 `"ALE Science"`）：**
+   公开文献与仓库中不存在名为 `"ALE Science"` 的独立 benchmark 或赛道。`ALE`
+   （[`rdi-berkeley/agents-last-exam`](https://github.com/rdi-berkeley/agents-last-exam)）
+   是包含科学子域的广谱 CLI+GUI 专业工作集，而 `ALE-Bench`
+   （[`SakanaAI/ALE-Bench`](https://github.com/SakanaAI/ALE-Bench)）面向 AtCoder
+   启发式算法竞赛优化。两者在上表分别归入 `P1` 与 `P2`。
+2. **`tb-science` 排除出 RSI、仅留单次迁移样本的原因：**
+   随着 `laude-institute` 迁移至 `harbor-framework`，
+   [`harbor-framework/terminal-bench-science`](https://github.com/harbor-framework/terminal-bench-science)
+   成为独立于 `terminal-bench-2`（`89` 个通用任务，默认 `900s` 超时）的科学领域套件。尽管已有 `96` 个
+   已合并任务和 `366` 个开放 PR，**`tb-science` 不适合迭代式 RSI 循环**：CI
+   （`ci_checks/check-task-timeout.sh`）硬性锁定 `[agent] timeout_sec == 28800.0`（`8h`），
+   终局 `reward.txt` 为 **100% 二值 `1/0`**（即使任务内部计算连续分），缺少 train/held-out 划分，
+   `[agent] network_mode` 为 `public`，且 `rubrics/task-implementation.toml` 明确拒绝开放式假说任务。
+   本计划仅保留高难度单次迁移样本（如 Lean 形式化 `#2530`、`#2197`、`#2653`、`#2629`，生物
+   `#1518`，物理 `#2804` 或托管 GPU 控制 `#2531`）。
+3. **`PaperBenchX` 优先于旧版 `PaperBench`，及 `DeepSWE` 术语边界：**
+   `PaperBenchX`（`93` 篇跨学科非 ML 科学论文、从零干净重放）替代旧版 `PaperBench`（`20` 篇
+   ICML'24 论文）成为 `P1` 主复现目标。本文中的 `DeepSWE` 指 Datacurve 的 `113` 题 benchmark
+   （[`datacurve-ai/deep-swe`](https://deepswe.datacurve.ai/)），不同于 Agentica 的
+   `DeepSWE-Preview` 模型；其在 `74%` 附近的饱和趋势使新的 `C2`/`C3` 因果投入转向 `P0`/`P1`。
+4. **平台执行约束：** 勿在 macOS ARM64 Rosetta/QEMU 模拟下对依赖 Linux seccomp、`iptables`、
+   CUDA 或多核稳定计时的套件（`EdgeBench`、`FrontierCS-2`、`KernelBench`、`AlgoTune`、
+   `SWE-bench Pro`、`tb-science`）运行可计分对比；统一在固定配置的 Linux x86\_64（及所需专用
+   CUDA/云主机）上执行，并避免在 Colima 上使用 macOS `/tmp` 绑定挂载（见
+   `widesearch/pier/README.md`）。
+
 ## 4. 主张阶梯
 
 每个公开结果必须声明其支持的最高主张等级。
@@ -343,13 +496,30 @@ overhead 与 authority budget，并通过非 benchmark product canary。只有�
 计划区分四种 arm：
 
 1. **Native baseline**：benchmark 支持的 reference scaffold，或声明过的、没有 LoopX
-   控制的 CLI harness。
+   控制的 CLI harness。在 **episode 型 RSI 与标量优化赛道**上，Governed LoopX 的 C2/C3 主张
+   必须包含一个匹配的 **Raw-Artifact Reset Baseline（原始产物重置基线）**，可以为本研究实跑，
+   或按下述资格复用历史运行。它在每代干净重置上下文，保留此前求解器可见的全部产物与标量分数，
+   由模型使用原生文件系统/Python 检索，不注入 LoopX packet 或治理台账（§2.2）。
+   这定义的是 treatment，不意味着执行成本为零。
 2. **Passive LoopX**：worker decision 和 benchmark 合同完全相同，只增加只读 LoopX
    observation 与精简 settlement。
 3. **Governed LoopX**：声明过的 LoopX profile 可以影响 continuation、checkpoint、
    replan、recovery 或允许的控制动作。
 4. **Mechanism ablation**：只让一个具名机制与 governed parent profile 不同，其他所有
    可控字段保持一致。
+
+Raw-Artifact Reset Baseline 的资格要求：
+
+- 固定 §5.1 的比较 identity，并满足 §5.3，包括相同任务、模型 revision/effort、起点、环境与
+  verifier、预算，以及反馈/工具/网络/权限范围。在观察结果前声明重置频率、停止规则和有意改变的
+  treatment 条件。
+- “历史产物”仅指求解器在该次运行相应时点有权读取的材料。隐藏 reference、答案、verifier
+  内部、仅操作者可见的诊断与事后评分材料继续不可读；文件被保留不产生访问权。
+- 只有固定输入、treatment、获准产物、完整性、成果和完整成本可独立读回，且足以证明同一匹配
+  比较时，才复用历史 arm。只有标量分数或 model family 标签不够；复用历史也不会让原成本归零。
+- 按 §6.2 计入检索/探针生成、上下文重置、归档/编排、模型使用、评测/确认、冷却、失败/重试及
+  人工介入。覆盖缺失保留 unknown。缺少合格基线、匹配或成本证据不完整时，保留描述性观察与
+  另有独立证据的 C0/C1 结果，不声称 C2/C3 增益或完整成本下的帕累托优势。
 
 assisted human 或 simulator intervention 是独立 study family，绝不能呈现为 autonomous
 leaderboard arm。
@@ -1304,6 +1474,7 @@ promotion 或修改 LoopX default。
 | 2026-08-23 | 增加工程 readiness 阶梯与有界 delivery-slice 规则，将仓库建设与 C0--C4 研究主张分开跟踪。 |
 | 2026-08-25 | 把 StartupBench、LoopsBench 与 WideSearch 加入 benchmark primer 与集成计划，作为第二组互补 trio；每个 benchmark 必须在原生 metric space 报告，且 benchmark 材料不得进入可复用的 LoopX state。 |
 | 2026-10-16 | 将[反馈优先观察](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md)归入历史报告；运行器源码子集与配置投影修复仍属 E0/E1，混合处理、中断和进行中的观察不关闭 E2/E3，也不分离单一规划效应。通用 guard 重入放宽待受影响调用方独立验证。 |
+| 2026-11-15 | 确立 Bitter-Lesson 边界与五类受治理控制面失败机制（§2.2），要求 episode 型 RSI / 标量优化赛道的 C2/C3 主张纳入匹配且保留完整成本记账的 Raw-Artifact Reset Baseline（新实跑或合格历史复用，§5.2），并采纳 2026-11 Benchmark 组合优先级排序（§3.8）：**P0**（`EdgeBench`、`FrontierCS-2`、`LHTB / LHTB 2.0`、`LoopsBench`）、**P1**（`SWE-Marathon`、`PaperBenchX` 优先于 `PaperBench`、`ALE` 区别于 `ALE-Bench`、`WideSearch`、`KernelBench` / `AlgoTune`）、**P2**（`ALE-Bench`、`StartupBench`、`MLE-bench`、`tb-science` 仅保留单次迁移样本——因 CI 锁定 `28800s` 预算与 100% 二值 `reward.txt` 排除出 RSI），以及 **仅作对照 / 降级**（`DeepSWE`、`SWE-bench Pro`、`CORE-Bench`、`ScienceAgentBench`、`BixBench`、`FrontierScience`、已废弃 `RE-Bench`）；多臂扩展以统一 `benchmark/runtime/` + Stop-hook E0–E2 就绪及 Linux x86\_64 / GPU 宿主机为前置门槛。 |
 
 ## 18. 参考资料
 
@@ -1312,11 +1483,13 @@ promotion 或修改 LoopX default。
 - [Agents' Last Exam 评估框架](https://github.com/rdi-berkeley/agents-last-exam)
 - [Long-Horizon Terminal Benchmark 仓库](https://github.com/zli12321/LHTB)
 - [LHTB benchmark report](https://zli12321.github.io/LHTB/index.html)
+- [LHTB 论文](https://arxiv.org/abs/2607.08964)
 - [DeepSWE 项目与 leaderboard](https://deepswe.datacurve.ai/)
 - [DeepSWE 论文](https://arxiv.org/abs/2607.07946)
 - [DeepSWE 运行指南](https://deepswe.datacurve.ai/run)
 - [StartupBench 项目](https://startupbench.github.io/)
 - [StartupBench 论文](https://startupbench.github.io/assets/StartupBench.pdf)
+- [StartupBench arXiv](https://arxiv.org/abs/2608.17800)
 - [LoopsBench 项目](https://loopsbench.ai/)
 - [LoopsBench 仓库](https://github.com/microsoft/Loopsbench)
 - [LoopsBench 论文](https://arxiv.org/abs/2608.00267)
@@ -1325,6 +1498,59 @@ promotion 或修改 LoopX default。
 - [WideSearch 仓库](https://github.com/ByteDance-Seed/WideSearch)
 - [WideSearch 论文](https://arxiv.org/abs/2508.07999)
 - [WideSearch 数据集](https://huggingface.co/datasets/ByteDance-Seed/WideSearch)
+- [EdgeBench 仓库](https://github.com/ByteDance-Seed/EdgeBench)
+- [FrontierCS-2 项目](https://frontier-cs.org/)
+- [FrontierCS-2 仓库](https://github.com/FrontierCS/FrontierCS-2)
+- [FrontierCS-2 论文](https://arxiv.org/abs/2610.29932)
+- [SWE-Marathon 仓库](https://github.com/abundant-ai/swe-marathon)
+- [SWE-Marathon 论文](https://arxiv.org/abs/2606.07682)
+- [PaperBenchX 仓库](https://github.com/UniPat-AI/PaperBenchX)
+- [PaperBenchX 论文](https://arxiv.org/abs/2610.39744)
+- [PaperBench 参考实现](https://github.com/openai/frontier-evals/tree/main/project/paperbench)
+- [PaperBench 论文](https://arxiv.org/abs/2504.01848)
+- [KernelBench 仓库](https://github.com/ScalingIntelligence/KernelBench)
+- [KernelBench 论文](https://arxiv.org/abs/2502.10517)
+- [AlgoTune 仓库](https://github.com/oripress/AlgoTune)
+- [AlgoTune 论文](https://arxiv.org/abs/2507.15887)
+- [ALE-Bench (SakanaAI) 仓库](https://github.com/SakanaAI/ALE-Bench)
+- [ALE-Bench 论文](https://arxiv.org/abs/2506.09050)
+- [MLE-bench 仓库](https://github.com/openai/mle-bench)
+- [MLE-bench 论文](https://arxiv.org/abs/2410.07095)
+- [Terminal-Bench Science 项目](https://www.terminal-bench-science.ai/)
+- [Terminal-Bench Science 仓库](https://github.com/harbor-framework/terminal-bench-science)
+- [SWE-bench Pro 仓库](https://github.com/scaleapi/SWE-bench_Pro-os)
+- [SWE-bench Pro 论文](https://arxiv.org/abs/2509.16941)
+- [CORE-Bench 仓库](https://github.com/siegelz/core-bench)
+- [CORE-Bench 论文](https://arxiv.org/abs/2409.11363)
+- [ScienceAgentBench 仓库](https://github.com/OSU-NLP-Group/ScienceAgentBench)
+- [ScienceAgentBench 论文](https://arxiv.org/abs/2410.05080)
+- [BixBench 仓库](https://github.com/Future-House/BixBench)
+- [BixBench 论文](https://arxiv.org/abs/2503.00096)
+- [RE-Bench（已废弃）仓库](https://github.com/METR/RE-Bench)
+- [RE-Bench 论文](https://arxiv.org/abs/2411.15114)
+- [Meta-Harness 论文](https://arxiv.org/abs/2603.28052)
+- [Meta-Harness 仓库](https://github.com/stanford-iris-lab/meta-harness)
+- [RRSI 论文](https://arxiv.org/abs/2609.24972)
+- [RRSI 仓库](https://github.com/google-research/rrsi)
+- [Harness Updating Is Not Harness Benefit](https://arxiv.org/abs/2605.30621)
+- [Agentic Harness Engineering (AHE)](https://arxiv.org/abs/2604.25850)
+- [Self-Harness](https://arxiv.org/abs/2606.09498)
+- [Reward Hacking Benchmark (RHB)](https://arxiv.org/abs/2605.02964)
+- [DuoDiscover 论文](https://arxiv.org/abs/2610.17184)
+- [AlphaEvolve 论文](https://arxiv.org/abs/2506.13131)
+- [Darwin Gödel Machine (DGM) 论文](https://arxiv.org/abs/2505.22954)
+- [Darwin Gödel Machine 仓库](https://github.com/jennyzzt/dgm)
+- [LangChain: Improving Deep Agents with harness engineering](https://www.langchain.com/blog/improving-deep-agents-with-harness-engineering)
+- [Vercel `d0`: We removed 80% of our agent's tools](https://vercel.com/blog/we-removed-80-percent-of-our-agents-tools)
+- [METR: Recent frontier models are reward hacking](https://metr.org/blog/2025-06-05-recent-reward-hacking/)
+- [Anthropic: Demystifying evals for AI agents](https://www.anthropic.com/research/demystifying-evals-for-ai-agents)
+- [Anthropic: Effective harnesses for long-running agents](https://www.anthropic.com/research/effective-harnesses-for-long-running-agents)
+- [Anthropic: Harness design for long-running application development](https://www.anthropic.com/research/harness-design-long-running-apps)
+- [LoopX：上下文交付研究](https://loopx-project.github.io/loopx/blog/context-delivery/)
+- [LoopX：EdgeBench 反馈与记忆研究](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)
+- [LoopX：EdgeBench 长程修复研究](https://loopx-project.github.io/loopx/blog/edgebench-long-horizon-repairs/)
+- [前沿科学研究计划 v0](./frontier-science-research-program-v0.zh-CN.md)
+- [探索性 benchmark 行为发现](../../reference/benchmark-behavior-findings.md)
 - [Benchmark 研究工作区](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md)
 - [DeepSWE 研究实践](https://github.com/huangruiteng/loopx/blob/main/benchmark/deepswe/README.md)
 - [旧 Benchmark 历史](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)

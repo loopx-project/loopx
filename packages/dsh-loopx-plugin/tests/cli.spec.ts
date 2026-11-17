@@ -98,14 +98,14 @@ describe('runJsonCommand', () => {
           probes += 1
           controller.abort()
           if (outcome === 'rejected-probe') throw new Error('probe closed during cancellation')
-          return { exitCode: outcome === 'valid-version' ? 0 : 1, stdout: 'loopx 1.2.4\n', stderr: '' }
+          return { exitCode: outcome === 'valid-version' ? 0 : 1, stdout: 'loopx 2.4.0\n', stderr: '' }
         },
       })).rejects.toMatchObject({ kind: 'aborted', retryable: false })
       expect(probes).toBe(1)
     },
   )
 
-  it.each(['0.5.4', '1.2.3', '1.2.4rc1', '1.2.4.dev1', 'smoke', '1.2.4unknown'])(
+  it.each(['0.5.4', '1.2.3', '1.2.4', '2.4.0rc1', '2.4.0.dev1', '2.3.0', 'smoke', '2.4.0unknown'])(
     'rejects unavailable or pre-fix CLI version %s', async version => {
       await expect(resolveLoopXCommand({
         env: { LOOPX_BIN: 'configured-loopx' },
@@ -114,7 +114,7 @@ describe('runJsonCommand', () => {
     },
   )
 
-  it.each(['1.2.4', '1.2.4+local', '1.2.4.post1', '1.2.5rc1', '2.0.0.dev1'])(
+  it.each(['2.4.0', '2.4.0+local', '2.4.0.post1', '2.4.1rc1', '3.0.0.dev1'])(
     'accepts CLI release %s at or after the fixed floor', async version => {
       const command = await resolveLoopXCommand({
         env: { LOOPX_BIN: 'configured-loopx' },
@@ -128,7 +128,7 @@ describe('runJsonCommand', () => {
     const command = await resolveLoopXCommand({
       env: { PYTHON_BIN: 'fixture-python', LOOPX_BIN: '' },
       runner: async file => ({
-        exitCode: 0, stdout: `loopx ${file === 'loopx' ? '1.2.3' : '1.2.4'}\n`, stderr: '',
+        exitCode: 0, stdout: `loopx ${file === 'loopx' ? '2.3.0' : '2.4.0'}\n`, stderr: '',
       }),
     })
     expect(command.file).toBe('fixture-python')
@@ -141,7 +141,7 @@ describe('runJsonCommand', () => {
       env: { LOOPX_BIN: '' },
       runner: async (file, args) => {
         attempted.push(`${file} ${args.join(' ')}`)
-        if (file === 'python') return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        if (file === 'python') return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
         throw new LoopXCliError('missing', 'missing', false)
       },
     })
@@ -159,7 +159,7 @@ describe('runJsonCommand', () => {
       runner: async (file, args) => {
         expect(file).toBe(configured)
         expect(args).toEqual(['--version'])
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       },
     })
 
@@ -174,7 +174,7 @@ describe('runJsonCommand', () => {
         if (file === 'loopx') return { exitCode: 127, stdout: '', stderr: '' }
         expect(file).toBe(python)
         expect(args).toEqual(['-m', 'loopx.cli', '--version'])
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       },
     })
 
@@ -189,7 +189,7 @@ describe('runJsonCommand', () => {
       runner: async (file, args) => {
         expect(file).toBe(python)
         expect(args).toEqual([launcher, '--version'])
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       },
     })
 

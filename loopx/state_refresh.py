@@ -888,6 +888,13 @@ def refresh_state_run(
                 goal_ref=goal_ref,
                 source_admission=source_admission,
                 borrow_source_admission=source_admission is not None,
+                # refresh-state closes the exact admitted Turn.  A semantic
+                # replan may retain ``--todo-id`` as its planning selection
+                # while the immutable settlement identity is the replan
+                # obligation recorded by quota should-run.  Resolve that
+                # original receipt binding, while the read model still rejects
+                # a different Todo or obligation.
+                resolve_original_binding=True,
                 refresh_retry=(refresh_retry_request := {
                     "checkpoint_read_context_id": checkpoint_read_context_id,
                     "external_delivery": external_delivery,

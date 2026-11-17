@@ -12,12 +12,12 @@ const port = Number(values.port);
 if (!values.policy || !values.cert || !values.key || !Number.isSafeInteger(port) || port < 0 || port > 65535 ||
     !process.env.LOOPX_AUTHORITY_DATABASE_URL) throw new Error("Provide policy, TLS certificate/key and service-owned database configuration");
 // Validate before listening; updates are read again for each admission.
-await readRemoteAuthorityPolicy(values.policy);
+const policy = await readRemoteAuthorityPolicy(values.policy);
 const pool = new Pool({connectionString: process.env.LOOPX_AUTHORITY_DATABASE_URL,
   max: 8, connectionTimeoutMillis: 2000, query_timeout: 6000, idleTimeoutMillis: 10000,
   statement_timeout: 5000, lock_timeout: 2000, idle_in_transaction_session_timeout: 10000});
 pool.on("error", () => process.stderr.write("Authority database connection unavailable\n"));
-const service = new RemoteAuthorityService({admit: fileRemoteAuthorityAdmission(values.policy),
+const service = new RemoteAuthorityService({admit: fileRemoteAuthorityAdmission(values.policy, String(policy.schema_version)),
   database: {connect: async () => {
     const connection = await pool.connect();
     return {query: (sql, args) => connection.query(sql, args ? [...args] : undefined),

@@ -236,8 +236,9 @@ def default_runtime_route() -> dict[str, object]:
     recommended_action = None
     if status == "conflict":
         recommended_action = (
-            "Select one registry with --registry/--runtime-root; "
-            "inspect both roots before migration."
+            "Use --registry alone with a concrete registry file that declares its runtime "
+            "to follow the registered Goal sources. Use --runtime-root for an explicit "
+            "single-runtime operation. Inspect both roots before migration."
         )
     elif status == "invalid":
         recommended_action = (
@@ -271,10 +272,7 @@ def select_default_runtime_root() -> Path:
             if route["target_registry_exists"] and route["legacy_registry_exists"]
             else "Both default LoopX runtime roots contain state."
         )
-        raise ValueError(
-            f"{conflict} Select an explicit --registry and "
-            "--runtime-root; resolve the route conflict before using implicit defaults."
-        )
+        raise ValueError(f"{conflict} {route['recommended_action']}")
     if route["status"] == "invalid":
         raise ValueError(str(route["recommended_action"]))
     return Path(str(route["selected_runtime_root"]))

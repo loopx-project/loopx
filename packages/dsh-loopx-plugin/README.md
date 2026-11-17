@@ -61,15 +61,16 @@ copy under `$DSH_AGENTS_HOME/runtime/dsh-loopx-plugin` (default
 `~/.agents/runtime/dsh-loopx-plugin`) and never mutates the system Python
 environment. This works with externally managed Python distributions that
 enforce PEP 668; the plugin does not use `--break-system-packages`.
-This version requires LoopX 1.2.4 or newer, the published release that
-includes the Windows peer-file fix. Bootstrap, Driver and GoalBar use the same
+The next plugin release requires LoopX 2.4.0 or newer for the original-Turn
+`quota receipt` reader. Publish the matching Core release before distributing
+the plugin; published LoopX 2.3.0 does not provide that command.
+Bootstrap, Driver and GoalBar use the same
 version floor; an older global or managed CLI is upgraded or rejected before
 business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
 owner. Older plugin releases retain their original CLI requirements.
-The continuation driver follows LoopX's context delivery setting on CLI 2.3
-and later. When the guard returns a capture reference, the driver reads the
-admission fields from that same capture. The driver requests raw admission
-JSON from older supported CLIs.
+The continuation driver follows LoopX's context delivery setting.
+When the guard returns a capture reference, the driver reads the
+admission fields from that same capture.
 Install the prebuilt release into the web profile:
 
 ```bash
@@ -491,7 +492,7 @@ The repair command has no arguments. Extra input returns a usage error before an
 model work or CLI probe. A valid invocation queues a bounded start followup on
 the exact receiving Agent, then probes the current LoopX installation. When the
 CLI is missing or lacks the DSH-native skill contract, it runs exactly one
-fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=1.2.4'`, writes a
+fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=2.4.0'`, writes a
 small managed Python launcher beside that target, then uses that same
 interpreter and launcher to install and read back the skills. Driver and
 GoalBar resolve this same managed runtime, including after an explicit repair.

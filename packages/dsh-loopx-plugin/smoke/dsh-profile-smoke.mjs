@@ -212,7 +212,7 @@ async function exerciseInstalled(installed) {
         throw new hostModule.LoopXCliError('aborted', 'cancelled', false)
       }
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       }
       if (args.includes('--install')) {
         return {

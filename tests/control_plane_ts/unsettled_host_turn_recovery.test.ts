@@ -508,6 +508,38 @@ test("an admitted Todo-bound replan without verified writeback does not hold a l
   }
 });
 
+test("an admitted obligation-bound replan without verified writeback does not hold a later guard", async () => {
+  const turn = "turn-replan";
+  const replanId = `replan-${"c".repeat(16)}`;
+  const identity = settlementIdentity({
+    goal_id: GOAL,
+    agent_id: AGENT,
+    replan_obligation_id: replanId,
+    turn_instance_id: turn,
+  });
+  const runtime = await runtimeWith([
+    receipt(turn, {
+      replan_obligation_id: replanId,
+      semantic_replan_obligation_id: replanId,
+      settlement_effect_id: identity.effect_id,
+      closeout_required: false,
+      ok: true,
+      should_run: true,
+      interaction_mode: "autonomous_replan",
+      must_attempt_work: true,
+      delivery_allowed: false,
+      quiet_noop_allowed: false,
+    }),
+  ]);
+  try {
+    const result = await preflight(runtime.root);
+    assert.equal(result.status, "none");
+    assert.equal(result.reason, "no_prior_turn_requires_closeout");
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("the current Turn, other goals, other agents, and other event kinds are ignored", async () => {
   const runtime = await runtimeWith([
     receipt("current-turn", closeoutRequired("current-turn", "todo_current")),
@@ -1091,6 +1123,71 @@ test("an autonomous replan binding recovers without a Todo binding", async () =>
     assert.equal(recovery.binding_id, replanId);
     assert.equal((verdict.obligation as JsonObject).repair, "lifecycle");
     assert.equal("binding_task_class" in recovery, false);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("an admitted obligation-bound replan with writeback resumes its original debit", async () => {
+  const turn = "turn-replan-writeback";
+  const replanId = `replan-${"d".repeat(16)}`;
+  const identity = settlementIdentity({
+    goal_id: GOAL,
+    agent_id: AGENT,
+    replan_obligation_id: replanId,
+    turn_instance_id: turn,
+  });
+  const runtime = await runtimeWith([
+    receipt(turn, {
+      replan_obligation_id: replanId,
+      semantic_replan_obligation_id: replanId,
+      settlement_effect_id: identity.effect_id,
+      closeout_required: false,
+      ok: true,
+      should_run: true,
+      interaction_mode: "autonomous_replan",
+      must_attempt_work: true,
+      delivery_allowed: false,
+      quiet_noop_allowed: false,
+    }),
+    {
+      schema_version: "loopx_rollout_event_v0",
+      event_id: "event-replan-writeback",
+      event_kind: "refresh_state",
+      goal_id: GOAL,
+      agent_id: AGENT,
+      run_id: turn,
+      details: {settlement_effect_id: identity.effect_id},
+    },
+  ]);
+  try {
+    const runsRoot = join(runtime.root, "goals", GOAL, "runs");
+    await mkdir(runsRoot, {recursive: true});
+    await writeFile(join(runsRoot, "index.jsonl"), `${JSON.stringify({
+      classification: "state_refreshed",
+      delivery_outcome: "outcome_progress",
+      goal_id: GOAL,
+      agent_id: AGENT,
+      replan_obligation_id: replanId,
+      turn_instance_id: turn,
+      settlement_identity: identity,
+    })}\n`);
+
+    const result = await preflight(runtime.root);
+    const candidate = candidateFrom(result);
+    assert.equal(candidate.binding_kind, "autonomous_replan");
+    assert.equal(candidate.binding_id, replanId);
+    assert.equal(candidate.admitted_replan, true);
+    assert.deepEqual(result.missing_receipts, ["quota_spend_receipt"]);
+
+    const verdict = reduce(
+      candidate,
+      result.missing_receipts as string[],
+      READ_TODO(null),
+    );
+    assert.equal(verdict.status, "recovery_required");
+    assert.equal((verdict.recovery as JsonObject).repair, "resume_prior_turn");
+    assert.equal((verdict.obligation as JsonObject).repair, "resume_prior_turn");
   } finally {
     await runtime.close();
   }
