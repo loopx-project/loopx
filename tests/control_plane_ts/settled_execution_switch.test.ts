@@ -5,6 +5,7 @@ import {join} from "node:path";
 import test from "node:test";
 
 import {settlementIdentity} from "../../loopx/control_plane/effect_program.ts";
+import {ClaimExecutionSwitchRejected} from "../../loopx/control_plane/coordination/claim_execution.ts";
 import {verifySettledExecutionSwitch} from "../../loopx/control_plane/coordination/settled_execution_switch.ts";
 
 const goal = "switch-goal";
@@ -69,8 +70,31 @@ test("settled execution switch rejects an incomplete or superseded source Turn",
   await t.test("missing spend", async () => {
     const root = await fixture(false);
     try {
-      await assert.rejects(verifySettledExecutionSwitch(root, request()),
-        /complete writeback and quota receipts/);
+      await assert.rejects(verifySettledExecutionSwitch(root, request()), error => {
+        assert(error instanceof ClaimExecutionSwitchRejected);
+        assert.equal(error.reasonCode, "settled_execution_switch_unsettled_source");
+        assert.deepEqual(error.detail, {
+          source_todo_id: source,
+          target_todo_id: target,
+          source_turn_instance_id: turn,
+          agent_id: agent,
+          settlement_progress: {
+            schema_version: "quota_settlement_progress_v0",
+            state: "spend_required",
+            next_step: "quota_spend",
+            quota_spend_source: "heartbeat",
+          },
+          recovery: {
+            action: "settle_source_turn",
+            source_todo_id: source,
+            turn_instance_id: turn,
+            required_state: "settled",
+            next_step: "quota_spend",
+            retry: "retry_original_claim",
+          },
+        });
+        return true;
+      });
     } finally {await rm(root, {recursive: true, force: true});}
   });
   await t.test("newer source Turn", async () => {

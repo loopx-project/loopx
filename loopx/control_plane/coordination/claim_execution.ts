@@ -63,9 +63,11 @@ export interface PreparedClaimExecution {
 
 export class ClaimExecutionSwitchRejected extends AuthorityStoreProtocolError {
   readonly reasonCode: string;
-  constructor(reasonCode: string, message: string) {
+  readonly detail: JsonObject;
+  constructor(reasonCode: string, message: string, detail: JsonObject = {}) {
     super(message);
     this.reasonCode = reasonCode;
+    this.detail = detail;
   }
 }
 

@@ -715,7 +715,7 @@ async function executeClaimAttempt(
     }
   } catch (error) {
     if (error instanceof ClaimExecutionSwitchRejected) {
-      return failure(error.reasonCode, error.message, {todo_id: input.todo_id},
+      return failure(error.reasonCode, error.message, {todo_id: input.todo_id, ...error.detail},
         "decision_rejection");
     }
     return failure(

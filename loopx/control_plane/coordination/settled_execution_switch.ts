@@ -69,6 +69,16 @@ export async function verifySettledExecutionSwitch(
     throw new ClaimExecutionSwitchRejected(
       "settled_execution_switch_source_turn_missing",
       "Settled execution switch requires a durable source Todo Turn binding",
+      {
+        source_todo_id: input.source_todo_id,
+        target_todo_id: input.target_todo_id,
+        agent_id: input.agent_id,
+        recovery: {
+          action: "recover_source_turn_binding",
+          source_todo_id: input.source_todo_id,
+          required_state: "settled",
+        },
+      },
     );
   }
   const readback = readQuotaSettlementFromSnapshot({
@@ -97,6 +107,21 @@ export async function verifySettledExecutionSwitch(
     throw new ClaimExecutionSwitchRejected(
       "settled_execution_switch_unsettled_source",
       "Settled execution switch requires the latest source Todo Turn's complete writeback and quota receipts",
+      {
+        source_todo_id: input.source_todo_id,
+        target_todo_id: input.target_todo_id,
+        source_turn_instance_id: sourceTurn,
+        agent_id: input.agent_id,
+        settlement_progress: progress ?? null,
+        recovery: {
+          action: "settle_source_turn",
+          source_todo_id: input.source_todo_id,
+          turn_instance_id: sourceTurn,
+          required_state: "settled",
+          next_step: typeof progress?.next_step === "string" ? progress.next_step : null,
+          retry: "retry_original_claim",
+        },
+      },
     );
   }
   return {

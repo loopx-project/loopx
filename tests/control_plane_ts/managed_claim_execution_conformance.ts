@@ -11,6 +11,7 @@ import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coo
 import {todoUpdateLeaseRecovery} from "../../loopx/control_plane/coordination/task_lease_proof.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {SETTLED_EXECUTION_SWITCH_PROOF_SCHEMA,
+  ClaimExecutionSwitchRejected,
   type ClaimExecutionSwitchVerifier} from "../../loopx/control_plane/coordination/claim_execution.ts";
 
 async function loaded(store: AuthorityStore) {
@@ -246,7 +247,13 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
         operation_id: `source-${scenario}`})).status, "applied");
       const before = await loaded(store);
       const verifier: ClaimExecutionSwitchVerifier = scenario === "unsettled"
-        ? async () => {throw new Error("source Turn settlement is incomplete");}
+        ? async input => {throw new ClaimExecutionSwitchRejected(
+          "settled_execution_switch_unsettled_source",
+          "source Turn settlement is incomplete",
+          {source_todo_id: input.source_todo_id,
+            source_turn_instance_id: "source-turn",
+            recovery: {action: "settle_source_turn", next_step: "quota_spend"}},
+        );}
         : async input => {
           const proof = await settledSwitch(input);
           if (scenario === "stale") return {...proof,
@@ -258,6 +265,13 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
         operation_id: `target-${scenario}`, allow_settled_execution_switch: true},
       undefined, undefined, verifier);
       assert.equal(result.status, "failed", `${scenario}: ${JSON.stringify(result)}`);
+      if (scenario === "unsettled") {
+        assert.equal(result.reason_code, "settled_execution_switch_unsettled_source");
+        assert.equal(result.source_todo_id, "todo_source");
+        assert.equal(result.source_turn_instance_id, "source-turn");
+        assert.deepEqual(result.recovery,
+          {action: "settle_source_turn", next_step: "quota_spend"});
+      }
       assert.deepEqual(await loaded(store), before, scenario);
     }
   });
