@@ -100,10 +100,10 @@ export const attachedHostFollowUpScenario = {
       if (posts.length !== 1 || posts[0].sessionId !== sessionIdFor(attachedGoal.id) || posts[0].message !== followUp) {
         throw new Error(`The attached_host follow-up did not reach its Session queue: ${JSON.stringify(posts)}`);
       }
-      const queuedFollowUp = page.locator(".personal-conversation-queue li").filter({ hasText: followUp });
+      const queuedFollowUp = page.locator(".personal-conversation-queue > ol > li").filter({ hasText: followUp });
       await queuedFollowUp.waitFor({ timeout: 10_000 });
       await queuedFollowUp.locator("summary").click();
-      const expandedMessage = queuedFollowUp.locator(".personal-queue-message").getByText(followUp, { exact: true });
+      const expandedMessage = queuedFollowUp.locator(".personal-queue-message > .personal-md > p");
       await expandedMessage.waitFor();
       const assertExpandedBodyTypography = async (viewport) => {
         const typography = await expandedMessage.evaluate(element => {
@@ -125,7 +125,6 @@ export const attachedHostFollowUpScenario = {
           throw new Error(`Expanded queued message lost body typography at ${viewport}: ${JSON.stringify(typography)}`);
         }
       };
-      await page.screenshot({ path: resolve(outputDir, "attached-host-pending-queue.png"), fullPage: false });
       await assertExpandedBodyTypography("1440x900");
       await page.locator(`.personal-composer-stop[data-turn-id="${runningTurnId(attachedGoal.id)}"]`).waitFor({ timeout: 10_000 });
       if (page.__loopxRuntime.sessions.get(sessionIdFor(attachedGoal.id)).active_turn_id !== runningTurnId(attachedGoal.id)) {
@@ -135,6 +134,7 @@ export const attachedHostFollowUpScenario = {
       if (await page.getByRole("alert").filter({ hasText: /发送失败|already running/u }).count()) {
         throw new Error("The queued follow-up was reported as a failed send");
       }
+      await page.screenshot({ path: resolve(outputDir, "attached-host-pending-queue.png"), fullPage: false });
       await page.setViewportSize({ width: 390, height: 844 });
       await assertExpandedBodyTypography("390x844");
       const stop = page.locator(`.personal-composer-stop[data-turn-id="${runningTurnId(attachedGoal.id)}"]`);
