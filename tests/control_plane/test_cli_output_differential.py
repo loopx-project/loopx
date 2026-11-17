@@ -109,6 +109,40 @@ def test_probe_process_failure_preserves_utf8_diagnostics(tmp_path):
         )
 
 
+def test_probe_process_isolates_release_root_from_invoking_checkout(
+    tmp_path, monkeypatch,
+):
+    import runpy
+    from pathlib import Path
+
+    smoke = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    source_root = tmp_path / "pinned-base"
+    inherited_root = tmp_path / "candidate-head"
+    observed = {}
+
+    def capture_run(command, *, cwd, env=None):
+        observed.update({"command": command, "cwd": cwd, "env": env})
+
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(inherited_root))
+    monkeypatch.setitem(smoke["_run_probe"].__globals__, "_run", capture_run)
+    smoke["_run_probe"](
+        source_root=source_root,
+        probe_runner=tmp_path / "probe-runner.py",
+        probe_test=tmp_path / "probe-test.py",
+        semantics_source=tmp_path / "semantics.py",
+        fixture_root=tmp_path / "fixture",
+        receipt_path=tmp_path / "receipt.json",
+        cwd=tmp_path,
+        enforce_budget=False,
+    )
+
+    assert observed["env"]["PYTHONPATH"] == str(source_root)
+    assert "LOOPX_RELEASE_ROOT" not in observed["env"]
+
+
 def _row(**overrides: object) -> dict[str, object]:
     row: dict[str, object] = {
         "row_id": "surface/status/small/json",
