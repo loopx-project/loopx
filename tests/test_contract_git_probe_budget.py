@@ -81,18 +81,33 @@ def test_an_unanswered_ownership_question_is_not_a_negative_answer(
 
     def fake_query(*arguments: str) -> contract._GitAnswer | None:
         asked.append(arguments)
-        if "rev-parse" in arguments:
-            return contract._GitAnswer(returncode=0, stdout=f"{tmp_path}\n")
         return None
 
+    def fake_bytes_query(*arguments: str) -> contract._GitBytesAnswer | None:
+        asked.append(arguments)
+        return contract._GitBytesAnswer(
+            returncode=0, stdout=os.fsencode(str(tmp_path)) + b"\n", stderr=b""
+        )
+
     monkeypatch.setattr(contract, "_git_query", fake_query)
+    # The worktree root is a byte record now, so the probe's own read is the
+    # one that answers `rev-parse`; ownership still asks the text helper.
+    monkeypatch.setattr(contract, "_git_query_bytes", fake_bytes_query)
     observed = contract._git_probe(target)
 
     assert observed["tracked"] is None
     assert observed["ignored"] is None
     # The first unanswered question settles it; the ignore flag of a file whose
     # ownership is unknown cannot change any caller's answer.
-    assert [arguments[2] for arguments in asked] == ["rev-parse", "ls-files"]
+    # Locate the subcommand by name: global Git options such as
+    # ``--literal-pathspecs`` sit in front of it.
+    commands = [
+        argument
+        for arguments in asked
+        for argument in arguments
+        if argument in {"rev-parse", "ls-files", "check-ignore"}
+    ]
+    assert commands == ["rev-parse", "ls-files"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="the delayed git is a POSIX script")
@@ -190,3 +205,156 @@ def test_a_non_git_directory_still_scans_cleanly(tmp_path: Path) -> None:
 
     assert boundary["ok"] is True
     assert boundary["unavailable_git_probes"] == []
+
+
+def test_a_refused_tracked_enumeration_is_not_a_clean_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git refusing the enumeration must not read as an empty selection."""
+
+    repo = _repository(tmp_path)
+    real_query = contract._git_query_bytes
+
+    def refuse(*arguments: str) -> contract._GitBytesAnswer | None:
+        if "ls-files" in arguments:
+            return contract._GitBytesAnswer(
+                returncode=128, stdout=b"", stderr=b"fatal: refused\n"
+            )
+        return real_query(*arguments)
+
+    monkeypatch.setattr(contract, "_git_query_bytes", refuse)
+
+    with pytest.raises(contract.GitProbeUnavailable):
+        contract._tracked_scan_files(repo)
+
+    boundary = contract.scan_public_boundary([repo])
+    assert boundary["ok"] is False
+    assert boundary["unavailable_git_probes"] == [str(repo.resolve())]
+
+    checked = contract.check_contract(
+        registry_path=_registry(tmp_path),
+        runtime_root_override=None,
+        scan_roots=[repo],
+        limit=5,
+    )
+    assert checked["ok"] is False
+    codes = [diagnostic["code"] for diagnostic in checked["error_diagnostics"]]
+    assert "public_boundary_scan_git_unavailable" in codes
+    assert not [
+        check for check in checked["checks"] if check.startswith("public boundary scan clean")
+    ]
+
+
+def test_a_refused_worktree_discovery_is_not_a_clean_selected_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git refusing the root must leave the selected scan unknown, not empty."""
+
+    repo = _repository(tmp_path)
+    private_dir = repo / ".venv"
+    private_dir.mkdir()
+    real_query = contract._git_query_bytes
+
+    def refuse(*arguments: str) -> contract._GitBytesAnswer | None:
+        if "rev-parse" in arguments and "--show-toplevel" in arguments:
+            return contract._GitBytesAnswer(
+                returncode=128,
+                stdout=b"",
+                stderr=b"fatal: detected dubious ownership in repository\n",
+            )
+        return real_query(*arguments)
+
+    monkeypatch.setattr(contract, "_git_query_bytes", refuse)
+
+    # The pruned directory has no walk-visible file, and its tracked file can
+    # only come from Git.  A refusal must not turn that into a clean report.
+    boundary = contract.scan_public_boundary([private_dir])
+    assert boundary["ok"] is False
+    assert boundary["unavailable_git_probes"]
+    assert boundary["files"] == 0
+
+    checked = contract.check_contract(
+        registry_path=_registry(tmp_path),
+        runtime_root_override=None,
+        scan_roots=[private_dir],
+        limit=5,
+    )
+    assert checked["ok"] is False
+    codes = [diagnostic["code"] for diagnostic in checked["error_diagnostics"]]
+    assert "public_boundary_scan_git_unavailable" in codes
+
+
+def test_a_literal_git_read_drops_only_the_pathspec_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The isolation keeps every other inherited Git setting."""
+
+    for key in (
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+        "GIT_LITERAL_PATHSPECS",
+    ):
+        monkeypatch.setenv(key, "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+
+    environment = contract._literal_git_environment()
+
+    assert not [key for key in environment if "PATHSPECS" in key]
+    assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="linked worktrees need POSIX metadata")
+def test_a_broken_linked_worktree_is_not_a_clean_selected_scan(
+    tmp_path: Path,
+) -> None:
+    """A worktree whose gitdir link is gone is unreadable, not empty.
+
+    Git answers `fatal: not a git repository: <target>` here.  That names the
+    broken link, so matching a substring would turn a repository Git cannot
+    read into a successful scan of zero files.
+    """
+
+    repo = _repository(tmp_path)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", str(linked)], check=True
+    )
+    (linked / ".git").write_text(
+        f"gitdir: {tmp_path / 'missing-worktree-gitdir'}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(contract.GitProbeUnavailable):
+        contract._git_worktree_root(linked)
+
+    boundary = contract.scan_public_boundary([linked])
+    assert boundary["ok"] is False
+    assert str(linked.resolve()) in boundary["unavailable_git_probes"]
+    assert "ACTIVE_GOAL_STATE.md" in boundary["unavailable_git_probes"]
+
+
+def test_a_refusal_quoting_the_no_repository_phrase_is_not_an_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only Git's whole canonical diagnostic means "no repository here"."""
+
+    answer = contract._GitBytesAnswer(
+        returncode=128,
+        stdout=b"",
+        stderr=(
+            b"fatal: detected dubious ownership in repository at "
+            b"'/scratch/not a git repository: decoy'\n"
+        ),
+    )
+    monkeypatch.setattr(contract, "_git_query_bytes", lambda *_: answer)
+
+    with pytest.raises(contract.GitProbeUnavailable):
+        contract._git_worktree_root(tmp_path)
+
+    canonical = contract._GitBytesAnswer(
+        returncode=128,
+        stdout=b"",
+        stderr=b"fatal: not a git repository (or any of the parent directories): .git\n",
+    )
+    monkeypatch.setattr(contract, "_git_query_bytes", lambda *_: canonical)
+    assert contract._git_worktree_root(tmp_path) is None
