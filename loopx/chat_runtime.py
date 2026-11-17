@@ -27,7 +27,8 @@ from .chat.coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VE
 from .chat.session_open import read_exact_original_session
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
 from .capabilities.native_chat.codex_adapter import (
-    CodexAppServerAdapter, NativeHistoryRestoration, NativeWorkingContinuation, start_attachment_turn,
+    CodexAppServerAdapter as CodexAppServerAdapter,
+    NativeHistoryRestoration, NativeWorkingContinuation, start_attachment_turn,
 )
 from .capabilities.native_chat.machine_defaults import codex_profile_home, load_codex_chat_defaults
 from .capabilities.native_chat.steward_managed_mode import prepare_managed_session_route, require_managed_agent_session
@@ -44,7 +45,8 @@ from .capabilities.manager_context.team_plan import (
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .capabilities.steward_executor import allocation as alloc
 from .chat_acp import ACPStdioAdapter
-from .chat_agent import CodexChatAgentError, CodexChatTimeoutError, agent_endpoint_error
+from .chat_agent import CodexChatAgentError as CodexChatAgentError
+from .chat_agent import CodexChatTimeoutError, agent_endpoint_error
 from .chat_codex_goal import (
     CodexGoalDriver,
     UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE,

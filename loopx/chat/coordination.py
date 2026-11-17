@@ -12,8 +12,13 @@ import os
 from pathlib import Path
 import stat
 import sys
+from typing import Any, Callable, TYPE_CHECKING, cast
 
 from ..control_plane.goals.acceptance_oracle_io import ORACLE_HOST_PYTHON, oracle_host_python
+
+if TYPE_CHECKING:
+    from ..capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from ..chat_runtime import ChatRuntimeAdapter, EventSink
 
 PROJECT_COORDINATION_GUIDANCE = (
     "This conversation concerns only the selected LoopX Goal. Read its current work, "
@@ -41,10 +46,10 @@ PROJECT_COORDINATION_GUIDANCE = (
 PROJECT_CONTEXT_VERSION = 2
 
 
-def check_preparation_tool():
+def check_preparation_tool() -> dict[str, Any]:
     """Project the existing proposal action for a newly bound managed thread."""
     from ..chat_loopx_mode import TOOL
-    tool = deepcopy(TOOL)
+    tool: dict[str, Any] = deepcopy(TOOL)
     tool["description"] = (
         "Prepare a reviewable delivery check for this original registered Goal and Agent. "
         "Use action=prepare_check with a stable operation_id and the existing compact "
@@ -128,7 +133,9 @@ def _workspace_file(workspace: Path, ref: str, *, required: bool) -> str | None:
 
 class _GoalSessionCheckPreparation:
     """Per-Turn source IO over the existing typed identity and acceptance owners."""
-    def __init__(self, controller, adapter, session, turn_id, read):
+    def __init__(self, controller: Any, adapter: CodexAppServerAdapter,
+                 session: dict[str, Any], turn_id: str,
+                 read: Callable[[str, Any], dict[str, Any]]) -> None:
         self.controller, self.adapter, self.read = controller, adapter, read
         self.session_id, self.turn_id = session["session_id"], turn_id
         self.workspace = Path(adapter.session.work_dir)
@@ -137,7 +144,7 @@ class _GoalSessionCheckPreparation:
         self.original = deepcopy(session)
         self.identity = self._current_identity()
 
-    def _current_identity(self):
+    def _current_identity(self) -> dict[str, Any]:
         from ..capabilities.native_chat.steward_managed_mode import registered_managed_session_identity
         from ..control_plane.collaboration import conversation_scope
         controller = self.controller
@@ -163,21 +170,22 @@ class _GoalSessionCheckPreparation:
                 or conversation_scope(session, origin="web")["kind"] != "owner_goal"):
             raise ValueError("the original local-owner managed Session and active read-only Turn are unavailable")
         return registered_managed_session_identity(registry_path=self.registry_path,
-            goal_id=session.get("goal_id"), agent_id=session.get("managed_agent_id"),
+            goal_id=cast(str, session.get("goal_id")),
+            agent_id=cast(str, session.get("managed_agent_id")),
             workspace=self.workspace, session=session)
 
-    def _current(self):
+    def _current(self) -> None:
         if self._current_identity() != self.identity:
             raise ValueError("the original managed Goal lifetime or Agent scope changed")
 
-    def _document(self, document):
+    def _document(self, document: dict[str, Any]) -> dict[str, Any]:
         # Accepted document syntax, requirements, scope and oracle semantics
         # remain with the TS owner. Only invocation/source IO is narrowed here.
         document = deepcopy(document)
         criteria = document.get("criteria")
         if not isinstance(criteria, list) or not 1 <= len(criteria) <= 64:
             raise ValueError("select bounded existing acceptance criteria and independent checker sources")
-        sources = {}
+        sources: dict[str, str | None] = {}
         for criterion in criteria:
             if not isinstance(criterion, dict):
                 raise ValueError("a check requires its existing criterion and checker source")
@@ -229,7 +237,7 @@ class _GoalSessionCheckPreparation:
                 raise ValueError("the LoopX runtime's Python is unavailable") from exc
         return document
 
-    def __call__(self, tool, arguments):
+    def __call__(self, tool: str, arguments: Any) -> dict[str, Any]:
         from ..chat_loopx_mode import TOOL
         if tool != TOOL["name"]:
             return self.read(tool, arguments)
@@ -261,8 +269,10 @@ class _GoalSessionCheckPreparation:
 
 
 def apply_context_handoff(
-    controller, scope, session, turn, response, context, *, execution_allowed
-):
+    controller: Any, scope: dict[str, Any], session: dict[str, Any],
+    turn: dict[str, Any], response: dict[str, Any], context: dict[str, Any], *,
+    execution_allowed: Callable[[], bool],
+) -> dict[str, Any]:
     """Apply a requested handoff while the source scope remains current."""
     if response.get("context_handoff") is None:
         return response
@@ -296,7 +306,10 @@ def apply_context_handoff(
     )
 
 
-def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope, preserve_original_thread=False):
+def prepare_turn_context(controller: Any, adapter: ChatRuntimeAdapter,
+                         session: dict[str, Any], turn_id: str, event_sink: EventSink, *,
+                         scope: dict[str, Any], preserve_original_thread: bool = False,
+                         ) -> tuple[ChatRuntimeAdapter, dict[str, Any]]:
     """Prepare the same evidence/handoff path for each supported conversation."""
     from ..chat_runtime import CodexAppServerAdapter, CodexChatAgentError
     from ..chat_manager import (MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE,
