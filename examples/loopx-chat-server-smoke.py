@@ -216,10 +216,10 @@ def wait_for_json(url: str) -> dict:
 
 def main() -> None:
     sys.path.insert(0, str(REPO_ROOT))
+    from loopx.chat.status_api import build_bounded_chat_status_projection
     from loopx.chat_server import (
         ChatHTTPServer,
         ChatRequestHandler,
-        build_bounded_chat_status_projection,
     )
     from loopx.chat_endpoints import AgentEndpointRegistry
     from loopx.chat_manager import manager_executor_endpoint_default

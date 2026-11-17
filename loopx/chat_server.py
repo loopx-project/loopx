@@ -117,7 +117,6 @@ from .release_manifest import release_runtime_identity
 from .control_plane.projects.registry_codec import load_registry
 from .registry import registry_goals, resolve_state_file
 from .thread_agent_binding import list_attached_session_bindings
-from .state_projection import build_active_state_structured_projection
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
     DEFAULT_EXTENSION_PROJECTION_PATH,
@@ -190,6 +189,18 @@ def _compact_text(value: Any, *, limit: int = 600) -> str:
     return " ".join(str(value or "").split())[:limit].strip()
 
 
+def _query_text(query: Mapping[str, list[str]], key: str, *, limit: int) -> str | None:
+    return _compact_text((query.get(key) or [""])[0], limit=limit) or None
+
+
+def _load_registry_and_goal(registry_path: Path, goal_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    registry = load_registry(registry_path)
+    goal = next((item for item in registry_goals(registry) if str(item.get("id") or "") == goal_id), None)
+    if goal is None:
+        raise ValueError("goal_id was not found in the active LoopX registry")
+    return registry, goal
+
+
 def _goal_public_context(registry: dict[str, Any], goal: dict[str, Any]) -> dict[str, Any]:
     goal_id = str(goal.get("id") or "")
     project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
@@ -217,203 +228,6 @@ def _goal_public_context(registry: dict[str, Any], goal: dict[str, Any]) -> dict
         "project": project,
         "runtime_root": resolve_runtime_root(registry),
     }
-
-
-def _compact_todo(item: dict[str, Any], *, protected_paths: list[Path]) -> dict[str, Any]:
-    return {
-        "todo_id": _compact_text(item.get("todo_id"), limit=100) or None,
-        "role": _compact_text(item.get("role"), limit=40) or None,
-        "status": _compact_text(item.get("status"), limit=40) or ("done" if item.get("done") else "open"),
-        "priority": _compact_text(item.get("priority"), limit=60) or None,
-        "text": _compact_text(
-            redact_local_paths(str(item.get("text") or item.get("title") or ""), protected_paths=protected_paths)
-        ),
-        "action_kind": _compact_text(item.get("action_kind"), limit=100) or None,
-        "task_class": _compact_text(item.get("task_class"), limit=100) or None,
-        "claimed_by": _compact_text(item.get("claimed_by"), limit=100) or None,
-        "evidence": _compact_text(
-            redact_local_paths(str(item.get("evidence") or item.get("note") or ""), protected_paths=protected_paths)
-        )
-        or None,
-    }
-
-
-def _goal_todos(queue_item: dict[str, Any], *, protected_paths: list[Path]) -> list[dict[str, Any]]:
-    project_asset = queue_item.get("project_asset")
-    asset = project_asset if isinstance(project_asset, dict) else {}
-    todos: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for role in ("user", "agent"):
-        group = queue_item.get(f"{role}_todos")
-        if not isinstance(group, dict):
-            group = asset.get(f"{role}_todos")
-        items = group.get("items") if isinstance(group, dict) else []
-        for raw in items if isinstance(items, list) else []:
-            if not isinstance(raw, dict):
-                continue
-            item = dict(raw)
-            item.setdefault("role", role)
-            compact = _compact_todo(item, protected_paths=protected_paths)
-            key = str(compact.get("todo_id") or compact.get("text") or "")
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            todos.append(compact)
-    return todos[:40]
-
-
-def build_chat_status_projection(
-    *,
-    registry: dict[str, Any],
-    status_payload: dict[str, Any],
-    selected_goal_id: str | None,
-) -> dict[str, Any]:
-    queue = status_payload.get("attention_queue")
-    queue_items = queue.get("items") if isinstance(queue, dict) else []
-    queue_by_goal = {
-        str(item.get("goal_id") or ""): item
-        for item in (queue_items if isinstance(queue_items, list) else []) if isinstance(item, dict)
-    }
-    goals: list[dict[str, Any]] = []
-    for raw_goal in registry_goals(registry):
-        goal_id = str(raw_goal.get("id") or "")
-        context = _goal_public_context(registry, raw_goal)
-        protected_paths = [context["project"], context["runtime_root"]]
-        item = queue_by_goal.get(goal_id, {})
-        asset_raw = item.get("project_asset") if isinstance(item, dict) else {}
-        asset = asset_raw if isinstance(asset_raw, dict) else {}
-        todos = _goal_todos(item, protected_paths=protected_paths) if isinstance(item, dict) else []
-        open_todos = [todo for todo in todos if todo.get("status") not in {"done", "completed", "closed"}]
-        top_todo = next((todo for todo in open_todos if todo.get("role") == "agent"), None)
-        if top_todo is None and open_todos:
-            top_todo = open_todos[0]
-        waiting_on = _compact_text(item.get("waiting_on"), limit=80) if isinstance(item, dict) else ""
-        raw_gate = asset.get("gate") or item.get("status") if isinstance(item, dict) else ""
-        raw_next_action = asset.get("next_action") or item.get("recommended_action") if isinstance(item, dict) else ""
-        evidence = [
-            str(todo.get("evidence"))
-            for todo in todos
-            if todo.get("evidence")
-        ][:4]
-        latest_validation = asset.get("latest_validation")
-        if isinstance(latest_validation, dict) and latest_validation.get("summary"):
-            evidence.insert(0, _compact_text(latest_validation.get("summary")))
-        raw_quota = item.get("quota") if isinstance(item, dict) else None
-        quota = raw_quota if isinstance(raw_quota, dict) else {}
-        goals.append(
-            {
-                "goal_id": goal_id,
-                "title": context["title"],
-                "objective": redact_local_paths(context["objective"], protected_paths=protected_paths),
-                "status": _compact_text(item.get("status"), limit=100)
-                if isinstance(item, dict)
-                else _compact_text(raw_goal.get("status"), limit=100),
-                "waiting_on": waiting_on or None,
-                "severity": _compact_text(item.get("severity"), limit=60)
-                if isinstance(item, dict)
-                else None,
-                "gate": _compact_text(
-                    redact_local_paths(str(raw_gate or "clear"), protected_paths=protected_paths),
-                    limit=240,
-                ),
-                "next_action": _compact_text(
-                    redact_local_paths(
-                        str(raw_next_action or "Review the next bounded proposal."),
-                        protected_paths=protected_paths,
-                    )
-                ),
-                "top_todo": top_todo,
-                "todos": todos,
-                "evidence": [
-                    _compact_text(redact_local_paths(value, protected_paths=protected_paths))
-                    for value in evidence
-                    if value
-                ],
-                "quota": {
-                    "state": _compact_text(quota.get("state"), limit=80) or None,
-                    "spent_slots": quota.get("spent_slots"),
-                    "allowed_slots": quota.get("allowed_slots"),
-                    "reason": _compact_text(quota.get("reason"), limit=240) or None,
-                },
-            }
-        )
-    effective_selected = selected_goal_id or (goals[0]["goal_id"] if len(goals) == 1 else None)
-    return {
-        "ok": bool(status_payload.get("ok", True)),
-        "schema_version": "loopx_chat_status_v0",
-        "selected_goal_id": effective_selected,
-        "goal_count": len(goals),
-        "goals": goals,
-    }
-
-
-def build_bounded_chat_status_projection(
-    *,
-    registry: dict[str, Any],
-    selected_goal_id: str | None,
-) -> dict[str, Any]:
-    """Build Chat's first-screen projection from bounded local state only."""
-
-    items: list[dict[str, Any]] = []
-    for raw_goal in registry_goals(registry):
-        goal_id = str(raw_goal.get("id") or "")
-        project = Path(str(raw_goal.get("repo") or ".")).expanduser().resolve()
-        state_path = resolve_state_file(project, raw_goal.get("state_file"))
-        state_text = ""
-        if state_path is not None and state_path.is_file():
-            try:
-                state_text = state_path.read_text(encoding="utf-8")
-            except OSError:
-                state_text = ""
-        structured = build_active_state_structured_projection(
-            state_text,
-            goal_id=goal_id,
-        )
-        frontmatter = structured.get("frontmatter")
-        frontmatter = frontmatter if isinstance(frontmatter, dict) else {}
-        todos = structured.get("todos")
-        todos = todos if isinstance(todos, dict) else {}
-        user_todos = todos.get("user")
-        user_todos = user_todos if isinstance(user_todos, dict) else {"items": [], "open_count": 0}
-        agent_todos = todos.get("agent")
-        agent_todos = agent_todos if isinstance(agent_todos, dict) else {"items": [], "open_count": 0}
-        user_open = int(user_todos.get("open_count") or 0)
-        agent_open = int(agent_todos.get("open_count") or 0)
-        next_action = structured.get("next_action")
-        next_action = next_action if isinstance(next_action, dict) else {}
-        next_action_text = _compact_text(next_action.get("first"))
-        waiting_on = _compact_text(frontmatter.get("waiting_on"), limit=80)
-        if not waiting_on:
-            if user_open:
-                waiting_on = "user_or_controller"
-            elif agent_open:
-                waiting_on = "codex"
-        gate = _compact_text(frontmatter.get("gate"), limit=120)
-        if not gate:
-            gate = "user_review_required" if user_open else "clear"
-        items.append(
-            {
-                "goal_id": goal_id,
-                "status": _compact_text(frontmatter.get("status"), limit=100)
-                or _compact_text(raw_goal.get("status"), limit=100),
-                "waiting_on": waiting_on or None,
-                "severity": "action" if user_open or agent_open else "info",
-                "recommended_action": next_action_text or "Review the next bounded proposal.",
-                "user_todos": user_todos,
-                "agent_todos": agent_todos,
-                "project_asset": {
-                    "gate": gate,
-                    "next_action": next_action_text or "Review the next bounded proposal.",
-                    "user_todos": user_todos,
-                    "agent_todos": agent_todos,
-                },
-            }
-        )
-    return build_chat_status_projection(
-        registry=registry,
-        status_payload={"ok": True, "attention_queue": {"items": items}},
-        selected_goal_id=selected_goal_id,
-    )
 
 
 def configured_lark_cli_bin(target_payload: Mapping[str, Any]) -> str | None:
@@ -608,11 +422,7 @@ class ChatRequestHandler(
         )
 
     def _registry_and_goal(self, goal_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        registry = load_registry(self.server.registry_path)
-        goal = next((item for item in registry_goals(registry) if str(item.get("id") or "") == goal_id), None)
-        if goal is None:
-            raise ValueError("goal_id was not found in the active LoopX registry")
-        return registry, goal
+        return _load_registry_and_goal(self.server.registry_path, goal_id)
 
     def _session_context(self, session: dict[str, object]) -> dict[str, object]:
         if session.get("project_context") is not None:
@@ -1012,17 +822,14 @@ class ChatRequestHandler(
             # response lets callers reject their ordinary, unfiltered result.
             return self._send_json({"ok": True, "schema_version": "loopx_chat_session_list_v1",
                                     "conversation_binding_id": query["conversation_binding_id"][0], **snapshot})
-        goal_id = _compact_text((query.get("goal_id") or [""])[0], limit=160) or None
-        agent_id = _compact_text((query.get("agent_id") or [""])[0], limit=80) or None
-        channel_id = _compact_text((query.get("channel_id") or [""])[0], limit=160) or None
         self._send_json(
             {
                 "ok": True,
                 "schema_version": "loopx_chat_session_list_v1",
                 "sessions": self.server.chat_store.list_sessions(
-                    goal_id=goal_id,
-                    agent_id=agent_id,
-                    channel_id=channel_id,
+                    goal_id=_query_text(query, "goal_id", limit=160),
+                    agent_id=_query_text(query, "agent_id", limit=80),
+                    channel_id=_query_text(query, "channel_id", limit=160),
                 ),
             }
         )
@@ -1230,6 +1037,11 @@ class ChatRequestHandler(
         items = details.get("items") if isinstance(details, dict) else None
         self._send_json({"ok": True, "targets": items if isinstance(items, list) else []})
 
+    def _send_goal_channel_packet(self, packet: dict[str, Any], default_error: str) -> None:
+        if not packet.get("ok"):
+            packet["error"] = _compact_text(packet.get("public_summary") or packet.get("blocker") or default_error)
+        self._send_json(packet, status=200 if packet.get("ok") else 400)
+
     def _goal_channel_setup(self) -> None:
         try:
             body = self._read_json()
@@ -1250,11 +1062,7 @@ class ChatRequestHandler(
                 target_name,
             )
             if provider_target is None:
-                self._send_error(
-                    "configure the named shared provider target first",
-                    status=400,
-                    error_code="provider_target_missing",
-                )
+                self._send_error("configure the named shared provider target first", status=400, error_code="provider_target_missing")
                 return
             packet = setup_lark_goal_channel(
                 registry=source_registry,
@@ -1269,26 +1077,14 @@ class ChatRequestHandler(
             self._send_error(str(exc), status=400, error_code="invalid_goal_channel_setup")
             return
         except Exception:
-            self._send_error(
-                "the Goal Channel operation failed before a verified provider receipt",
-                status=400,
-                error_code="provider_api_failed",
-            )
+            self._send_error("the Goal Channel operation failed before a verified provider receipt", status=400, error_code="provider_api_failed")
             return
-        if not packet.get("ok"):
-            packet["error"] = _compact_text(
-                packet.get("public_summary") or packet.get("blocker") or "Goal Channel setup failed"
-            )
-        self._send_json(packet, status=200 if packet.get("ok") else 400)
+        self._send_goal_channel_packet(packet, "Goal Channel setup failed")
 
     def _goal_channel_configure(self) -> None:
         try:
             body = self._read_json()
-            if set(body) - {
-                "goal_id",
-                "auto_notify_human_gates",
-                "auto_notify_blocked_notices",
-            }:
+            if set(body) - {"goal_id", "auto_notify_human_gates", "auto_notify_blocked_notices"}:
                 raise ValueError("unknown Goal Channel configure field")
             goal_id = _compact_text(body.get("goal_id"), limit=160)
             auto_notify = body.get("auto_notify_human_gates")
@@ -1299,50 +1095,28 @@ class ChatRequestHandler(
                 or (auto_notify is not None and not isinstance(auto_notify, bool))
                 or (blocked_notify is not None and not isinstance(blocked_notify, bool))
             ):
-                raise ValueError(
-                    "goal_id and exactly one boolean notification setting are required"
-                )
+                raise ValueError("goal_id and exactly one boolean notification setting are required")
             source_registry, binding_path = self._goal_channel_context(goal_id)
             if auto_notify is True or blocked_notify is True:
                 extension_blocker = self._goal_channel_extension_ready()
                 if extension_blocker is not None:
-                    self._send_error(
-                        extension_blocker,
-                        status=400,
-                        error_code="extension_unavailable",
-                    )
+                    self._send_error(extension_blocker, status=400, error_code="extension_unavailable")
                     return
             packet = configure_lark_goal_channel_automation(
                 registry=source_registry,
                 goal_id=goal_id,
                 binding_path=binding_path,
-                human_gate_auto_notify=auto_notify
-                if isinstance(auto_notify, bool)
-                else None,
-                blocked_notice_auto_notify=blocked_notify
-                if isinstance(blocked_notify, bool)
-                else None,
+                human_gate_auto_notify=auto_notify if isinstance(auto_notify, bool) else None,
+                blocked_notice_auto_notify=blocked_notify if isinstance(blocked_notify, bool) else None,
                 execute=True,
             )
         except ValueError as exc:
-            self._send_error(
-                str(exc), status=400, error_code="invalid_goal_channel_configure"
-            )
+            self._send_error(str(exc), status=400, error_code="invalid_goal_channel_configure")
             return
         except Exception:
-            self._send_error(
-                "the Goal Channel automation setting could not be updated",
-                status=400,
-                error_code="provider_api_failed",
-            )
+            self._send_error("the Goal Channel automation setting could not be updated", status=400, error_code="provider_api_failed")
             return
-        if not packet.get("ok"):
-            packet["error"] = _compact_text(
-                packet.get("public_summary")
-                or packet.get("blocker")
-                or "Goal Channel configure failed"
-            )
-        self._send_json(packet, status=200 if packet.get("ok") else 400)
+        self._send_goal_channel_packet(packet, "Goal Channel configure failed")
 
     def _action_preview(self) -> None:
         try:
@@ -1418,16 +1192,11 @@ class ChatRequestHandler(
 
     def _action_list(self) -> None:
         query = parse_qs(urlparse(self.path).query)
-        goal_id = _compact_text((query.get("goal_id") or [""])[0], limit=200) or None
-        context_kind = _compact_text(
-            (query.get("context_kind") or [""])[0], limit=200
-        ) or None
-        status = _compact_text((query.get("status") or [""])[0], limit=80) or None
         try:
             proposals = self.server.action_store.list(
-                goal_id=goal_id,
-                context_kind=context_kind,
-                status=status,
+                goal_id=_query_text(query, "goal_id", limit=200),
+                context_kind=_query_text(query, "context_kind", limit=200),
+                status=_query_text(query, "status", limit=80),
             )
         except ValueError as exc:
             self._send_error(str(exc), status=400, error_code="invalid_action_query")
@@ -1440,12 +1209,27 @@ class ChatRequestHandler(
             }
         )
 
-    def _action_cancel(self, proposal_id: str) -> None:
+    def _read_empty_action_body(self, action_name: str) -> None:
+        if self._read_json():
+            raise ValueError(f"action {action_name} request must be empty")
+
+    def _mark_action_failed(self, proposal_id: str, error_code: str, message: str) -> None:
         try:
-            body = self._read_json()
-            if body:
-                raise ValueError("action cancel request must be empty")
-            proposal = self.server.action_service.cancel(proposal_id)
+            self.server.action_store.mark_failed(proposal_id, error_code=error_code, message=message)
+        except (ActionConflictError, KeyError, ValueError):
+            pass
+
+    def _run_action_mutation(
+        self,
+        *,
+        action_name: str,
+        invalid_code: str,
+        schema_version: str,
+        mutate: Callable[[], tuple[dict[str, object], int]],
+    ) -> None:
+        try:
+            self._read_empty_action_body(action_name)
+            proposal, status = mutate()
         except KeyError:
             self._action_not_found()
             return
@@ -1453,56 +1237,43 @@ class ChatRequestHandler(
             self._send_error(str(exc), status=409, error_code="action_conflict")
             return
         except ValueError as exc:
-            self._send_error(str(exc), status=400, error_code="invalid_action_cancel")
+            self._send_error(str(exc), status=400, error_code=invalid_code)
             return
-        self._send_json(
-            {
-                "ok": True,
-                "schema_version": "loopx_chat_action_cancel_v1",
-                "proposal": proposal,
-            }
+        self._send_json({"ok": True, "schema_version": schema_version, "proposal": proposal}, status=status)
+
+    def _action_cancel(self, proposal_id: str) -> None:
+        self._run_action_mutation(
+            action_name="cancel",
+            invalid_code="invalid_action_cancel",
+            schema_version="loopx_chat_action_cancel_v1",
+            mutate=lambda: (self.server.action_service.cancel(proposal_id), 200),
         )
 
     def _action_transition(self, proposal_id: str, transition: str) -> None:
-        try:
-            body = self._read_json()
-            if body:
-                raise ValueError("action transition request must be empty")
-            if transition == "regenerate":
-                proposal = self.server.action_service.regenerate(proposal_id)
-                status = 201
-            elif transition == "reject":
-                proposal = self.server.action_service.reject(proposal_id)
-                status = 200
-            elif transition == "defer":
-                proposal = self.server.action_service.defer(proposal_id)
-                status = 200
-            else:
+        transitions: dict[str, tuple[Callable[[str], dict[str, object]], int]] = {
+            "regenerate": (self.server.action_service.regenerate, 201),
+            "reject": (self.server.action_service.reject, 200),
+            "defer": (self.server.action_service.defer, 200),
+        }
+
+        def mutate() -> tuple[dict[str, object], int]:
+            handler = transitions.get(transition)
+            if handler is None:
                 raise ValueError("unsupported action transition")
-        except KeyError:
-            self._action_not_found()
-            return
-        except ActionConflictError as exc:
-            self._send_error(str(exc), status=409, error_code="action_conflict")
-            return
-        except ValueError as exc:
-            self._send_error(str(exc), status=400, error_code="invalid_action_transition")
-            return
-        self._send_json(
-            {
-                "ok": True,
-                "schema_version": "loopx_chat_action_transition_v1",
-                "proposal": proposal,
-            },
-            status=status,
+            fn, status = handler
+            return fn(proposal_id), status
+
+        self._run_action_mutation(
+            action_name="transition",
+            invalid_code="invalid_action_transition",
+            schema_version="loopx_chat_action_transition_v1",
+            mutate=mutate,
         )
 
     def _action_apply(self, proposal_id: str) -> None:
         proposal: dict[str, object] | None
         try:
-            body = self._read_json()
-            if body:
-                raise ValueError("action apply request must be empty")
+            self._read_empty_action_body("apply")
             result = self.server.action_service.apply(proposal_id)
         except ProtectedActionGate as exc:
             try:
@@ -1529,25 +1300,15 @@ class ChatRequestHandler(
             self._send_error(str(exc), status=409, error_code="action_conflict")
             return
         except ValueError as exc:
-            try:
-                self.server.action_store.mark_failed(
-                    proposal_id,
-                    error_code="invalid_canonical_transition",
-                    message=str(exc),
-                )
-            except (ActionConflictError, KeyError, ValueError):
-                pass
+            self._mark_action_failed(proposal_id, "invalid_canonical_transition", str(exc))
             self._send_error(str(exc), status=400, error_code="invalid_action_apply")
             return
         except Exception:
-            try:
-                self.server.action_store.mark_failed(
-                    proposal_id,
-                    error_code="canonical_action_failed",
-                    message="Canonical LoopX service did not complete the transition.",
-                )
-            except (ActionConflictError, KeyError, ValueError):
-                pass
+            self._mark_action_failed(
+                proposal_id,
+                "canonical_action_failed",
+                "Canonical LoopX service did not complete the transition.",
+            )
             self._send_error(
                 "Typed action could not be applied through its canonical LoopX service.",
                 status=424,
@@ -1607,11 +1368,11 @@ class ChatRequestHandler(
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        parts = path.strip("/").split("/")
         if self._dispatch_result_file_read(path):
             return
-        peer_parts = path.strip("/").split("/")
-        if len(peer_parts) == 5 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "collaboration":
-            return self._project_collaboration(peer_parts[3])
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "collaboration":
+            return self._project_collaboration(parts[3])
         if path == DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH:
             return self._handle_extension_presentation_surfaces()
         if path == DEFAULT_EXTENSION_PROJECTION_PATH:
@@ -1727,24 +1488,21 @@ class ChatRequestHandler(
                 return get_dispatch[path]()
         if self._dispatch_goal_result_read(path):
             return
-        setup_parts = path.strip("/").split("/")
-        if len(setup_parts) == 5 and setup_parts[:4] == ["api", "chat", "lark", "app-setups"]:
-            return self._lark_setup_snapshot(setup_parts[4])
-        action_parts = path.strip("/").split("/")
-        if len(action_parts) == 3 and action_parts[:2] == ["api", "actions"]:
-            return self._action_snapshot(action_parts[2])
-        session_parts = path.strip("/").split("/")
+        if len(parts) == 5 and parts[:4] == ["api", "chat", "lark", "app-setups"]:
+            return self._lark_setup_snapshot(parts[4])
+        if len(parts) == 3 and parts[:2] == ["api", "actions"]:
+            return self._action_snapshot(parts[2])
         with effect_runtime_request_scope():
             if self._dispatch_chat_queue(path, apply=False):
                 return
-        if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "native-turn":
-            return self._managed_native_turn(session_parts[3])
-        if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "loopx":
-            return handle_loopx_request(self, session_parts[3])
-        if len(session_parts) == 4 and session_parts[:3] == ["api", "chat", "sessions"]:
-            return self._session_snapshot(session_parts[3])
-        if len(session_parts) == 7 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "turns" and session_parts[6] == "events":
-            return self._turn_events(session_parts[3], session_parts[5])
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "native-turn":
+            return self._managed_native_turn(parts[3])
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "loopx":
+            return handle_loopx_request(self, parts[3])
+        if len(parts) == 4 and parts[:3] == ["api", "chat", "sessions"]:
+            return self._session_snapshot(parts[3])
+        if len(parts) == 7 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "turns" and parts[6] == "events":
+            return self._turn_events(parts[3], parts[5])
         if path == "/":
             self.send_response(302)
             self.send_header("Location", DEFAULT_CHAT_PATH)
@@ -1758,13 +1516,13 @@ class ChatRequestHandler(
         if not self._require_loopback_origin():
             return
         path = urlparse(self.path).path
+        parts = path.strip("/").split("/")
         if path == "/api/chat/collaboration":
             return self._project_collaboration(apply=True)
-        peer_parts = path.strip("/").split("/")
         if self._dispatch_chat_queue(path, apply=True):
             return
-        if len(peer_parts) == 5 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "collaboration":
-            return self._project_collaboration(peer_parts[3], apply=True)
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "collaboration":
+            return self._project_collaboration(parts[3], apply=True)
         if self._dispatch_zcode_goal(path, apply=True):
             return
         post_dispatch: dict[str, Callable[[], None]] = {
@@ -1797,27 +1555,24 @@ class ChatRequestHandler(
         add_goal_subagent_routes(post_dispatch, handler=self)
         if path in post_dispatch:
             return post_dispatch[path]()
-        session_action_parts = path.strip("/").split("/")
-        if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "native-turn":
-            return self._managed_native_turn(session_action_parts[3], execute=True)
-        if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "loopx":
-            return handle_loopx_request(self, session_action_parts[3], apply=True)
-        if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "resume":
-            return self._resume_session(session_action_parts[3])
-        if len(session_action_parts) == 5 and session_action_parts[:3] == ["api", "chat", "sessions"] and session_action_parts[4] == "model-settings":
-            return self._configure_session_model(session_action_parts[3])
-        action_parts = path.strip("/").split("/")
-        if len(action_parts) == 4 and action_parts[:2] == ["api", "actions"] and action_parts[3] in {"apply", "cancel", "regenerate", "reject", "defer"}:
-            if action_parts[3] == "apply":
-                return self._action_apply(action_parts[2])
-            if action_parts[3] == "cancel":
-                return self._action_cancel(action_parts[2])
-            return self._action_transition(action_parts[2], action_parts[3])
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "native-turn":
+            return self._managed_native_turn(parts[3], execute=True)
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "loopx":
+            return handle_loopx_request(self, parts[3], apply=True)
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "resume":
+            return self._resume_session(parts[3])
+        if len(parts) == 5 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "model-settings":
+            return self._configure_session_model(parts[3])
+        if len(parts) == 4 and parts[:2] == ["api", "actions"] and parts[3] in {"apply", "cancel", "regenerate", "reject", "defer"}:
+            if parts[3] == "apply":
+                return self._action_apply(parts[2])
+            if parts[3] == "cancel":
+                return self._action_cancel(parts[2])
+            return self._action_transition(parts[2], parts[3])
         prefix = f"{CHAT_SESSIONS_PATH}/"
         if path.startswith(prefix) and path.endswith("/turns"):
             session_id = path[len(prefix) : -len("/turns")].strip("/")
             return self._session_turn(session_id)
-        parts = path.strip("/").split("/")
         if len(parts) == 7 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "turns" and parts[6] == "steer":
             return self._steer_turn(parts[3], parts[5])
         if len(parts) == 7 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "turns" and parts[6] == "interrupt":
@@ -1926,16 +1681,14 @@ def serve_chat(
         enable_goal_subagent_configuration
     )
     server.lark_cli_resolution = lark_cli_resolution
+    lark_cli_cmd = lark_cli_resolution.command or "lark-cli"
     server.lark_runner = build_lark_command_runner(server.lark_cli_resolution)
     server.lark_app_setup_manager = LarkAppSetupManager(
         cli_resolution=server.lark_cli_resolution,
         profile_verifier=lambda app_ref: any(
             app.get("app_ref") == app_ref and app.get("ready") is True
-            for app in list_lark_apps(
-                runner=server.lark_runner,
-                cli_bin=server.lark_cli_resolution.command or "lark-cli",
-            )
-        )
+            for app in list_lark_apps(runner=server.lark_runner, cli_bin=lark_cli_cmd)
+        ),
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
@@ -1962,12 +1715,11 @@ def serve_chat(
     from .capabilities.native_chat.transports import install_conversation_transports
     install_conversation_transports(server, factories=external_conversation_factories,
         observe_group=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
-            cli_bin=server.lark_cli_resolution.command or "lark-cli", audience="group"),
+            cli_bin=lark_cli_cmd, audience="group"),
         observe_default=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,
-            cli_bin=server.lark_cli_resolution.command or "lark-cli"))
+            cli_bin=lark_cli_cmd))
     private_transport = LarkPrivateConversations(controller=server.runtime_controller, runtime_root=runtime_root,
-        runner=server.lark_runner, cli_bin=server.lark_cli_resolution.command or "lark-cli",
-        reaction_feedback=private_reactions)
+        runner=server.lark_runner, cli_bin=lark_cli_cmd, reaction_feedback=private_reactions)
 
     server.lark_private_conversations = private_transport
 
@@ -2012,14 +1764,7 @@ def serve_chat(
     )
 
     def _wake_goal_context(session: dict[str, object]) -> dict[str, object]:
-        registry = load_registry(server.registry_path)
-        goal = next(
-            (item for item in registry_goals(registry) if str(item.get("id") or "") == str(session["goal_id"])),
-            None,
-        )
-        if goal is None:
-            raise ValueError("goal_id was not found in the active LoopX registry")
-        return _goal_public_context(registry, goal)
+        return _goal_public_context(*_load_registry_and_goal(server.registry_path, str(session["goal_id"])))
 
     server.delegation_wake_service = DelegationWakeService(
         server.runtime_controller, goal_context=_wake_goal_context
