@@ -66,8 +66,9 @@
       "dict_any_count": 0
     },
     "loopx/extensions/lark/goal_topic_runtime.py": {
-      "any_count": 56,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1617
     },
     "loopx/extensions/lark/presentation/explore_results.py": {
       "any_count": 78,
@@ -88,8 +89,9 @@
       "lines": 1199
     },
     "loopx/history.py": {
-      "any_count": 51,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1035
     },
     "loopx/pr_review.py": {
       "any_count": 49,
