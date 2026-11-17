@@ -737,8 +737,15 @@ def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, 
         "quota_should_run_user_todo_summary_detail", "quota_should_run_goal_boundary_detail",
         "quota_should_run_vision_detail", "quota_should_run_all_detail",
     }
+    aliases = {
+        "quota_should_run_turn_envelope": {"json", "markdown"},
+        "quota_should_run_turn_envelope_blocking_user_gate": {"json"},
+        "quota_should_run_turn_envelope_multi_subagent": {"json"},
+    }
     scenario, output_format = base.get("scenario"), base.get("format")
     variant = base.get("variant_id")
+    legacy = variant in aliases
+    allowed_variant = variant in variants or (legacy and output_format in aliases[variant])
     policy = "explicit_opt_in_cold_path" if variant else "absolute_hot_path"
     row = (f"variant/{variant}/{scenario}/{output_format}" if variant
            else f"surface/quota_should_run/{scenario}/{output_format}")
@@ -748,15 +755,19 @@ def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, 
         and scenario == candidate.get("scenario") and scenario in {"small", "crowded", "multi_agent"}
         and (scenario == "small" if variant else True)
         and output_format == candidate.get("format") and output_format in formats
-        and (variant in variants if variant else True)
+        and (not variant or allowed_variant)
         and base.get("qualification_policy") == candidate.get("qualification_policy") == policy
         and base.get("output_contract_version") is None
         and candidate.get("output_contract_version") == "loopx_turn_envelope_v1"
-        and base.get("markdown_anchor") == "# LoopX Quota Should Run"
+        and tuple(base.get("projection_envelope_schema_versions") or [])
+            == (() if legacy else ("loopx_projection_envelope_v0",))
+        and tuple(candidate.get("projection_envelope_schema_versions") or [])
+            == ("loopx_projection_envelope_v2",)
+        and base.get("markdown_anchor") == ("# LoopX Turn Envelope" if legacy else "# LoopX Quota Should Run")
         and candidate.get("markdown_anchor") == "# LoopX Turn Envelope"
         and _matching_quota_controls(base, candidate)):
         return False
-    return (base["quota_controls"].get("source_schema") is None
+    return (base["quota_controls"].get("source_schema") == ("loopx_turn_envelope_v0" if legacy else None)
             and candidate["quota_controls"].get("source_schema") == "loopx_turn_envelope_v1")
 
 
@@ -764,9 +775,20 @@ def _complete_quota_source_allowance(base: dict[str, Any], candidate: dict[str, 
     if not _complete_quota_source_migration(base, candidate):
         return {}
     # Complete-source changes in the matched main 36289306 / C1 94cd16bb
-    # workload. Explicit raw v0 readers retain their old limits and keys.
-    # Absolute v1 ceilings and collection growth remain enforced.
+    # workload. Named historical aliases now carry the same complete source;
+    # their frozen v0 oracle stays unchanged. Absolute v1 ceilings and later
+    # collection growth remain enforced.
     variant = str(base.get("variant_id") or "")
+    if base["quota_controls"].get("source_schema") == "loopx_turn_envelope_v0":
+        # Matched 6d19ab66 / 7aa77766: JSON grows 13,682-14,610 chars
+        # (up to 14,722 UTF-8 bytes); Markdown grows 20,639 chars / 6 lines.
+        chars = 15_360 if base["format"] == "json" else 21_504
+        allowance: dict[Metric, int] = {"chars": chars, "utf8_bytes": chars}
+        if base["format"] == "json":
+            allowance["compact_payload_chars"] = chars
+        else:
+            allowance["lines"] = 6
+        return allowance
     if base["format"] == "json":
         chars = {"small": 1_024, "crowded": 2_048, "multi_agent": 4_096}[base["scenario"]]
         return {"chars": chars, "utf8_bytes": chars, "compact_payload_chars": chars}
@@ -805,9 +827,7 @@ def _projection_envelope_migration(
             else migration_allowance.markdown
         )
         return allowance, [], ["projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
-    if (before == ("loopx_projection_envelope_v0",)
-            and after == ("loopx_projection_envelope_v2",)
-            and _complete_quota_source_migration(base, candidate)):
+    if _complete_quota_source_migration(base, candidate):
         return {}, [], [
             "Complete quota source uses the derived v2 projection; matching fixture controls require review"
         ]

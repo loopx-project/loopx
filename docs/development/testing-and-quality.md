@@ -1421,7 +1421,7 @@ complete source at `e29bd8aa50b9`:
 | Fixture | Main JSON / Markdown | Complete v1 JSON / Markdown | Markdown allowance |
 | --- | ---: | ---: | ---: |
 | Small | 23,289 / 7,476 | 22,855 / 22,954 | 24,000 |
-| Crowded | 42,965 / 8,143 | 42,839 / 42,941–43,017 | 43,100 |
+| Crowded | 42,965 / 8,143 | 42,839 / 42,941–43,017 | 43,700 |
 | Multi-agent | 25,514 / 6,441 | 26,239 / 26,339 | 27,000 |
 
 The crowded carrier varies when status sources and two later reads cross a
@@ -1467,6 +1467,46 @@ separate evidence.
 仍输出人工评审信号；控制变化、未知或混合投影版本及后续增长继续拒绝。
 这些证据限定于呈现夹具。完整原生 Windows、模型实际采用及成果与完整成本仍需
 各自验证。
+
+The named historical `--turn-envelope` aliases also migrate to this same
+complete source. With the unchanged public fixture at `6d19ab66cf40` and
+`7aa77766d053`, their small JSON / Markdown grow by 13,712 / 20,639 characters;
+the blocking-gate JSON grows by 14,610 characters (14,722 UTF-8 bytes), and the
+multi-subagent JSON by 13,682. Only these declared rows, matching all 19
+control witnesses, v0 source and no prior projection → complete v1 / v2 qualify.
+The one-time differential allowances are 15,360 JSON characters/bytes and
+21,504 Markdown characters/bytes plus six lines. Unknown or mixed schemas,
+changed controls and later v1 growth still fail. The frozen historical source
+and its failures are retained; explicit Off delivers the complete current
+source and does not select an old writer.
+
+On the same current crowded fixture, real physical root widths of 34, 58 and
+98 characters emit 42,941, 43,133 and 43,491 Markdown characters. The root is
+retained eight times. The last carrier has one explicit 38-character read-time
+override; retaining both already-qualified overrides gives 43,529. Only this
+presentation ceiling moves from 43,100 to 43,700, leaving 171 characters above
+that bound. The 162-character-root probe emits 43,965 and still fails. Preserve
+the original 43,000 and 43,100 failures, complete paths, both read times and
+capture-specific identities. Path-normalized observations keep 18 controls
+equal; the replan control contains new, exactly bound context references, so
+it is not claimed to have an identical digest. This isolates a local path and
+clock cost; it neither explains every Windows byte nor qualifies native
+Windows, model use, runtime savings or complete outcome/cost acceptance.
+
+具名旧 `--turn-envelope` 别名同样迁到完整来源。相同公开夹具的原小场景 JSON／
+Markdown 增长 13,712／20,639 字符；真 gate JSON 增长 14,610 字符、14,722 UTF-8
+字节，多子 Agent JSON 增长 13,682 字符。仅具名行、全部 19 控制见证一致、原 v0
+来源及空投影到完整 v1／v2 的转换适用一次性差分余量：JSON 15,360 字符／字节，
+Markdown 21,504 字符／字节及六行。未知或混合版本、控制变化及后续 v1 增长仍拒绝。
+冻结历史来源与失败保留；显式 Off 仍交付当前完整来源，不选择旧 writer。
+
+同一当前 crowded 夹具使用 34／58／98 字符的真实物理根时，Markdown 实测
+42,941／43,133／43,491 字符，保留八处根路径；最后一项有一条 38 字符读取时间
+覆盖，保留两条已验证覆盖时为 43,529。仅将该展示上限从 43,100 校准到 43,700，
+余 171 字符；162 字符根实测 43,965，仍拒绝。保留原 43,000／43,100 失败、完整
+路径、两组读取时间及各自捕获身份。仅归一化路径后，18 控制相同，replan 控制仍有
+正确绑定的新 context 引用，不宣称其摘要相同。这只定位本地路径与时钟成本，不冒充
+Windows 全部字节归因、原生 Windows、模型采用、运行时节省或成果／完整成本验收。
 
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability

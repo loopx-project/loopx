@@ -159,9 +159,12 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "small": {"json": 25_000, "markdown": 24_000},
             # Reads across a clock tick retain last_read_at on two source rows:
             # 42,941 -> 43,017 chars, exactly 76 chars of freshness evidence.
-            # Preserve the 43,000 failure and calibrate only this presentation
-            # guard, leaving 83 chars above the measured complete carrier.
-            "crowded": {"json": 51_000, "markdown": 43_100},
+            # Physical fixture roots of 34/58/98 chars measure Markdown
+            # 42,941/43,133/43,491. Eight literal routes and up to two
+            # 38-char read-time overrides remain intact: at width98 the
+            # full two-override carrier is 43,529. Keep both earlier ceiling
+            # failures; a width162 root still exceeds this bounded guard.
+            "crowded": {"json": 51_000, "markdown": 43_700},
             "multi_agent": {"json": 26_500, "markdown": 27_000},
         },
         max_lines={

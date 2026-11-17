@@ -2256,7 +2256,7 @@ def _quota_source_rows(output_format="json", *, variant=None, scenario="small"):
     head["quota_controls"]["source_schema"] = "loopx_turn_envelope_v1"
     if not legacy:
         base["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v0"]
-        head["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v2"]
+    head["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v2"]
     return base, head
 
 
@@ -2288,22 +2288,71 @@ def test_complete_quota_migration_keeps_measured_controls_and_bounded_cost(outpu
     assert _compare_row(same_version, head)["failures"]
 
 
-@pytest.mark.parametrize("output_format", ["json", "markdown"])
-def test_complete_quota_migration_never_waives_explicit_off_carrier(output_format):
+@pytest.mark.parametrize("variant,output_format,growth", [
+    ("quota_should_run_turn_envelope", "json", 13_712),
+    ("quota_should_run_turn_envelope", "markdown", 20_639),
+    ("quota_should_run_turn_envelope_blocking_user_gate", "json", 14_610),
+    ("quota_should_run_turn_envelope_multi_subagent", "json", 13_682),
+])
+def test_complete_quota_alias_migration_is_bounded_and_one_time(variant, output_format, growth):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
 
-    base, head = _quota_source_rows(output_format, variant="quota_should_run_turn_envelope")
+    base, head = _quota_source_rows(output_format, variant=variant)
+    head["chars"] += growth
+    head["utf8_bytes"] += growth + (112 if variant == "quota_should_run_turn_envelope_blocking_user_gate" else 0)
+    if output_format == "json":
+        head["compact_payload_chars"] += growth
+    else:
+        head["lines"] += 6
     result = _compare_row(base, head)
-    assert result["failures"]
-    assert not any("Quota v0 -> complete v1" in signal for signal in result["review_signals"])
+    assert not result["failures"] and result["review_signals"]
+    # The original v0 bytes are an oracle, not the current Off implementation.
+    # Once both sides carry v1, the migration never grants another allowance.
+    current = copy.deepcopy(head)
+    for metric in ("chars", "utf8_bytes", "compact_payload_chars"):
+        if base[metric] is not None:
+            current[metric] = base[metric]
+    assert _compare_row(current, head)["failures"]
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        if base[metric] is not None:
+            assert _compare_row(base, {**head, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+
+
+@pytest.mark.parametrize("variant,output_format,scenario", [
+    ("quota_should_run_turn_envelope_blocking_user_gate", "markdown", "small"),
+    ("quota_should_run_turn_envelope_multi_subagent", "markdown", "small"),
+    ("quota_should_run_turn_envelope", "json", "crowded"),
+    ("quota_should_run_turn_envelope_unknown", "json", "small"),
+])
+def test_complete_quota_alias_migration_refuses_unmeasured_rows(variant, output_format, scenario):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base, head = _quota_source_rows(output_format, variant=variant, scenario=scenario)
+    assert _compare_row(base, head)["failures"]
+
+
+@pytest.mark.parametrize("field", [
+    "goal_id", "agent_id", "decision", "should_run", "effective_action", "selected_todo",
+    "execution", "boundary", "required_reads", "next_cli_actions", "spend", "work_lane_contract",
+    "execution_obligation", "execution_profile", "task_scope", "replan_action_packet",
+    "notify", "user_action_required", "scheduler_action",
+])
+def test_complete_quota_alias_migration_rejects_each_changed_control(field):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base, head = _quota_source_rows(variant="quota_should_run_turn_envelope")
+    head["quota_controls"]["field_sha256"][field] = "c" * 64
+    # A stale aggregate digest must not hide a changed individual obligation.
+    assert any("Quota current controls changed" in f for f in _compare_row(base, head)["failures"])
 
 
 @pytest.mark.parametrize("damage", ["wrong-goal", "dropped-read", "missing-field", "missing-witness", "wrong-carrier",
     "same-source-version", "other-surface", "other-variant", "wrong-heading", "split-format",
-    "unknown-projection", "mixed-projection"])
-def test_complete_quota_migration_never_waives_changed_or_unknown_controls(damage):
+    "unknown-projection", "mixed-projection", "wrong-original-projection", "unknown-original-source"])
+@pytest.mark.parametrize("variant", [None, "quota_should_run_turn_envelope"])
+def test_complete_quota_migration_never_waives_changed_or_unknown_controls(damage, variant):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
-    base, head = _quota_source_rows()
+    base, head = _quota_source_rows(variant=variant)
     head.update(chars=10_959, utf8_bytes=10_959, compact_payload_chars=10_959)
     if damage in {"wrong-goal", "dropped-read"}:
         field = "goal_id" if damage == "wrong-goal" else "required_reads"
@@ -2330,6 +2379,10 @@ def test_complete_quota_migration_never_waives_changed_or_unknown_controls(damag
         head["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v3"]
     elif damage == "mixed-projection":
         head["projection_envelope_schema_versions"].append("loopx_projection_envelope_v0")
+    elif damage == "wrong-original-projection":
+        base["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v2"]
+    elif damage == "unknown-original-source":
+        base["quota_controls"]["source_schema"] = "loopx_turn_envelope_v999"
     assert _compare_row(base, head)["failures"]
 
 
