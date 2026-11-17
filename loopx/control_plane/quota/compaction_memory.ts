@@ -1,5 +1,6 @@
 /** Source-bound advisory working memory. Never edits work, reads or continuity. */
 import type {JsonObject} from "../effect_program.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 
@@ -26,7 +27,7 @@ export function prepareCompactionMemory(request: JsonObject): JsonObject {
   const recovery = requireJsonObject(request.recovery, "original recovery reference");
   const reference = (value: JsonObject): JsonObject => {
     const sha256 = requireNonEmptyString(value.sha256, "memory source digest");
-    if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("invalid memory source digest");
+    if (!BARE_SHA256_PATTERN.test(sha256)) throw new Error("invalid memory source digest");
     return {path: requireNonEmptyString(value.path, "memory source path"), sha256};
   };
   const document: JsonObject = {
