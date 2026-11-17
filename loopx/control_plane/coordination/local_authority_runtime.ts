@@ -1,4 +1,5 @@
 import {requirePromotionRegisteredAgents} from "./shadow_registry_source.ts";
+import {verifySettledExecutionSwitch} from "./settled_execution_switch.ts";
 import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
@@ -1058,6 +1059,12 @@ export async function claimLocalCoordinationTodo(
     }
     if (Object.hasOwn(input, "manage_execution") && input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA)
       throw new TypeError("Managed execution requires claim request v2");
+    if (Object.hasOwn(input, "allow_settled_execution_switch") &&
+        (input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA ||
+         input.manage_execution !== true ||
+         typeof input.allow_settled_execution_switch !== "boolean")) {
+      throw new TypeError("Settled execution switch requires a managed claim boolean");
+    }
     const worktree = input.write_worktree;
     if (worktree !== undefined && (input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA ||
         input.manage_execution !== true || typeof worktree !== "string" || !isAbsolute(worktree))) {
@@ -1111,9 +1118,15 @@ export async function claimLocalCoordinationTodo(
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         lease_request: leaseRequest,
         ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
+        ...(input.allow_settled_execution_switch === undefined ? {} : {
+          allow_settled_execution_switch: input.allow_settled_execution_switch as boolean,
+        }),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
-      }, authoritySourcesCurrent, claimWorkspaceObserver(worktree));
+      }, authoritySourcesCurrent, claimWorkspaceObserver(worktree),
+      input.allow_settled_execution_switch === true
+        ? request => verifySettledExecutionSwitch(root, request)
+        : undefined);
       return {
         ...result,
         source_authority: sourceAuthority,

@@ -58,6 +58,40 @@ def test_todo_list_handler_expands_shared_paths(
     assert captured_list["state_file"] == tmp_path / "ACTIVE_GOAL_STATE.md"
 
 
+@pytest.mark.parametrize(
+    ("lease_args", "managed"),
+    [([], True), (["--task-lease-idempotency-key", "explicit-key"], False)],
+)
+def test_todo_claim_enables_settled_switch_only_for_explicit_managed_claims(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    lease_args: list[str],
+    managed: bool,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_update_goal_todo(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"ok": True, "dry_run": True}
+
+    monkeypatch.setattr(todo_command, "update_goal_todo", fake_update_goal_todo)
+    args = build_parser().parse_args([
+        "todo", "claim", "--goal-id", "example-goal", "--todo-id", "todo_example",
+        "--agent-id", "agent-a", "--claimed-by", "agent-a", "--dry-run", *lease_args,
+    ])
+    result = todo_command.handle_todo_command(
+        args,
+        registry_path=tmp_path / "registry.json",
+        runtime_root_arg=None,
+        print_payload=lambda *_args: None,
+        append_cli_rollout_event=lambda *_args, **_kwargs: {},
+    )
+
+    assert result == 0
+    assert captured["manage_execution"] is managed
+    assert captured["allow_settled_execution_switch"] is managed
+
+
 def test_todo_requires_explicit_command_without_mutating_state(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
