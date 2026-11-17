@@ -90,7 +90,7 @@ class Execution:
 
 
 def turn_envelope_receipt(execution: Execution) -> dict:
-    """Record the requested heartbeat view, independently of delivered input."""
+    """Record the requested heartbeat flags, independently of delivered input."""
     if execution.turn_envelope:
         return {"turn_envelope": True, "turn_envelope_source": "explicit"}
     if execution.mode == "heartbeat":

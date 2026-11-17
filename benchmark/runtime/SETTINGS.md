@@ -20,7 +20,7 @@ use matched repetitions to test its effect.
 | --- | --- | --- |
 | Task entry | LoopX modes: loopx-planned | Record planned or seeded for every arm |
 | Explore | Off in heartbeat-resume; on in heartbeat-explore | Keep resume as the reference |
-| Heartbeat decision | Complete v1 (C1) by default; a fresh replan checkpoint can capture the original independently of presentation | To study the short v0 view, explicitly request it with context delivery off |
+| Heartbeat decision | Complete v1 (C1) through both normal and compatibility flag spellings; a fresh replan checkpoint captures the original independently of presentation | Pin a pre-C1 runner and LoopX revision for an original-quota reference; context delivery off inlines the current complete source |
 | Native-Goal continuation | Off: a native Goal that declares completion ends the worker; a Goal still active at the budget edge is recorded as `native_goal_outcome: budget_exhausted` with exit 0 | `native_goal_continue: true` / `--native-goal-continue` starts continuation Goals until 300 s before the budget edge (native-goal profile only) |
 | Replan cadence | 6 settled effective work Turns | Use explicit completed-Todo cadence or another Turn count for ablation |
 | Iteration context | Harbor: fresh; EdgeBench heartbeat: resume | Freeze the provider and context within a comparison |
@@ -95,15 +95,16 @@ configuration unchanged.
 ## Readback and interpretation
 
 Current heartbeat receipts record `complete_turn_source=default` or `explicit`,
-or `turn_envelope_source=explicit` for an explicit short-view request. They
-describe configuration. Qualify the delivered view from native tool output,
-including full-source recovery after an interrupted handoff. To study C1
-against original quota, use a pinned pre-C1 runner and LoopX revision for the
-reference; the v0 view still shares the C1 source.
+or `turn_envelope_source=explicit` for the requested compatibility spelling.
+Both spellings now deliver complete v1. The receipt describes the requested
+configuration. Qualify the delivered input from native tool output, including
+full-source recovery after an interrupted handoff. To study C1 against original
+quota, use a pinned pre-C1 runner and LoopX revision for the reference.
+Read saved v0 captures under their recorded version.
 
 Checkpoint capture is separate. Omitting `trigger` means after-wake capture;
-`fresh_replan` may set up a checkpoint handoff without requesting the short
-view. Preserve older receipts, including `turn_envelope_source=checkpoint_handoff`,
+`fresh_replan` may set up a checkpoint handoff independently of presentation.
+Preserve older receipts, including `turn_envelope_source=checkpoint_handoff`,
 under their original revision. When projecting checkpoint settings, Harbor
 can use the validated `checkpoint_request` bytes with their
 `checkpoint_request_path`; SForge forwards the exact bytes it stages.

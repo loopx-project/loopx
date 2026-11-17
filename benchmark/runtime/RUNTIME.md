@@ -81,15 +81,15 @@ agents:
       replan_after_turns: 6
 ```
 
-For a **heartbeat-only** study of the v0 presentation, set
-`turn_envelope: true` and `context_delivery: "off"` in `kwargs`.
-A successful guard returns the short view, with the signed C1 decision
-available through `detail_ref.full_decision` from the same invocation.
+Existing **heartbeat-only** configurations may retain `turn_envelope: true`
+as a compatibility spelling. Both spellings now deliver the complete v1 C1
+source. With `context_delivery: "off"`, the guard inlines that complete source.
 Selection/reentry still evaluate current authority and retain the private
-capture root. Install, execution and wake receipts record the requested
-`turn_envelope: true`; check native tool results and recovery for what the
-model received. Invalid native-Goal/plain/Turn-driver combinations fail before
-execution. Omit the option in a separate run to select the default complete view.
+capture root. Install, execution and wake receipts record the requested flag;
+check native tool results and recovery for what the model received. Invalid
+native-Goal/plain/Turn-driver combinations fail before execution.
+For an original-quota reference arm, pin a pre-C1 runner and LoopX revision in
+a separate attempt. Read saved v0 captures under their recorded version.
 
 New native heartbeat trials default to context delivery `on`. Add
 `context_delivery: "off"` to the same heartbeat agent `kwargs` to disable it.
@@ -237,8 +237,8 @@ settings. No scorer, budget, task semantics or launch authority changes with
 this option.
 
 Checkpoint capture is independent of the display choice. A `fresh_replan`
-declaration alone does not enable the short view. Keep older receipts under
-their original revision and qualify actual model input separately.
+declaration alone does not select a different contract version. Keep older
+receipts under their original revision and qualify actual model input separately.
 
 | Mode | Execution/continuation | LoopX skills and state |
 | --- | --- | --- |
