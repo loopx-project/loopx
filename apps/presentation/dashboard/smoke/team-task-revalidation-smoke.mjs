@@ -36,14 +36,12 @@ try {
   const configured = api.loopxModeRequests.findLast(row => row.operation === "configure");
   Object.assign(page.__loopxRuntime.loopxModes.get(configured.sessionId), {enabled: true, paused: false,
     active_turn_id: "fixture-loopx-turn", native: {status: "active", tokenBudget: 100000}});
-  let selected = "failure-1";
   await page.route("**/api/chat/sessions/*/loopx", async route => {
     const body = route.request().postDataJSON();
-    if (!["read", "revalidate"].includes(body?.operation)) return route.fallback();
+    if (!["operations", "read", "revalidate"].includes(body?.operation)) return route.fallback();
     console.log(`HTTP ${body.operation}: ${body.operation_id}`);
     const started = Date.now();
-    const response = await page.request.post(`${origin}/api/chat/sessions/recovery/loopx`, {data: {
-      operation: body.operation, operation_id: ["accepted-analysis", "synthesis-1"].includes(body.operation_id) ? selected : body.operation_id}});
+    const response = await page.request.post(`${origin}/api/chat/sessions/recovery/loopx`, {data: body});
     const {status, worker_active, recovery_required} = await response.json();
     console.log(`HTTP ${body.operation} returned ${response.status()} in ${Date.now() - started}ms`,
       {status, worker_active, recovery_required});
