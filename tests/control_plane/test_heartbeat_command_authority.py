@@ -7,7 +7,8 @@ from copy import deepcopy
 import pytest
 import test_quota_settlement_cli as cli
 
-from loopx.control_plane.quota.turn_envelope import build_turn_envelope, turn_plan_host_source
+from loopx.control_plane.quota.turn_envelope import turn_plan_host_source
+from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.work_items.interaction_contract import build_interaction_contract
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
 
@@ -50,9 +51,10 @@ def test_current_selection_and_settlement_override_goal_command(tmp_path, provid
             "--agent-id", cli.AGENT_ID, "--turn-instance-id", cli.TURN_ID)
     binding = ("--todo-id", cli.TODO_ID)
     captures = []
+    settlement_identities = []
     receipt_counts = []
-    for name, view in (("compact", ()), ("detail", ("--include-detail", "all")),
-                       ("envelope", ("--turn-envelope",))):
+    for name, view in (("default", ()), ("detail", ("--include-detail", "all")),
+                       ("envelope-alias", ("--turn-envelope",)), ("complete-alias", ("--complete-turn",))):
         capture = tmp_path / (name + "-capture")
         code, current = cli._run_cli(registry, runtime, *args, *binding, *view,
                                      "--decision-output-dir", str(capture), cwd=project)
@@ -60,6 +62,7 @@ def test_current_selection_and_settlement_override_goal_command(tmp_path, provid
         saved = capture / "decision.json"
         original = saved.read_bytes()
         full = json.loads(original)
+        assert current == full and full["schema_version"] == "loopx_turn_envelope_v1"
         interaction = full["interaction_contract"]
         recommendation = full["heartbeat_recommendation"]
         assert interaction["agent_channel"]["delivery_allowed"] is True
@@ -69,31 +72,34 @@ def test_current_selection_and_settlement_override_goal_command(tmp_path, provid
         assert recommendation["reason"] == interaction["agent_channel"]["primary_action"]
         assert recommendation["spend_policy"] == interaction["cli_channel"]["spend_policy"]
         assert full["selected_todo"]["todo_id"] == cli.TODO_ID
-        envelope = current if name == "envelope" else build_turn_envelope(current)
-        assert envelope["action_signature"]["matches"] is True
-        assert extract_turn_authority({"turn_envelope": envelope})["primary_action"] == interaction["agent_channel"]["primary_action"]
+        plan = build_loopx_turn_plan(full, host="generic-cli", execution_mode="isolated-headless",
+                                    turn_instance_id=cli.TURN_ID)
+        authority = extract_turn_authority(turn_plan_host_source(plan))
+        assert authority["primary_action"] == interaction["agent_channel"]["primary_action"]
+        settlement_identity = interaction["cli_channel"]["settlement_plan"]["identity"]
+        assert settlement_identity == full["heartbeat_receipt"]["settlement_identity"]
+        assert settlement_identity == plan["transaction"]["settlement_plan"]["identity"]
         assert full["agent_command"] == COMMAND  # Configuration remains source evidence.
-        if name != "envelope":
-            assert current["heartbeat_recommendation"] == recommendation
         captures.append((saved, original))
+        settlement_identities.append(settlement_identity)
         receipt_counts.append(cli._heartbeat_receipt_count(runtime, cli.TURN_ID))
 
     identity = ("--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
                 "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
-    code, refresh = cli._run_cli(
-        registry, runtime, "refresh-state", *identity,
+    refresh_args = (
+        "refresh-state", *identity,
         "--classification", "validated_intermediate_progress",
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation",
-        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+        "--no-global-sync", "--suppress-external-sinks", "--settle-turn", "--settlement-receipt",
     )
-    assert code == 0, refresh
-    spend_args = ("quota", "spend-slot", *identity, "--slots", "1",
-                  "--source", "heartbeat", "--execute")
-    code, spent = cli._run_cli(registry, runtime, *spend_args, cwd=project)
-    assert code == 0 and spent["appended"] is True, spent
-    code, retry = cli._run_cli(registry, runtime, *spend_args, cwd=project)
-    assert code == 0 and retry["appended"] is False, retry
+    code, refresh = cli._run_cli(registry, runtime, *refresh_args, cwd=project)
+    assert code == 0 and refresh["quota_spend"]["appended"], refresh
+    assert all(identity == refresh["settlement_identity"] for identity in settlement_identities)
+    assert refresh["settlement_progress"]["state"] == "settled"
+    code, retry = cli._run_cli(registry, runtime, *refresh_args, cwd=project)
+    assert code == 0 and retry["idempotent_replay"] and not retry["appended"], retry
+    assert retry["settlement_result"]["receipts"] == refresh["settlement_result"]["receipts"]
     code, settled = cli._run_cli(registry, runtime, *args, *binding, cwd=project)
     assert code == 0, settled
     assert settled["interaction_contract"]["mode"] == "heartbeat_settled_skip"
