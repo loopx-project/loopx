@@ -796,6 +796,61 @@ def test_installed_core_start_goal_preflights_before_creation(core_python, tmp_p
     assert not (tmp_path / ".loopx").exists()
 
 
+@pytest.mark.parametrize("unavailable_option", ["--host-adapter-command-json", "--validation-command-json"])
+def test_installed_core_first_task_can_retry_after_correcting_an_unavailable_program(
+    core_python, tmp_path, monkeypatch, unavailable_option,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    arguments = ["--format", "json", "start-goal", "--project", str(tmp_path),
+        "--goal-text", "Produce and independently check the squares from zero to seven.", "--execute",
+        "--host-adapter-command-json", json.dumps([core_python, "-I", "-c", HOST_SOURCE]),
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])]
+    unavailable = list(arguments)
+    unavailable[unavailable.index(unavailable_option) + 1] = json.dumps([str(tmp_path / "missing.exe")])
+
+    refused = json.loads(_run(core_python, unavailable, tmp_path, expected=1).stdout)
+    assert not (tmp_path / ".loopx").exists()
+    assert not (tmp_path / "host-invocations").exists()
+    assert unavailable_option in refused["error"] and "unavailable" in refused["error"]
+
+    result = json.loads(_run(core_python, arguments, tmp_path).stdout)
+    assert result["status"] == "committed" and result["validation"]["status"] == "passed"
+    assert json.loads((tmp_path / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    assert (tmp_path / "host-invocations").read_text().splitlines() == ["called"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses POSIX project-relative executable resolution")
+def test_installed_core_first_task_uses_project_tools_and_replays_after_they_are_removed(
+    core_python, tmp_path, monkeypatch,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    scripts = project / "tools"
+    scripts.mkdir(parents=True)
+    runner, check = scripts / "fixture-task-runner", scripts / "fixture-task-check"
+    for path, source in ((runner, HOST_SOURCE), (check, VALIDATOR_SOURCE)):
+        path.write_text("#!/usr/bin/env python3\n" + source)
+        path.chmod(0o700)
+    environment = {"PATH": "tools" + os.pathsep + os.environ["PATH"]}
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", "Produce and independently check the squares from zero to seven.", "--execute",
+        "--host-adapter-command-json", json.dumps(["./tools/fixture-task-runner"]),
+        "--validation-command-json", json.dumps(["fixture-task-check"])]
+
+    first = json.loads(_run(core_python, arguments, tmp_path, environment=environment).stdout)
+    assert first["status"] == "committed" and first["validation"]["status"] == "passed"
+    runner.unlink()
+    check.unlink()
+    replay = json.loads(_run(core_python, arguments, tmp_path, environment=environment).stdout)
+    assert replay["replayed"] and replay["resume_turn_key"] == first["resume_turn_key"]
+    assert not any(replay["effects"].values())
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+
+
 def _configure_first_goal_storage(core_python, project, runtime, provider):
     setup = '''import sys
 from pathlib import Path

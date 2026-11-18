@@ -26,6 +26,9 @@ loopx start-goal --execute --project . --goal-text "Create and check an inventor
 
 The configured caller supplies the two JSON argv arrays. Core registers the
 local Goal and worker, creates one task, then runs the existing checked Turn.
+Core checks executable availability before the first registration on POSIX
+and checks absolute executable paths on Windows. Correct an unavailable
+program in the launch configuration and repeat the same goal.
 Repeat the original invocation after an interruption, including during
 registration. It continues the saved attempt or returns the checked result.
 The `--guided` route remains available for an existing project or an interactive

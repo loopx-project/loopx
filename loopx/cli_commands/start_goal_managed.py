@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import shutil
 from typing import Any
 
 from ..bootstrap import DEFAULT_DOMAIN, bootstrap_project, initialize_first_goal_storage, read_json_if_exists
@@ -44,6 +46,17 @@ def _first_turn_args(
         "--host-adapter-command-json", args.host_adapter_command_json,
         "--validation-command-json", args.validation_command_json, "--no-global-sync", "--execute",
     ])
+
+
+def _first_task_executable_available(program: str, project: Path) -> bool:
+    if os.name == "nt":
+        # CreateProcess owns search for relative names and can use system
+        # locations outside PATH. Check explicit absolute paths here.
+        return not Path(program).is_absolute() or shutil.which(program) is not None
+    if os.path.dirname(program):
+        return shutil.which(os.path.join(project, program)) is not None
+    project_path = os.pathsep.join(os.path.join(project, entry) for entry in os.get_exec_path())
+    return shutil.which(program, path=project_path) is not None
 
 
 def _register_first_goal(
@@ -104,7 +117,14 @@ def execute_managed_start(
         native_task_validator=None, validator_builder=build_loopx_turn_command_validator,
     )
     assert host_argv is not None
+    host_argv = normalize_host_argv(host_argv)
+    validator_argv = json.loads(args.validation_command_json)
     registry = read_json_if_exists(registry_path)
+    if not registry:
+        if not _first_task_executable_available(host_argv[0], project):
+            raise ValueError("The task runner executable is unavailable. Check --host-adapter-command-json and retry.")
+        if not _first_task_executable_available(validator_argv[0], project):
+            raise ValueError("The independent checker executable is unavailable. Check --validation-command-json and retry.")
     runtime_root = resolve_runtime_root(
         registry or {"common_runtime_root": str(project / ".loopx/runtime")},
         runtime_root_arg, registry_path=registry_path,
@@ -113,7 +133,7 @@ def execute_managed_start(
     digest = canonical_digest({
         "project": str(project), "runtime_root": str(runtime_root),
         "goal_id": goal_id, "agent_id": agent_id, "goal": objective, "title": display_name,
-        "adapter": normalize_host_argv(host_argv), "validator": json.loads(args.validation_command_json),
+        "adapter": host_argv, "validator": validator_argv,
     })
     operation_id = "start-" + digest.removeprefix("sha256:")[:32]
     _register_first_goal(
