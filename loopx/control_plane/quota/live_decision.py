@@ -1,6 +1,7 @@
 from __future__ import annotations
 from .effective_action import EffectiveAction
 
+import os
 import shlex
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
@@ -9,7 +10,7 @@ from typing import Any
 
 from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
-from ...command_invocation import loopx_cli_argv
+from ...command_invocation import current_loopx_cli_argv, loopx_cli_argv
 from ..agent_context import project_agent_context, project_goal_agent_context
 from ..agents.identity import build_quota_agent_identity
 from ..runtime.time import now_utc_iso
@@ -484,6 +485,21 @@ def _bind_followup_turn_argument(
     return str(cli_args[index + 1])
 
 
+def _scheduler_fallback_launcher() -> list[str]:
+    """Keep an executable-bound replay on its selected Core installation."""
+    fallback = "loopx-apply-rrule"
+    route = current_loopx_cli_argv()
+    if route[1:] != ["--cli-bin", route[0]]:
+        return [fallback]
+    executable = Path(route[0])
+    if executable.is_absolute() and executable.is_file():
+        executable = executable.resolve()
+        companion = executable.with_name(fallback)
+        if os.name != "nt" and companion.is_file() and os.access(companion, os.X_OK):
+            fallback = str(companion)
+    return [fallback, "--loopx", str(executable)]
+
+
 def bind_scheduler_followup_cli_routes(
     payload: dict[str, Any],
     *,
@@ -503,6 +519,7 @@ def bind_scheduler_followup_cli_routes(
         for packet_key in ("app_automation", "codex_app")
         if isinstance((packet := scheduler_hint.get(packet_key)), dict)
     ]
+    fallback_launcher: list[str] | None = None
     for app_packet in app_packets:
         for hint_name in ("ack_hint", "failure_hint", "fallback_hint"):
             followup_hint = app_packet.get(hint_name)
@@ -514,8 +531,10 @@ def bind_scheduler_followup_cli_routes(
             if hint_name == "fallback_hint":
                 if cli_args[0] != "loopx-apply-rrule" or "--registry" in cli_args:
                     continue
+                if fallback_launcher is None:
+                    fallback_launcher = _scheduler_fallback_launcher()
                 bound_cli_args = [
-                    cli_args[0],
+                    *fallback_launcher,
                     "--registry",
                     str(registry_path.expanduser().resolve()),
                     "--runtime-root",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -236,6 +237,38 @@ def _fallback_payload() -> dict:
             }
         }
     }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the co-installed fallback launcher is a shell entrypoint")
+@pytest.mark.parametrize("has_companion", [True, False])
+def test_fallback_replays_the_bound_cli_and_its_companion(
+    tmp_path: Path, has_companion: bool,
+) -> None:
+    release = tmp_path / "selected release"
+    release.mkdir()
+    executable = release / "loopx"
+    executable.touch()
+    executable.chmod(0o700)
+    alias = tmp_path / "loopx"
+    alias.symlink_to(executable)
+    companion = release / "loopx-apply-rrule"
+    if has_companion:
+        companion.touch()
+        companion.chmod(0o700)
+
+    payload = _fallback_payload()
+    with loopx_cli_route(str(alias)):
+        bind_scheduler_followup_cli_routes(
+            payload,
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+            turn_instance_id="original-turn",
+        )
+
+    fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
+    command = str(companion) if has_companion else "loopx-apply-rrule"
+    assert fallback["cli_args"][:3] == [command, "--loopx", str(executable)]
+    assert fallback["cli_args"][-2:] == ["--turn-instance-id", "original-turn"]
 
 
 def test_fallback_hint_binds_the_receipted_turn(tmp_path: Path) -> None:

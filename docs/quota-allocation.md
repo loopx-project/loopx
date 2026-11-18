@@ -1826,8 +1826,11 @@ project-launched ACK into project-local scheduler state instead of the shared
 control plane. `fallback_hint.cli_args` receives the same registry and runtime
 root bindings. The bridge reads `scheduler_hint.app_automation` from the
 complete decision and reads `codex_app` for earlier CLI payloads that lack the
-canonical field. For older saved commands without a runtime root, the registry
-route supplies it. When the Turn is still expressed as a shell variable, the
+canonical field. An executable-bound guard also passes its selected CLI to the
+bridge. When that installation ships an executable POSIX fallback launcher
+beside the CLI, the command also names that launcher. For older saved commands
+without a runtime root, the registry route supplies it. When the Turn is still
+expressed as a shell variable, the
 fallback's `--turn-instance-id` uses `"${LOOPX_TURN:?}"` on POSIX and
 `$LOOPX_TURN` on native Windows. When the decision is
 heartbeat-receipted, ACK, failure, and fallback hints also bind the originating
