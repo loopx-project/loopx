@@ -504,7 +504,12 @@ def _loopback_relay_transport_ready(runtime_root: Path, codex_home: Path, consum
         return False, now
 
 
-def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
+def failed_request_readback(
+    session: CodexChatAgentSession,
+    turn_id: str,
+    *,
+    include_contradiction: bool = False,
+) -> dict[str, Any] | None:
     """Observe a historical pre-execution failure without resuming it.
 
     Unlike a same-worker retry, a migration may inspect an older failure.
@@ -516,15 +521,20 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
     """
     deadline = time.monotonic() + session.response_timeout_sec
 
+    def contradicted() -> dict[str, Any] | None:
+        return {"contradicted": True} if include_contradiction else None
+
     def terminal() -> dict[str, Any] | None:
         turns = list(session._control_items("thread/turns/list", {
             "sortDirection": "desc", "itemsView": "summary",
         }, deadline))
         ids = [item.get("id") for item in turns]
-        if (not ids or any(not isinstance(value, str) or not value for value in ids)
+        if not ids:
+            return None
+        if (any(not isinstance(value, str) or not value for value in ids)
                 or len(set(ids)) != len(ids)
                 or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in turns)):
-            return None
+            return contradicted()
         selected = next((item for item in turns if item["id"] == turn_id), None)
         if not selected:
             return None
@@ -534,7 +544,7 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             # only an exact user-only inventory below can prove no execution.
             return {"interrupted_before_execution": True}
         if selected.get("status") != "failed":
-            return None
+            return contradicted()
         if _routing_discovery_timeout(selected.get("error")):
             # Later work must not strand an untouched accepted request. Keep
             # the historical user-only rule; only the exact latest failure
@@ -558,12 +568,12 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
                 status is None or type(status) is int and 500 <= status <= 599
             ):
                 return {"codex_error_info": info}
-        return None
+        return contradicted()
 
     try:
         proof = terminal()
-        if proof is None:
-            return None
+        if proof is None or proof.get("contradicted") is True:
+            return proof
         items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
         routing = (proof.get("pre_execution_routing_timeout") is True
                    or proof.get("loopback_relay_auth_failure") is True)
@@ -576,14 +586,14 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             if (entry.get("turnId") != turn_id or not isinstance(item, dict)
                     or item.get("type") not in allowed or not item.get("id")
                     or not isinstance(item["id"], str) or item["id"] in ids):
-                return None
+                return contradicted()
             ids.add(item["id"])
             users += item["type"] == "userMessage"
         if users != 1 or (not routing and len(items) != 1) or terminal() != proof:
-            return None
+            return contradicted()
         if proof.get("interrupted_before_execution") and list(
                 session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items:
-            return None
+            return contradicted()
         proof.pop("latest_routing_failure", None)
         return {"thread_id": session.thread_id, "turn_id": turn_id,
                 "only_original_user_item": len(items) == 1,
@@ -875,7 +885,8 @@ class CodexAppServerAdapter:
                                    work_dir: Path | None = None,
                                    model_auth_home: Path | None = None,
                                    runtime_root: Path | None = None,
-                                   consumer: str = "worker") -> dict[str, Any] | None:
+                                   consumer: str = "worker",
+                                   include_contradiction: bool = False) -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
 
         The initialized stdio client is not a listener or a model runner. It
@@ -906,10 +917,13 @@ class CodexAppServerAdapter:
                 if completed_result_review:
                     proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set(),
                         allow_untyped=allow_untyped_result_review)
+                elif read_only_review:
+                    proof = interrupted_result_readback(native, turn_id)
                 else:
-                    reader = interrupted_result_readback if read_only_review else failed_request_readback
-                    proof = reader(native, turn_id)
+                    proof = failed_request_readback(native, turn_id, include_contradiction=include_contradiction)
                 if proof is not None:
+                    if proof.get("contradicted") is True:
+                        return {"contradicted": True, "thread_id": thread_id, "turn_id": turn_id}
                     if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;
                         #  Absence fails closed.

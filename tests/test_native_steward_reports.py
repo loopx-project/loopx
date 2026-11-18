@@ -1742,6 +1742,8 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     fake = Path(runtime.codex_bin)
     source = fake.read_text()
     fail_once = tmp_path / "fail-next-report"
+    history_unavailable = tmp_path / "report-history-unavailable"
+    contradicted_items = tmp_path / "report-contradicted-items"
     fail_once.touch()
     probe = f"""
     if method == "turn/start" and __import__("pathlib").Path({str(fail_once)!r}).exists():
@@ -1750,11 +1752,17 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
             print(json.dumps({{"method": "turn/completed", "params": {{"threadId": "durable-thread", "turn": {{"id": "report-failed-after-launch", "status": "failed", "error": {{"codexErrorInfo": "other", "message": "Synthetic terminal failure"}}}}}}}}), flush=True)
             continue
         sys.exit(0)
+    if method == "thread/turns/list" and __import__("pathlib").Path({str(history_unavailable)!r}).exists():
+        print(json.dumps({{"id": request["id"], "result": {{"data": []}}}}), flush=True)
+        continue
     if method == "thread/turns/list":
         print(json.dumps({{"id": request["id"], "result": {{"data": [{{"id": "report-failed-after-launch", "status": {native_status!r}, "error": {{"codexErrorInfo": "other"}}}}]}}}}), flush=True)
         continue
     if method == "thread/items/list":
-        print(json.dumps({{"id": request["id"], "result": {{"data": [{{"turnId": "report-failed-after-launch", "item": {{"id": "original-user", "type": "userMessage"}}}}]}}}}), flush=True)
+        items = [{{"turnId": "report-failed-after-launch", "item": {{"id": "original-user", "type": "userMessage"}}}}]
+        if __import__("pathlib").Path({str(contradicted_items)!r}).exists():
+            items.append({{"turnId": "report-failed-after-launch", "item": {{"id": "extra-agent", "type": "agentMessage"}}}})
+        print(json.dumps({{"id": request["id"], "result": {{"data": items}}}}), flush=True)
         continue
 """
     fake.write_text(source.replace('    method = request.get("method")', '    method = request.get("method")' + probe, 1))
@@ -1767,7 +1775,8 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     cadence = cadence_journal_path(reports.root, actor["goal_id"])
     previous = json.loads(cadence.read_text())
     native_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
-    old_artifacts = (store._turn_path(sid, original["turn_id"]), native_path,
+    old_artifacts = (store._turn_path(sid, original["turn_id"]),
+        store._event_path(sid, original["turn_id"]), native_path,
         old_folder / "source.json", old_folder / "editorial-request.json")
     original_bytes = [path.read_bytes() for path in old_artifacts]
     sent = list(bot.writes)
@@ -1781,6 +1790,8 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
         return pump_steward_monitors(runtime)
 
     assert wake() == []
+    failure_proof = old_folder / "native-terminal-failure.json"
+    assert failure_proof.is_file() is (native_status == "failed")
     point += timedelta(days=1)
     assert wake() == []  # Keep the normal recovery opportunity at the next boundary.
     point += timedelta(days=2)
@@ -1806,9 +1817,35 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     assert starts() == original_starts
 
     from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
-    native_proof = StewardTurnHost(runtime).report_failure_observation(original)
+    host = StewardTurnHost(runtime)
+    native_proof = host.report_failure_observation(original)
     assert bool(native_proof) is (native_status == "failed"), native_proof
     assert reports._failed_without_generation(actor, old) is (native_status == "failed")
+    if native_status == "failed":
+        retained_bytes = failure_proof.read_bytes()
+        retained = json.loads(retained_bytes)
+        assert set(retained) == {"binding", "provider_thread_id", "only_original_user_item"}
+        assert retained["provider_thread_id"] == native_proof["thread_id"]
+        assert retained["binding"]["provider_turn_id"] == native_proof["turn_id"]
+        contradicted_items.touch()
+        try:
+            assert host.report_failure_observation(original) is None
+            assert reports._failed_without_generation(actor, old) is False
+            assert wake() == [] and starts() == original_starts
+            assert json.loads(cadence.read_text()) == previous
+            assert reports.current_window(owner)[1]["window_id"] == old["window_id"]
+        finally:
+            contradicted_items.unlink()
+        history_unavailable.touch()
+        assert host.report_failure_observation(original) is None
+        assert host.report_quota_request(original, report_window=old) is None
+        retained["binding"]["native_result_sha256"] = "0" * 64
+        failure_proof.write_text(json.dumps(retained), encoding="utf-8")
+        try:
+            assert wake() == [] and starts() == original_starts
+            assert json.loads(cadence.read_text()) == previous
+        finally:
+            failure_proof.write_bytes(retained_bytes)
     pending = wake()
     if native_status != "failed":
         assert pending == [] and starts() == original_starts
@@ -1829,6 +1866,7 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     assert "report_quota_recovery" not in done["loopx_request"]
     assert json.loads((cadence.parent / "superseded-cadence" / (old["window_id"] + ".json")).read_text()) == previous
     assert [path.read_bytes() for path in old_artifacts] == original_bytes
+    assert failure_proof.read_bytes() == retained_bytes
     assert reports.delivery_current(owner, old) is False
     with pytest.raises(ValueError, match="no longer the active window"):
         freeze_private_report(root=reports.root, window=old, response={}, require_current_window=True)
