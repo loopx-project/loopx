@@ -147,6 +147,85 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize('damage', [None, 'missing', 'changed', 'material', 'unknown', 'later', 'row', 'growth'])
+def test_complete_quota_migration_requires_original_controls_and_bounded_scope(tmp_path, damage):
+    import runpy
+    from pathlib import Path
+    from tests.control_plane import test_cli_output_budget as probe
+
+    runner = runpy.run_path(str(Path(__file__).resolve().parents[2] /
+                               'examples/control_plane/cli-output-probe-runner.py'))
+    project, runtime, registry, state = probe._write_fixture(tmp_path, probe.SCENARIOS[0])
+    probe.import_fixture_authority(registry, probe.GOAL_ID)
+    command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
+                                     state_file=state, output_format='json')['quota_should_run']
+    code, text = probe._invoke_cli(command)
+    assert code == 0, text
+    source = json.loads(text)
+    raw = {k: v for k, v in source.items() if k not in {'schema_version', 'contract_binding'}}
+    material = runner['_quota_goal_material'](source)
+    observe = runner['_quota_control_observation']
+    before, after = observe(raw, goal_state=material), observe(source, goal_state=material)
+    assert before['controls_sha256'] == after['controls_sha256']
+    assert set(before['field_sha256']) == {
+        'goal_id', 'agent_id', 'decision', 'should_run', 'effective_action', 'selected_todo',
+        'execution', 'boundary', 'required_reads', 'next_cli_actions', 'spend', 'work_lane_contract',
+        'execution_obligation', 'execution_profile', 'task_scope', 'replan_action_packet',
+        'notify', 'user_action_required', 'scheduler_action',
+    }
+    base = _row(row_id='surface/quota_should_run/small/json', surface_id='quota_should_run',
+        chars=1000, utf8_bytes=1000, compact_payload_chars=1000, lines=1,
+        semantic_json_keys=['interaction_contract'], markdown_anchor='# LoopX Quota Should Run',
+        projection_envelope_schema_versions=['loopx_projection_envelope_v0'], quota_controls=before)
+    candidate = {**copy.deepcopy(base), 'chars': 2500, 'utf8_bytes': 2500, 'compact_payload_chars': 2500,
+        'output_contract_version': 'loopx_turn_envelope_v1', 'markdown_anchor': '# LoopX Turn Envelope',
+        'quota_controls': after}
+    if damage == 'missing':
+        del candidate['quota_controls']['field_sha256']['boundary']
+    elif damage in {'changed', 'material'}:
+        key = 'spend' if damage == 'changed' else 'required_reads'
+        candidate['quota_controls']['field_sha256'][key] = 'f' * 64
+    elif damage == 'unknown':
+        candidate['quota_controls']['source_schema'] = 'future_contract'
+    elif damage == 'later':
+        base['quota_controls']['source_schema'] = 'loopx_turn_envelope_v1'
+    elif damage == 'row':
+        candidate['row_id'] = base['row_id'] = 'surface/status/small/json'
+    elif damage == 'growth':
+        candidate.update(chars=100_000, utf8_bytes=100_000, compact_payload_chars=100_000)
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+    assert result['ok'] is (damage is None), result
+
+
+def test_quota_goal_material_checks_exact_bytes_order_and_full_source(tmp_path):
+    import hashlib
+    import runpy
+    from pathlib import Path
+
+    reader = runpy.run_path(str(Path(__file__).resolve().parents[2] /
+                               'examples/control_plane/cli-output-probe-runner.py'))['_quota_goal_material']
+    path = tmp_path / 'goal.md'
+    path.write_text('Goal intent.\nStop before private publication.\n')
+    command = 'cat -- ' + str(path)
+    expected = {'command': command, 'ordering': 'before_work',
+                'revision': 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()}
+    pending = {'interaction_contract': {'agent_channel': {'required_reads': [
+        {'source': 'goal_state', 'command': command, 'ordering': 'before_work'}]}}}
+    assert reader(pending) == expected
+    row = {'source': 'goal_state', 'command': command, 'ordering': 'before_work',
+           'content': {'full_source': True, 'revision': expected['revision'], 'text': path.read_text()}}
+    inline = {'interaction_contract': {'agent_channel': {'work_context': {'sources': [row]}}}}
+    assert reader(inline) == expected
+    row['content']['text'] = 'Goal intent.'
+    with pytest.raises(AssertionError):
+        reader(inline)
+    row['content']['revision'] = 'sha256:' + hashlib.sha256(b'Goal intent.').hexdigest()
+    assert reader(inline) != expected
+    row['ordering'] = 'after_work'
+    with pytest.raises(AssertionError):
+        reader(inline)
+
+
 def test_base_ceiling_observation_is_bounded_and_contains_only_metrics():
     import runpy
     from pathlib import Path
@@ -588,6 +667,7 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     git("init", "-b", "main")
     packet = repo / "packet.json"
     common_payload = {
+        "schema_version": "loopx_turn_envelope_v1", "contract_binding": {},
         "interaction_contract": {}, "scheduler_hint": {}, "selected_todo": {},
         "note": "x" * 4000,
     }
@@ -1659,7 +1739,7 @@ def test_inline_context_transition_is_bounded_one_time_and_fixture_scoped():
     assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
 
 
-def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
+def test_public_multi_subagent_probe_reaches_complete_source(tmp_path):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
@@ -1674,9 +1754,9 @@ def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
     with probe._stable_budget_fixture_root(tmp_path) as root:
         rows = runner["_multi_subagent_rows"](probe, semantics, root)
     assert len(rows) == 1
-    assert rows[0]["action_signature_coverages"] == [
-        "turn_envelope_action_dimensions_v4"
-    ]
+    assert rows[0]["quota_controls"]["source_schema"] == "loopx_turn_envelope_v1"
+    assert len(rows[0]["quota_controls"]["field_sha256"]) == 19
+    assert rows[0]["action_signature_coverages"] == []
     assert any("agent_context" in path for path in rows[0]["json_shape_paths"])
 
 

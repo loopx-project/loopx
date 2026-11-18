@@ -14,6 +14,7 @@ from ..control_plane.quota.error_codes import (
     QuotaDecisionTransportError,
 )
 from ..control_plane.turn_driver.decision_capture import (
+    context_capture_read_command,
     project_captured_context,
 )
 from .quota_capture import (
@@ -24,10 +25,11 @@ from .quota_capture import (
     native_context_activation,
     progressive_context_or_current,
     project_native_quota_context,
+    quota_context_surface,
     settlement_capture_failure_view,
 )
 from .quota_presentation import (
-    _compose_explicit_turn_context,
+    compose_quota_work_contract,
     _project_native_cli_settlement,
     _project_quota_cli_payload,
     _quota_renderer,
@@ -106,7 +108,6 @@ def prepare_quota_result_context(
                 getattr(args, "codex_context_dir", None)
                 or getattr(args, "codex_context_root", None)
             )
-            and not getattr(args, "turn_envelope", False)
             and payload.get("ok") is True
             and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
             and payload.get("normal_delivery_allowed") is True
@@ -330,7 +331,17 @@ def _publish_quota_result(
         or getattr(args, "codex_context_root", None)
     )
     scheduler_context = context.scheduler_context if context is not None else None
-    payload = _compose_explicit_turn_context(
+    if (capture_directory is not None and args.quota_command == "should-run"
+            and isinstance(payload.get("interaction_contract"), Mapping)):
+        # Bind the existing immutable reader route before signing. Its sidecar
+        # receives the final byte digest after publication, avoiding a self-hash.
+        source = capture_directory / "decision.json"
+        payload = {**payload, "detail_ref": {
+            **payload.get("detail_ref", {}),
+            "full_decision": context_capture_read_command(source, "",
+                reference_file=source.with_suffix(".reader.json"), reader_argv=reader_argv),
+        }}
+    payload = compose_quota_work_contract(
         payload,
         args,
         scheduler_context=scheduler_context,
@@ -406,10 +417,6 @@ def _publish_quota_result(
             else None
         ),
     )
-    if args.quota_command == "should-run" and "host_poll_receipt" in captured_payload:
-        # Legacy envelope presentation omits this source field. Preserve its
-        # existing visible receipt by copying the observation, not polling.
-        payload["host_poll_receipt"] = captured_payload["host_poll_receipt"]
     succeeded = bool(payload.get("ok"))
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
@@ -430,9 +437,7 @@ def _publish_quota_result(
             capture_id=delivery_request[1],
             goal_id=decision_identity[0],
             agent_id=decision_identity[1],
-            surface="turn_envelope"
-            if getattr(args, "turn_envelope", False)
-            else "quota_packet",
+            surface=quota_context_surface(captured_payload),
         )
     if (
         not deferred_context

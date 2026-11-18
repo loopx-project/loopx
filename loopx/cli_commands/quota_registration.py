@@ -221,13 +221,13 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "For `quota should-run`, return the additive bounded TurnEnvelope view. "
-            "The default full decision remains unchanged."
+            "Compatibility alias: quota should-run already returns the complete v1 work contract. "
+            "Context and Delta delivery remain independent."
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
-             "The legacy --turn-envelope and unselected output keep their existing versions. Context/Delta delivery remain independent.")
+        help="Compatibility alias: quota should-run already returns the complete v1 work contract "
+             "and its shared exact-Turn settlement. Context and Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",
