@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
 from ..extensions.runtime import extension_catalog_entries
+from ..python_install_owner import RESEARCH_DISTRIBUTION
 from .benchmark_toolkit.catalog_entry import BENCHMARK_TOOLKIT_CATALOG_ENTRY
 from .integration_branch.catalog_entry import INTEGRATION_BRANCH_CATALOG_ENTRY
 from .repository_change_window.catalog_entry import (
@@ -23,7 +25,11 @@ from .periodic_report.catalog_entry import PERIODIC_REPORT_CATALOG_ENTRY
 from .content_ops.catalog_entry import CONTENT_OPS_CATALOG_ENTRY
 from .value_connectors.catalog_entry import VALUE_CONNECTORS_CATALOG_ENTRY
 from .explore.catalog_entry import EXPLORE_CATALOG_ENTRY
-from .deep_research.catalog_entry import DEEP_RESEARCH_CATALOG_ENTRY
+from .deep_research.catalog_entry import (
+    DEEP_RESEARCH_CATALOG_ENTRY,
+    RESEARCH_INSTALL_HINT,
+    research_workflows_installed,
+)
 from .public_safe_outbound.catalog_entry import PUBLIC_SAFE_OUTBOUND_CATALOG_ENTRY
 from .connector_registry.catalog_entry import CONNECTOR_REGISTRY_CATALOG_ENTRY
 from .external_research.catalog_entry import EXTERNAL_RESEARCH_CATALOG_ENTRY
@@ -155,7 +161,17 @@ def build_capability_registry(
             "ready": True,
         }
     )
+    split_install = find_spec("loopx.cli") is None
+    research_installed = split_install and research_workflows_installed(builtin_cli_present=False)
+    if split_install:
+        registry.register_provider(
+            {"id": RESEARCH_DISTRIBUTION, "origin": "builtin", "installed": research_installed}
+        )
     for record in BUILTIN_CAPABILITIES:
+        if split_install and (record is DEEP_RESEARCH_CATALOG_ENTRY or record is EXTERNAL_RESEARCH_CATALOG_ENTRY):
+            record = record | {"provider_id": RESEARCH_DISTRIBUTION}
+            if not research_installed:
+                record["next_real_step"] = RESEARCH_INSTALL_HINT
         registry.register_capability(record)
     for record in BUILTIN_CAPABILITIES:
         _register_declared_implementation_providers(registry, record)

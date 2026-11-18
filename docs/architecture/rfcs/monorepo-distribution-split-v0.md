@@ -443,6 +443,13 @@ readback must also retain their existing distinct evidence.
 
 ### Product and benchmark execution
 
+For standalone Core, the private evidence ledger and external evidence
+commands ship together as `loopx-capability-research`. The Core catalog keeps
+the existing capability entries and reports the matching wheel's availability.
+Selecting either command loads its existing implementation. A research run
+continues in its existing project ledger and uses the same source admission
+and report rules.
+
 Follow the [long-horizon research program](long-horizon-harness-benchmark-research-program-v0.md):
 native/plain controls, passive observation, governed execution and ablations
 have explicit identities. A native control receives no LoopX instructions or

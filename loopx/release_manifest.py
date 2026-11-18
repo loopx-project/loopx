@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from importlib.metadata import PackageNotFoundError, distribution
+from importlib.metadata import Distribution, PackageNotFoundError, distribution
 import hashlib
 import json
 import os
@@ -10,7 +10,7 @@ from typing import Any
 
 from . import __version__
 from .doctor_git import GitSourceState, git_source_metadata
-from .python_install_owner import installed_loopx_distribution
+from .python_install_owner import RESEARCH_DISTRIBUTION, installed_loopx_distribution
 
 
 RELEASE_MANIFEST_SCHEMA_VERSION = "loopx_release_manifest_v0"
@@ -310,6 +310,18 @@ def _distribution_artifact_file(path: Path) -> bool:
     return "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
 
 
+def _owned_runtime_files(installed: Distribution) -> dict[str, Path]:
+    direct_url = json.loads(installed.read_text("direct_url.json") or "{}")
+    if direct_url.get("dir_info", {}).get("editable") or installed.version != __version__:
+        return {}
+    return {
+        item.as_posix(): Path(item.locate())
+        for item in installed.files or ()
+        if item.as_posix().startswith("loopx/")
+        and _distribution_artifact_file(Path(item.as_posix()))
+    }
+
+
 def _distribution_runtime_fingerprint() -> str | None:
     """Hash the actual imported, RECORD-owned wheel contents, not RECORD hashes.
 
@@ -318,19 +330,21 @@ def _distribution_runtime_fingerprint() -> str | None:
     """
     try:
         installed = installed_loopx_distribution(distribution)
-        direct_url = json.loads(installed.read_text("direct_url.json") or "{}")
-        if direct_url.get("dir_info", {}).get("editable") or installed.version != __version__:
-            return None
         package_root = Path(__file__).resolve().parent
-        files = {
-            item.as_posix(): Path(item.locate())
-            for item in installed.files or ()
-            if item.as_posix().startswith("loopx/")
-            and _distribution_artifact_file(Path(item.as_posix()))
-        }
+        files = _owned_runtime_files(installed)
         module = files.get("loopx/release_manifest.py")
         if module is None or module.resolve() != Path(__file__).resolve():
             return None
+        if installed.name == "loopx-core":
+            for name in (RESEARCH_DISTRIBUTION,):
+                try:
+                    companion = distribution(name)
+                except PackageNotFoundError:
+                    continue
+                owned = _owned_runtime_files(companion)
+                if not owned or files.keys() & owned.keys():
+                    return None
+                files.update(owned)
         entries = list(package_root.rglob("*"))
         if any(path.is_symlink() for path in entries):
             return None
