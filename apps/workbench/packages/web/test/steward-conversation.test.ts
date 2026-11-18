@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { registerHooks } from 'node:module';
+import * as React from 'react';
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+
+(globalThis as unknown as { React: typeof React }).React = React;
 
 // Node has no asset loader; the component and its network/event handling stay real.
 registerHooks({ load(url, context, next) {
   return url.endsWith('.svg') ? { format: 'module', source: 'export default "icon.svg"', shortCircuit: true } : next(url, context);
 } });
 const { StewardConversation } = await import('../src/components/StewardConversation.js');
+const { switchManagerAgent } = await import('../src/loopx/manager.js');
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const json = (value: unknown) => new Response(JSON.stringify(value));
 
@@ -277,6 +281,71 @@ test('when an alternate steward session fails to open, the restricted manager_ru
     ]);
   } finally {
     await act(async () => renderer?.unmount());
+    globalThis.fetch = originalFetch;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});
+
+test('when apply response is lost after Core committed restricted profile, switchManagerAgent reconciles and restores trusted_owner', async () => {
+  const originalFetch = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  let runtimeProfile: 'trusted_owner' | 'restricted' = 'trusted_owner';
+  let applyCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    if (path.endsWith('/api/chat/capabilities')) {
+      return json({
+        ok: true,
+        manager: {
+          runtime: { runtime_profile: runtimeProfile },
+          channel_binding: { executor_endpoint: 'codex', selection_policy: 'preferred', eligible_endpoints: [] },
+        },
+        adapters: [
+          { agent_id: 'codex', display_name: 'Codex', available: false, unavailable_reason: 'executable_not_found', executable: 'codex' },
+          { agent_id: 'claude-code', display_name: 'Claude Code', available: true, executable: 'claude' },
+        ],
+      });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/preview')) {
+      return json({ ok: true, plan_revision: 'sha256:plan-rev' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/apply')) {
+      applyCalls++;
+      if (applyCalls === 1) {
+        // Core committed restricted but response was dropped/interrupted
+        runtimeProfile = 'restricted';
+        throw new TypeError('Failed to fetch');
+      }
+      // Reconciling restore call:
+      if (body.namespace_configuration && (body.namespace_configuration as Record<string, unknown>).runtime_profile === 'trusted_owner') {
+        runtimeProfile = 'trusted_owner';
+        return json({ ok: true, transaction_id: 'mc-tx-restore' });
+      }
+      return json({ ok: true });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    let thrownError: unknown = null;
+    try {
+      await switchManagerAgent('token-1', 'claude-code', {
+        selectedAgentId: 'codex',
+        runtimeProfile: 'trusted_owner',
+        selectionPolicy: 'preferred',
+        eligibleEndpoints: [],
+        adapters: [],
+        availableAlternatives: [],
+      });
+    } catch (e) {
+      thrownError = e;
+    }
+    assert.ok(thrownError !== null, 'propagates apply error');
+    assert.equal((thrownError as Error).message, 'Failed to fetch');
+    assert.equal(runtimeProfile, 'trusted_owner', 'reconciled and restored prior trusted_owner profile');
+    assert.equal(applyCalls, 2, 'second apply call restored trusted_owner');
+  } finally {
     globalThis.fetch = originalFetch;
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
   }

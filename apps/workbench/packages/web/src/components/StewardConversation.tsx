@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,8 +7,8 @@ import brandIconDark from '../assets/loo-icon-dark.svg';
 import { IconSend, IconStop } from './icons';
 import {
   applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerCapabilities, readManagerHistory,
-  sendManagerTurn, streamManagerEvents, switchManagerAgent,
-  ManagerError, type ManagerCapabilities, type ManagerEvent, type ManagerMessage, type ManagerTurn,
+  restoreTrustedOwnerProfile, sendManagerTurn, streamManagerEvents, switchManagerAgent,
+  ManagerError, TRUSTED_OWNER_ENDPOINTS, type ManagerCapabilities, type ManagerEvent, type ManagerMessage, type ManagerTurn,
 } from '../loopx/manager';
 import type { LoopxStatusFailure } from '../loopx/status';
 
@@ -50,15 +50,14 @@ export function StewardConversation({ token, failure }: { token: string | undefi
 
   const recordOpenFailure = (cause: unknown, signal?: AbortSignal) => {
     setError(managerErrorText(cause, null));
-    setCapabilities(null);
-    if (cause instanceof ManagerError && (cause.code === 'agent_endpoint_unavailable' || cause.code === 'manager_runtime_endpoint_unsupported')) {
-      const failedAgent = parseUnavailableEndpoint(cause)?.agentId ?? null;
-      void readManagerCapabilities(token, failedAgent, signal).then(caps => {
-        if (signal?.aborted || !caps) return;
-        setCapabilities(caps);
-        setError(managerErrorText(cause, caps));
-      });
-    }
+    const failedAgent = (cause instanceof ManagerError && (cause.code === 'agent_endpoint_unavailable' || cause.code === 'manager_runtime_endpoint_unsupported'))
+      ? parseUnavailableEndpoint(cause)?.agentId ?? null
+      : null;
+    void readManagerCapabilities(token, failedAgent, signal).then(caps => {
+      if (signal?.aborted || !caps) return;
+      setCapabilities(caps);
+      setError(managerErrorText(cause, caps));
+    }).catch(() => undefined);
   };
 
   const openedFor = useRef<string | undefined | null>(null);
@@ -224,8 +223,14 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   }
   if (error && !sessionId) {
     const alternatives = capabilities?.availableAlternatives ?? [];
+    const isRestricted = capabilities?.runtimeProfile === 'restricted';
     return <div className="steward-chat-failure">
       <p role="alert">{error}</p>
+      {isRestricted && (
+        <p className="steward-chat-failure-notice">
+          {t('loopx.stewardCurrentProfile', 'restricted')}
+        </p>
+      )}
       <div className="steward-chat-failure-actions">
         <button type="button" disabled={switchingAgent !== null} onClick={() => {
           setError(null); setMessages(null); setCapabilities(null);
@@ -233,22 +238,37 @@ export function StewardConversation({ token, failure }: { token: string | undefi
             .then(({ sessionId: id, messages: history }) => { sessionRef.current = id; openedFor.current = token; setSessionId(id); setMessages(history); })
             .catch(cause => recordOpenFailure(cause));
         }}>{t('common.retry')}</button>
-        {alternatives.map(alt => (
-          <button key={alt.agentId} type="button" disabled={switchingAgent !== null} onClick={() => {
-            setSwitchingAgent(alt.agentId); setError(null); setMessages(null);
-            switchManagerAgent(token, alt.agentId, capabilities)
-              .then(({ sessionId: id, messages: history }) => {
-                selectedAgentRef.current = alt.agentId;
-                sessionRef.current = id;
-                openedFor.current = token;
-                setCapabilities(null);
-                setSessionId(id);
-                setMessages(history);
-              })
+        {isRestricted && (
+          <button type="button" disabled={switchingAgent !== null} onClick={() => {
+            setSwitchingAgent('restore-profile');
+            restoreTrustedOwnerProfile(token)
+              .then(() => readManagerCapabilities(token, null))
+              .then(caps => { if (caps) setCapabilities(caps); })
               .catch(cause => recordOpenFailure(cause))
               .finally(() => setSwitchingAgent(null));
-          }}>{t('loopx.stewardSwitchAgent', alt.displayName)}</button>
-        ))}
+          }}>{t('loopx.stewardRestoreTrustedOwner')}</button>
+        )}
+        {alternatives.map(alt => {
+          const willRestrict = !TRUSTED_OWNER_ENDPOINTS.has(alt.agentId) && capabilities?.runtimeProfile === 'trusted_owner';
+          return (
+            <button key={alt.agentId} type="button" disabled={switchingAgent !== null} onClick={() => {
+              setSwitchingAgent(alt.agentId); setError(null); setMessages(null);
+              switchManagerAgent(token, alt.agentId, capabilities)
+                .then(({ sessionId: id, messages: history }) => {
+                  selectedAgentRef.current = alt.agentId;
+                  sessionRef.current = id;
+                  openedFor.current = token;
+                  setCapabilities(null);
+                  setSessionId(id);
+                  setMessages(history);
+                })
+                .catch(cause => recordOpenFailure(cause))
+                .finally(() => setSwitchingAgent(null));
+            }}>
+              {willRestrict ? t('loopx.stewardSwitchAgentRestricted', alt.displayName) : t('loopx.stewardSwitchAgent', alt.displayName)}
+            </button>
+          );
+        })}
       </div>
     </div>;
   }

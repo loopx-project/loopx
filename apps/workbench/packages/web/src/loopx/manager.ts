@@ -58,7 +58,7 @@ export interface ManagerCapabilities {
   availableAlternatives: ManagerAdapter[];
 }
 
-const TRUSTED_OWNER_ENDPOINTS = new Set(['codex', 'antigravity']);
+export const TRUSTED_OWNER_ENDPOINTS = new Set(['codex', 'antigravity']);
 
 async function call<T>(token: string | undefined, path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
@@ -154,6 +154,14 @@ async function rollbackMachineTransaction(token: string | undefined, transaction
   }
 }
 
+/** Restore the steward machine runtime profile to trusted_owner. */
+export async function restoreTrustedOwnerProfile(token: string | undefined, signal?: AbortSignal): Promise<void> {
+  await applyMachineNamespace(token, 'manager_runtime', {
+    schema_version: 'manager_runtime_profile_v0',
+    runtime_profile: 'trusted_owner',
+  }, signal);
+}
+
 /** Switch the steward to an available Agent and open its session; roll back runtime profile if opening fails. */
 export async function switchManagerAgent(
   token: string | undefined,
@@ -161,18 +169,50 @@ export async function switchManagerAgent(
   capabilities?: ManagerCapabilities | null,
   signal?: AbortSignal,
 ): Promise<{ sessionId: string; messages: ManagerMessage[] }> {
+  const priorProfile = capabilities?.runtimeProfile;
   let runtimeTransactionId: string | null = null;
+  let appliedProfile = false;
+
   // Read-only adapters (Claude Code, Kiro CLI, DSH, API endpoints) require the restricted manager runtime profile.
-  if (!TRUSTED_OWNER_ENDPOINTS.has(agentId) && capabilities?.runtimeProfile === 'trusted_owner') {
-    runtimeTransactionId = await applyMachineNamespace(token, 'manager_runtime', {
-      schema_version: 'manager_runtime_profile_v0',
-      runtime_profile: 'restricted',
-    }, signal);
+  if (!TRUSTED_OWNER_ENDPOINTS.has(agentId) && priorProfile === 'trusted_owner') {
+    try {
+      runtimeTransactionId = await applyMachineNamespace(token, 'manager_runtime', {
+        schema_version: 'manager_runtime_profile_v0',
+        runtime_profile: 'restricted',
+      }, signal);
+      appliedProfile = true;
+    } catch (applyError) {
+      // Reconcile unconfirmed switch: Core may have committed restricted while the client lost the response.
+      const readback = await readManagerCapabilities(token, null, signal).catch(() => null);
+      if (readback?.runtimeProfile === 'restricted') {
+        await applyMachineNamespace(token, 'manager_runtime', {
+          schema_version: 'manager_runtime_profile_v0',
+          runtime_profile: priorProfile,
+        }).catch(() => undefined);
+      }
+      throw applyError;
+    }
   }
+
   try {
     return await openManagerSession(token, signal, agentId);
   } catch (cause) {
-    if (runtimeTransactionId) await rollbackMachineTransaction(token, runtimeTransactionId);
+    if (runtimeTransactionId) {
+      await rollbackMachineTransaction(token, runtimeTransactionId);
+    } else if (appliedProfile && priorProfile) {
+      await applyMachineNamespace(token, 'manager_runtime', {
+        schema_version: 'manager_runtime_profile_v0',
+        runtime_profile: priorProfile,
+      }).catch(() => undefined);
+    }
+    // Verify reconciliation: restore prior profile if still restricted after failure.
+    const verified = await readManagerCapabilities(token, null, signal).catch(() => null);
+    if (priorProfile && verified?.runtimeProfile && verified.runtimeProfile !== priorProfile) {
+      await applyMachineNamespace(token, 'manager_runtime', {
+        schema_version: 'manager_runtime_profile_v0',
+        runtime_profile: priorProfile,
+      }).catch(() => undefined);
+    }
     throw cause;
   }
 }
