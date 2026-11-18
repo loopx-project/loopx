@@ -1159,6 +1159,57 @@ def test_rollback_reconciles_only_managed_helpers(tmp_path, monkeypatch, scenari
             assert helper.resolve() == target / "scripts" / helper.name
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX archive rollback")
+@pytest.mark.parametrize("same_target", [False, True])
+def test_rollback_preserves_helper_replaced_between_renames(tmp_path, monkeypatch, same_target):
+    from loopx.self_update import execute_rollback_plan
+
+    releases = tmp_path / ".local/share/loopx/releases"
+    current, target = releases / "current", releases / "target"
+    launcher = tmp_path / ".local/bin/loopx"
+    helper = launcher.with_name("loopx-apply-rrule")
+    launcher.parent.mkdir(parents=True)
+    for release in (current, target):
+        scripts = release / "scripts"
+        scripts.mkdir(parents=True)
+        for name in (launcher.name, helper.name):
+            script = scripts / name
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o755)
+    launcher.symlink_to(current / "scripts" / launcher.name)
+    helper.symlink_to(current / "scripts" / helper.name)
+    replacement_target = (current / "scripts" / helper.name if same_target
+                          else tmp_path / "independent-rrule")
+    replacement_stat = None
+    replace_file = os.replace
+
+    def replace(source, destination):
+        nonlocal replacement_stat
+        replace_file(source, destination)
+        if destination == launcher and launcher.resolve() == target / "scripts" / launcher.name:
+            new_helper = helper.with_name("newer-helper")
+            new_helper.symlink_to(replacement_target)
+            replace_file(new_helper, helper)
+            replacement_stat = helper.lstat()
+        elif destination == helper and helper.resolve() == target / "scripts" / helper.name:
+            raise OSError("synthetic interruption after the helper rename")
+
+    def run(command, **_kwargs):
+        assert "authority-archive" in command
+        return subprocess.CompletedProcess(command, 0, '{"ok":true}', "")
+
+    monkeypatch.setattr("loopx.self_update.os.replace", replace)
+    monkeypatch.setattr("loopx.self_update.subprocess.run", run)
+    result = execute_rollback_plan(
+        {"ok": True, "plan": {"selected_release_root": str(target)}}, home=tmp_path,
+    )
+    assert not result["ok"] and result["execution"]["restored_previous_on_failure"]
+    assert launcher.resolve() == current / "scripts" / launcher.name
+    assert replacement_stat is not None and os.path.samestat(helper.lstat(), replacement_stat)
+    assert helper.resolve() == replacement_target
+    assert f"launcher changed during rollback checks ({helper.name})" in result["execution"]["error"]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")
 @pytest.mark.parametrize(
     "target_read", ["compatible", "rejected", "other_revision", "legacy_fallback", "launcher_changed"],

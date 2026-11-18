@@ -55,10 +55,11 @@ participate in this check. Rollback switches `loopx` and an archive-managed
 `loopx-apply-rrule` to the selected release under the installer's promotion lock.
 A selected release must provide an executable scheduler helper if the helper
 is managed by that archive installation. The lock covers Todo checks, both
-replacements, Doctor and recovery. When a switch fails, is interrupted during
-either replacement, or fails core Doctor, recovery restores the links still
-owned by the rollback and preserves any later replacement. A failed extension
-Doctor leaves the selected release active so the extension can be repaired.
+replacements, Doctor and recovery. Rollback verifies each destination against
+its original inode immediately before replacing it. A changed destination,
+an interrupted or failed switch, or a failed core Doctor triggers recovery
+only for links still owned by the rollback. A failed extension Doctor leaves
+the selected release active so the extension can be repaired.
 Use a release with a matching state backup if older code cannot read the
 current data. Use `loopx update plan
 --ref main` and `loopx update apply --ref main` only for maintainer/dev archive

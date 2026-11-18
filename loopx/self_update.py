@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -1451,8 +1452,30 @@ def _verify_rollback_todos(
                 raise RuntimeError(refusal)
 
 
-def _managed_rollback_helper_target(helper: Path, releases_dir: Path) -> str | None:
-    if not helper.is_symlink():
+def _rollback_launcher_stat(launcher: Path) -> os.stat_result | None:
+    try:
+        return launcher.lstat()
+    except FileNotFoundError:
+        return None
+
+
+def _verify_rollback_launcher(launcher: Path, original: os.stat_result | None) -> None:
+    current = _rollback_launcher_stat(launcher)
+    if original is None:
+        unchanged = current is None
+    else:
+        unchanged = current is not None and os.path.samestat(original, current)
+    if not unchanged:
+        raise RuntimeError(
+            f"LoopX launcher changed during rollback checks ({launcher.name}). "
+            "Read it back before retrying."
+        )
+
+
+def _managed_rollback_helper_target(
+    helper: Path, releases_dir: Path, original: os.stat_result | None,
+) -> str | None:
+    if original is None or not stat.S_ISLNK(original.st_mode):
         return None
     previous = os.readlink(helper)
     # Allow a prior partial rollback: either release can own this sibling.
@@ -1495,8 +1518,12 @@ def execute_rollback_plan(
     target_script = _release_script(release_root)
     route_arguments = _runtime_route_arguments(registry_path, runtime_root)
     loopx_bin = _user_loopx_bin(home)
-    previous_link_target = os.readlink(loopx_bin) if loopx_bin.is_symlink() else None
-    primary_was_absent = previous_link_target is None and not os.path.lexists(loopx_bin)
+    primary_stat = _rollback_launcher_stat(loopx_bin)
+    previous_link_target = (
+        os.readlink(loopx_bin) if primary_stat is not None and stat.S_ISLNK(primary_stat.st_mode) else None
+    )
+    primary_was_absent = primary_stat is None
+    original_launchers = {loopx_bin: primary_stat}
     previous_targets = {loopx_bin: previous_link_target}
     target_scripts = {loopx_bin: target_script}
     helper = loopx_bin.with_name("loopx-apply-rrule")
@@ -1511,8 +1538,10 @@ def execute_rollback_plan(
     temporary: TemporaryDirectory[str] | None = None
     promotion_guard = None
     try:
-        previous_helper = _managed_rollback_helper_target(helper, release_root.parent)
+        helper_stat = _rollback_launcher_stat(helper)
+        previous_helper = _managed_rollback_helper_target(helper, release_root.parent, helper_stat)
         if previous_helper is not None:
+            original_launchers[helper] = helper_stat
             previous_targets[helper] = previous_helper
             target_scripts[helper] = target_script.with_name(helper.name)
         compatible = subprocess.run(
@@ -1558,19 +1587,13 @@ def execute_rollback_plan(
         temporary = TemporaryDirectory(prefix=".loopx-rollback-", dir=loopx_bin.parent)
         staging = Path(temporary.name)
         for launcher, script in target_scripts.items():
-            observed_link = os.readlink(launcher) if launcher.is_symlink() else None
-            if observed_link != previous_targets[launcher] or (
-                launcher == loopx_bin and primary_was_absent and os.path.lexists(launcher)
-            ):
-                raise RuntimeError(
-                    f"LoopX launcher changed during rollback checks ({launcher.name}). "
-                    "Read it back before retrying."
-                )
+            _verify_rollback_launcher(launcher, original_launchers[launcher])
             staged = staging / launcher.name
             staged.symlink_to(script)
             staged_launchers[launcher] = staged.lstat()
         # A signal can arrive immediately after the rename. Record ownership first.
         for launcher in staged_launchers:
+            _verify_rollback_launcher(launcher, original_launchers[launcher])
             os.replace(staging / launcher.name, launcher)
         doctor_result = subprocess.run(
             [str(loopx_bin), *route_arguments, "--format", "json", "doctor"],
