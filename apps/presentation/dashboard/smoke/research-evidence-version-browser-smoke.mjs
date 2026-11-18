@@ -103,14 +103,19 @@ try {
   localizedReady = false;
   const child = JSON.parse(await readFile(resolve(import.meta.dirname, "../src/data/fixtures/case-study-child.json"), "utf8"));
   const parent = {goal_id: child.parent_goal_id, display_name: "Benchmark", events: [], analyses: []};
+  const recordsOnly = structuredClone(child.analyses[0]);
+  recordsOnly.title = "仅保留研究记录的版本";
+  delete recordsOnly.case_study;
   const second = structuredClone(child.analyses[0]);
   second.title = "另一版解读";
+  second.case_study.title = "修订版：误差与留存证据";
   second.case_study.sections[1].citations[0].first_line = 2;
-  child.analyses.push(second);
+  child.analyses.push(recordsOnly, second);
   const study = await start("study", child, parent);
   const studyRead = await (await fetch(new URL(analysisPath + "?" + new URLSearchParams({goal_id: child.goal_id}), study))).json();
   const studyPack = studyRead.pack;
-  const otherPack = studyRead.catalog.packs.find(pack => pack.pack_id !== studyPack.pack_id);
+  const otherPack = studyRead.catalog.packs.find(pack => pack.pack_id !== studyPack.pack_id && pack.case_study_summary);
+  const recordsPack = studyRead.catalog.packs.find(pack => !pack.case_study_summary);
   assert(otherPack, "Same Goal has two saved versions");
   const chapter = studyPack.case_study.sections[1];
   const address = new URL("/chat/", study);
@@ -229,6 +234,74 @@ try {
   await page.goForward();
   await page.waitForURL(url => url.searchParams.get("goalId") === parent.goal_id);
   assertParentAddress();
+
+  // A saved case address is never rewritten to a nearby version. Recover
+  // explicitly with the owner's version selector or default catalogue read.
+  const metrics = async () => (await fetch(new URL("/fixture/readback", study))).json();
+  const beforeRecovery = await metrics();
+  const caseHistoryReads = [];
+  const observeCaseHistory = request => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/chat/explore-results" && url.searchParams.get("goal_id") === child.goal_id
+        && url.searchParams.get("view") === "history") caseHistoryReads.push(url.search);
+  };
+  page.on("request", observeCaseHistory);
+  const versionWithoutStudy = new URL(address);
+  versionWithoutStudy.searchParams.set("research_pack", recordsPack.pack_id);
+  const versionOnly = new URL(versionWithoutStudy);
+  versionOnly.hash = "";
+  await page.goto(versionOnly.href);
+  await page.getByText("此版本没有已保存的案例解读。", {exact: true}).waitFor({timeout: 6000});
+  assert.equal(new URL(page.url()).searchParams.get("research_pack"), recordsPack.pack_id);
+  await page.goto(versionWithoutStudy.href);
+  await page.getByText("此版本没有已保存的案例解读。", {exact: true}).waitFor({timeout: 6000});
+  assert.equal(new URL(page.url()).searchParams.get("research_pack"), recordsPack.pack_id);
+  assert.equal(new URL(page.url()).hash, address.hash);
+  assert.equal(await page.locator(".case-opening h2").count(), 0);
+  await page.getByRole("combobox", {name: "选择解读版本"}).selectOption(otherPack.pack_id);
+  await page.locator(".case-opening h2").waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("research_pack"), otherPack.pack_id);
+  assert.equal(await page.locator(".case-opening h2").textContent(), otherPack.case_study_summary.title);
+  await page.goBack();
+  await page.getByText("此版本没有已保存的案例解读。", {exact: true}).waitFor();
+  assert.equal(new URL(page.url()).hash, address.hash);
+
+  await page.setViewportSize({width: 390, height: 900});
+  const unavailable = new URL(bookmark);
+  unavailable.searchParams.set("research_pack", "f".repeat(64));
+  await page.goto(unavailable.href);
+  await page.getByText("无法读取链接指定的解读。", {exact: true}).waitFor();
+  const exactRetry = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === analysisPath && url.searchParams.get("pack_id") === unavailable.searchParams.get("research_pack");
+  });
+  await page.getByRole("button", {name: "重试读取", exact: true}).press("Enter");
+  assert.equal((await exactRetry).status(), 409);
+  assert.equal(new URL(page.url()).hash, unavailable.hash);
+  const browseSaved = page.getByRole("button", {name: "查看已保存的解读", exact: true});
+  await browseSaved.press("Enter");
+  await page.getByRole("heading", {name: studyPack.case_study.title, exact: true}).waitFor();
+  assert.equal(await page.getByRole("combobox", {name: "选择解读版本"}).evaluate(el => el === document.activeElement), true);
+  assert.equal(new URL(page.url()).searchParams.get("goalId"), child.goal_id);
+  assert.equal(new URL(page.url()).hash, "");
+  await page.goBack();
+  await page.getByText("无法读取链接指定的解读。", {exact: true}).waitFor();
+  assert.equal(new URL(page.url()).hash, unavailable.hash);
+
+  const absentChapter = new URL(address);
+  absentChapter.hash = `case-section-${studyPack.pack_id}-absent`;
+  await page.goto(absentChapter.href);
+  await page.getByText("这条链接在所选解读中找不到章节。", {exact: false}).waitFor();
+  assert.equal(new URL(page.url()).hash, absentChapter.hash);
+  await page.getByRole("navigation", {name: "解读目录"}).getByRole("link").nth(1).press("Enter");
+  await atChapter();
+  assert.equal(await page.getByText("这条链接在所选解读中找不到章节。", {exact: false}).count(), 0);
+  const afterRecovery = await metrics();
+  page.off("request", observeCaseHistory);
+  assert.equal(afterRecovery.citation_reads, beforeRecovery.citation_reads);
+  assert.deepEqual(caseHistoryReads, [], "Explicit case links do not read the case's research history");
+  assert.equal(afterRecovery.mutation_attempts, beforeRecovery.mutation_attempts);
+  assert.equal(afterRecovery.source_unchanged, true);
   console.log("research evidence version: study and history navigation, saved excerpts and chapter position restored");
 } finally {
   releaseOriginal?.();

@@ -64,7 +64,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
   const article = useRef<HTMLElement>(null);
   const openCitation = useRef(onCitation);
   openCitation.current = onCitation;
-  const [missingCitation, setMissingCitation] = useState(false);
+  const [missingAnchor, setMissingAnchor] = useState("");
   const {url, goalId, packId, namespace, follow} = navigation;
   const prefix = `${caseChapterHashPrefix.slice(1)}${namespace ? namespace + '-' : ''}${packId}-`;
   useEffect(() => {
@@ -89,19 +89,22 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
           const citation = match ? citations?.[Number(match[2]) - 1] : undefined;
           const origin = document.getElementById(hash.slice(1));
           if (!citation || !origin || !article.current?.contains(origin)) {
-            setMissingCitation(true);
+            setMissingAnchor(hash);
             return;
           }
-          setMissingCitation(false);
+          setMissingAnchor("");
           const disclosure = origin.closest('details');
           if (disclosure) disclosure.open = true;
           openCitation.current(citation, origin, {hash, chapterHash: section ? `#${prefix}${section}` : ""});
           return;
         }
-        setMissingCitation(false);
-        if (!scoped) return;
-        const chapter = document.getElementById(hash.slice(1));
-        if (chapter && article.current?.contains(chapter) && chapter.getClientRects().length) focusChapter(chapter);
+        const chapter = scoped ? document.getElementById(hash.slice(1)) : null;
+        if (chapter && article.current?.contains(chapter) && chapter.getClientRects().length) {
+          setMissingAnchor("");
+          focusChapter(chapter);
+        } else {
+          setMissingAnchor(hash.startsWith(caseChapterHashPrefix) ? hash : "");
+        }
       });
     };
     restore();
@@ -121,7 +124,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
       return <li key={i}><a id={id} href={href.href} onClick={e => {
         if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
         e.preventDefault();
-        setMissingCitation(false);
+        setMissingAnchor("");
         follow(href, true);
         onCitation(c, e.currentTarget, {hash: href.hash, chapterHash: section ? `#${prefix}${section}` : ""});
       }}>
@@ -132,11 +135,13 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
   return <article ref={article} className="research-case-study" lang={study.language === 'zh' ? 'zh-CN' : 'en'}>
     <header className="case-opening">
       <p className="case-eyebrow">{scope.case_id}</p>
-      <h2>{study.title}</h2>
+      <h2 tabIndex={-1}>{study.title}</h2>
       <div className="case-lead"><MarkdownText text={study.summary}/></div>
       {historical ? <p className="case-read-warning" role="status">{zh ? '来源已变化或暂不可读。下文保留注册时的解读与证据快照，不能视作当前结果。' : 'The source changed or is unavailable. This reading and its evidence snapshot describe the registered version, not current results.'}</p> : null}
       {study.language !== (zh ? 'zh' : 'en') ? <p className="case-original-language">{zh ? '显示已保存的英文原文。' : 'Showing the saved Chinese original.'}</p> : null}
-      {missingCitation ? <p className="case-read-warning" role="status">{zh ? '这条链接在所选解读中找不到原文。可从下方的依据入口选择。' : 'This link does not identify an original in the selected study. Choose a source below.'}</p> : null}
+      {missingAnchor ? <p className="case-read-warning" role="status">{missingAnchor.includes('~')
+        ? (zh ? '这条链接在所选解读中找不到原文。可从下方的依据入口选择。' : 'This link does not identify an original in the selected study. Choose a source below.')
+        : (zh ? '这条链接在所选解读中找不到章节。可从目录选择。' : 'This link does not identify a chapter in the selected study. Choose a chapter from the contents.')}</p> : null}
       <details className="case-provenance"><summary>{zh ? '结论依据与范围' : 'Conclusion evidence and scope'}</summary>
         {citationLinks(study.citations)}
         <p>{zh ? '已保存的作者分析；来源绑定不代表结论已独立验证。' : 'Saved author analysis; source binding does not independently verify the conclusions.'}</p>
@@ -152,7 +157,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
           if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
           e.preventDefault();
           onCitationLocationChange(href.hash);
-          setMissingCitation(false);
+          setMissingAnchor("");
           follow(href);
           const chapter = document.getElementById(id);
           if (chapter && article.current?.contains(chapter)) focusChapter(chapter);
