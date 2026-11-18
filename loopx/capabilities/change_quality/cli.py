@@ -116,6 +116,8 @@ def render_change_quality_markdown(payload: dict[str, object]) -> str:
             )
     if payload.get("required_action"):
         lines.append(f"- required_action: {payload.get('required_action')}")
+    if payload.get("error"):
+        lines.append(f"- error: {payload.get('error')}")
     return "\n".join(lines).rstrip() + "\n"
 
 

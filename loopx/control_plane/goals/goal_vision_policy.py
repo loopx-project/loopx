@@ -50,17 +50,6 @@ def completed_todo_replan_threshold(profile: Any) -> int:
     return normalize_completed_todo_replan_threshold(profile["replan_after_completed_todos"])
 
 
-def normalize_goal_vision_advancement_policy(value: Any) -> str:
-    candidate = str(value or "").strip().lower().replace("-", "_")
-    try:
-        return GoalVisionAdvancementPolicy(candidate).value
-    except ValueError as exc:
-        raise ValueError(
-            "agent_vision.advancement_policy must be one of: "
-            + ", ".join(GOAL_VISION_ADVANCEMENT_POLICY_CHOICES)
-        ) from exc
-
-
 def goal_vision_repeats_advancement_until_closed(value: Any) -> bool:
     return (
         str(value or "").strip()

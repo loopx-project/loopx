@@ -80,9 +80,13 @@ def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list
     for offset, step in enumerate(steps):
         if not isinstance(step, dict):
             raise ValueError("Antigravity returned an invalid trajectory step")
-        metadata = step.get("metadata") or {}
-        source = metadata.get("sourceTrajectoryStepInfo") or {}
-        index = source.get("stepIndex")
+        metadata = step.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("Antigravity returned invalid trajectory step metadata")
+        source = metadata.get("sourceTrajectoryStepInfo") if metadata else None
+        if source is not None and not isinstance(source, dict):
+            raise ValueError("Antigravity returned invalid trajectory step source metadata")
+        index = source.get("stepIndex") if source else None
         if index is not None:
             if type(index) is not int or index < 0:
                 raise ValueError("Antigravity returned an invalid trajectory index")

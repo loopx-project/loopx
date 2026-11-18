@@ -301,13 +301,12 @@ test("runtime loads selected owners without importing unrelated methods", () => 
     assert.equal(context.contributions[0].capability_id, "goal_capability_organization");
     const worker = {goal_id: "example", agent_id: "worker"};
     const source = {sender_ids: ["owner"], targets: [{goal_id: "example"}]};
-    assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "collaboration.source.recipients",
-      {sender_id: "owner", source, available: [worker]}), {targets: [worker]});
+    const {resolveSourceRecipients} = await import(${JSON.stringify(new URL("../../loopx/control_plane/collaboration/source_grants.ts", import.meta.url).href)});
+    assert.deepEqual(resolveSourceRecipients({sender_id: "owner", source, available: [worker]}), {targets: [worker]});
     const revoked = await dispatchEffectRuntimeMethod(handlers, "collaboration.source.configure_recipient",
       {source, goal_id: "example", agent_id: "worker", grant: false,
         available: [worker], active_goal_ids: ["example"]});
-    assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "collaboration.source.recipients",
-      {sender_id: "owner", source: revoked.source, available: [worker]}), {targets: []});
+    assert.deepEqual(resolveSourceRecipients({sender_id: "owner", source: revoked.source, available: [worker]}), {targets: []});
     const peer = {conversation: {channel_id: "goal.example", goal_id: "example", origin: "web"},
       source_id: "fixture", goal_id: "example", agent_ids: ["worker"]};
     assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "collaboration.peer.context_access",

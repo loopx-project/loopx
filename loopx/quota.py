@@ -36,7 +36,6 @@ from .control_plane.quota.policy_constants import (
     MONITOR_DUE_ITEM_LIMIT,  # noqa: F401
 )
 from .control_plane.quota.monitor_poll import (
-    QUOTA_MONITOR_POLL_CLASSIFICATION as QUOTA_MONITOR_POLL_CLASSIFICATION,
     build_quota_monitor_poll_event as build_quota_monitor_poll_event,
     record_quota_monitor_poll_for_decision,
     resolve_monitor_poll_target,
@@ -113,7 +112,6 @@ from .control_plane.todos.todo_semantics import (
 _PUBLIC_COMPAT_REEXPORTS = {
     "AUTONOMOUS_CANDIDATE_CONTEXT_FIELDS": "loopx.control_plane.quota.policy_constants",
     "MONITOR_DUE_ITEM_LIMIT": "loopx.control_plane.quota.policy_constants",
-    "QUOTA_MONITOR_POLL_CLASSIFICATION": "loopx.control_plane.quota.monitor_poll",
     "build_quota_monitor_poll_event": "loopx.control_plane.quota.monitor_poll",
     "render_quota_markdown": "loopx.presentation.renderers.quota_markdown",
     "render_quota_scheduler_ack_markdown": "loopx.presentation.renderers.quota_markdown",
