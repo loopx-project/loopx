@@ -255,6 +255,7 @@ def test_dsh_host_forwards_the_resolved_credential_to_the_runtime(
 
     assert calls[0]["env"] == {
         **credential,
+        "LOOPX_TURN_KEY": TURN_KEY,
         "LOOPX_TURN_GOAL_ID": "g",
         "LOOPX_TURN_AGENT_ID": "a",
         "LOOPX_TURN_TODO_ID": "",
@@ -1562,6 +1563,7 @@ def test_dsh_sdk_overrides_follow_each_verified_turn(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     calls = []
+    monkeypatch.setenv("LOOPX_TURN_KEY", "ambient-wrong-turn")
     monkeypatch.setenv("LOOPX_TURN_GOAL_ID", "ambient-wrong-goal")
 
     def runner(**kwargs):
@@ -1569,18 +1571,21 @@ def test_dsh_sdk_overrides_follow_each_verified_turn(
         return '{"result_kind":"wait"}'
 
     monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
-    pinned = {"LOOPX_TURN_TODO_ID": "stale-todo", "DSH_PERMISSION_MODE": "read-only"}
+    pinned = {"LOOPX_TURN_KEY": "stale-turn", "LOOPX_TURN_TODO_ID": "stale-todo",
+              "DSH_PERMISSION_MODE": "read-only"}
     config = turn_host_adapter.DshHostConfig(workspace=tmp_path, env=pinned)
     turn_host_adapter.run_dsh_host(_signed_request(todo_id="first"), config=config)
     turn_host_adapter.run_dsh_host(_signed_request(todo_id="second"), config=config)
     turn_host_adapter.run_dsh_host(_signed_request(), config=config)
     assert [env["LOOPX_TURN_TODO_ID"] for env in calls] == ["first", "second", ""]
     for env in calls:
+        assert env["LOOPX_TURN_KEY"] == TURN_KEY
         assert env["LOOPX_TURN_GOAL_ID"] == "g"
         assert env["LOOPX_TURN_AGENT_ID"] == "a"
         assert env["LOOPX_TURN_WORKSPACE"] == str(tmp_path.resolve())
         assert env["DSH_PERMISSION_MODE"] == "read-only"
     assert pinned["LOOPX_TURN_TODO_ID"] == "stale-todo"
+    assert pinned["LOOPX_TURN_KEY"] == "stale-turn"
 
 
 @pytest.mark.parametrize("goal,agent,todo", [

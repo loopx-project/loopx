@@ -67,12 +67,70 @@ def test_outgoing_request_and_return_require_explicit_consumption(tmp_path):
     acknowledge(root, "research", "reviewer", rid, "adopt", "Inspect current source")
     report(root, "research", "reviewer", rid, "conclusion", "One boundary requires correction.")
     assert agenda(root, registry)["items"][0]["step"] == "consume_peer_result"
-    read_inbox(root, registry, "research", "worker")
+    turn = "turn-review-return"
+    read_inbox(root, registry, "research", "worker", turn_instance_id=turn)
     assert agenda(root, registry)["items"][0]["step"] == "consume_peer_result"
     assert agenda(root, registry, "reviewer")["items"][0]["step"] == "await_peer_consumption"
-    consume_return(root, "research", "worker", rid, registry=registry)
+    consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id=turn, disposition="accepted")
     assert agenda(root, registry)["items"] == []
     assert agenda(root, registry, "reviewer")["items"] == []
+
+
+def test_peer_return_deferral_survives_until_a_later_turn(flow):
+    root, registry, _store, _create = flow
+    configured = json.loads(registry.read_text())
+    configured["goals"][0]["coordination"]["registered_agents"].append("reviewer")
+    registry.write_text(json.dumps(configured))
+    brief = {"schema_version": "collaboration_brief_v0", "purpose": "Review the boundary",
+        "context": "Keep requester authority", "constraints": [], "inputs": [],
+        "acceptance": ["Return findings"], "return_requirement": "Return to requester"}
+    receipt = request(root, registry, "research", "worker", "reviewer", "review-round", brief)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "reviewer", rid, "adopt", "Review")
+    report(root, "research", "reviewer", rid, "conclusion", "Use this result next Turn.")
+
+    hook = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "worker")])
+    assert "--turn-instance-id" not in hook["required_reads"][0]["command"]
+    assert not (_root(root) / "replies" / rid / "conclusion.delivery.json").exists()
+
+    # A transport-only read is not proof that a model Turn received the result.
+    read_inbox(root, registry, "research", "worker")
+    with pytest.raises(ValueError, match="in this work Turn"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-a", disposition="accepted")
+
+    first = read_inbox(root, registry, "research", "worker", turn_instance_id="turn-a")
+    assert "--turn-instance-id turn-a" in first["peer_returns"]["items"][0]["acknowledge_command"]
+    delivery = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    supplied = delivery.read_bytes()
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-a")
+    assert delivery.read_bytes() == supplied
+    deferred = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-a", disposition="deferred")
+    replay = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-a", disposition="deferred")
+    assert deferred["status"] == "deferred" and deferred["replay"] is False
+    assert replay["replay"] is True
+    assert agenda(root, registry)["return_attention"]["count"] == 1
+
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-b")
+    acknowledgement = _root(root) / "replies" / rid / "conclusion.acknowledgement.json"
+    saved_acknowledgement = acknowledgement.read_bytes()
+    acknowledgement.write_text(json.dumps({**json.loads(saved_acknowledgement), "agent_id": "other"}))
+    with pytest.raises(ValueError, match="deferred acknowledgement is invalid"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-b", disposition="accepted")
+    acknowledgement.write_bytes(saved_acknowledgement)
+    accepted = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-b", disposition="accepted")
+    replayed = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-b", disposition="accepted")
+    assert accepted["status"] == "consumed" and replayed["replay"] is True
+    with pytest.raises(ValueError, match="scope mismatch"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-b", disposition="deferred")
+    assert agenda(root, registry)["return_attention"]["count"] == 0
 
 
 def test_invalid_receipt_and_invalid_entries_are_visible_as_unavailable(flow):
@@ -424,10 +482,11 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
                 "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
             required_reads = values["/interaction_contract/agent_channel/required_reads"]
         else:
-            assert packet["schema_version"] == "loopx_turn_envelope_v0"
-            source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
-            content, required_reads = source["content"], packet["required_reads"]
-            assert packet["work_context"]["complete"] is True
+            assert packet["schema_version"] == "loopx_turn_envelope_v1"
+            channel = packet["interaction_contract"]["agent_channel"]
+            source = next(row for row in channel["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
+            content, required_reads = source["content"], channel["required_reads"]
+            assert channel["work_context"]["complete"] is True
         assert content["read_complete"] is False
         rows = {row["request_id"]: row for row in content["unfinished_delegations"]["items"]}
         assert set(rows) == {receipt["request_id"], queued["request_id"], peer["request_id"]}
@@ -440,7 +499,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         manager_read = next(item for item in required_reads if item["hook_id"] == "manager.context_inbox")
         manager_argv = shlex.split(manager_read["command"])
         assert "manager-inbox" in manager_argv and "read" in manager_argv
-        assert ("markdown" in manager_argv) == (delivery == "native_files")
+        assert "--turn-instance-id" not in manager_argv
+        assert "markdown" in manager_argv
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":
@@ -449,6 +509,19 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert result.returncode == 0, result.stderr
         body = result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n")
         rendered = json.loads(body)
+        if "command" in rendered:
+            assert rendered["ok"] and rendered["read_complete"] is False
+            digest = rendered["sha256"]
+            reader = rendered["command"]
+            raw = bytearray()
+            while reader:
+                code, part = run(*shlex.split(reader))
+                assert code == 0 and part["ok"] and part["sha256"] == digest
+                assert part["offset"] == len(raw)
+                raw.extend(part["content"].encode("utf-8"))
+                assert len(raw) == (part["total_bytes"] if part["eof"] else part["next_offset"])
+                reader = None if part["eof"] else part["next_command"]
+            rendered = json.loads(raw)
         common = rendered.pop("shared_item_guidance", {})
         rendered["items"] = [{**common, **row} for row in rendered["items"]]
         # Both commands perform the same scoped read. Each reports its own

@@ -249,6 +249,13 @@ work-context sources, while the full result text remains behind the existing
 `manager-inbox read` command. This preserves asynchronous pull semantics and
 does not interrupt an active Turn or treat visibility as consumption.
 
+Ordinary peer results may wait for the next work Turn. Cancellation, blocking
+and priority-control paths keep their immediate handling. The invocation-bound
+`read_context` tool records a `model_turn` supply fact for the results it
+returns. The required CLI read and its paged recovery record transport delivery.
+Peer results stay eligible for the next Turn until a bound Turn accepts or
+rejects them.
+
 Outgoing requests to an original project conversation use the same typed address
 reader as explicit peer returns. The agenda retains that conversation recipient
 and its current revision without inventing a Goal/Agent receiver. A changed
@@ -734,6 +741,8 @@ Use the same registry, runtime root, Goal and Agent for every page. The scoped
 MCP equivalent is `read_context(cursor=<next_cursor>)`; a call without arguments
 still reads the first page. A cursor survives process restart and removal or
 completion of its anchor request. It is a navigation position, not a grant.
+When the MCP runs inside a managed work Turn, the host-bound Turn identity is
+used for result delivery and is never accepted from model tool arguments.
 Each call checks current registration and records reads only for returned requests.
 `next_cursor: null` ends this scan, not the outstanding work. Pages are live,
 ordered by request id; restart without a cursor to find new requests sorted
@@ -902,11 +911,15 @@ loopx manager-inbox report --goal-id research --agent-id worker \
 Retry the same update with the same id and text. Each update has its own
 `result_key`, retains the original audience and authority checks, and arrives
 after verified delivery of the preceding result. Unknown delivery blocks later
-sends rather than allowing them to overtake it. Peer readers acknowledge the
-specific returned key with `acknowledge-return --result-key <key>` after reading
-it; consuming the first result does not consume later updates. MCP callers use
-the corresponding `return_result(update_id=...)` and
-`consume_peer_result(result_key=...)`. Full texts stay in immutable receipts;
+sends rather than allowing them to overtake it. After the bound tool supplies
+an update, use its acknowledgement command with the exact `--result-key` or
+call `consume_peer_result` with that key. `accepted` and `rejected` consume it.
+`deferred` records the review but keeps it visible on the next Turn. Consuming
+the first result does not consume later updates. MCP callers use the corresponding
+`return_result(update_id=...)` and
+`consume_peer_result(disposition=..., result_key=...)`; the MCP host binds the
+current Turn identity and does not expose it as a model-selected argument.
+Full texts stay in immutable receipts;
 the typed publication planner receives identities and content digests.
 
 The Chat server hosts a cheap local receipt pump (no model calls and no Codex
@@ -1137,17 +1150,23 @@ grant names the blocked recipient without recording a request. This replaces
 the previous blanket refusal of external-source peer forwarding, without
 granting execution, changing priorities or broadening the return audience.
 
-The peer independently `acknowledge`s and `report`s a conclusion through the
-same commands as a manager request. The original requester receives it in
-`manager-inbox read` under `peer_returns`; its Turn-start hook keeps requiring
-a read until the requester explicitly consumes the result:
+The peer independently acknowledges a request and reports a conclusion
+through the same commands as a manager request. The original requester can
+inspect it under `peer_returns` in `manager-inbox read`. In a host with the
+invocation-bound tools configured, use `read_context` to receive the result and
+`consume_peer_result` after checking it. The result also carries a CLI
+acknowledgement command for that exact delivery:
 
 ```sh
-loopx manager-inbox read --goal-id allocation --agent-id builder
 loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
-  --request-id <peer-request-id>
+  --request-id <peer-request-id> --turn-instance-id <supplied-turn-id> \
+  --disposition accepted
 ```
 
+Use `--disposition deferred` to keep the same result in next-Turn attention.
+After acceptance or rejection, only the same disposition from the same Turn
+can replay the terminal acknowledgement.
+On hosts that only provide the ordinary CLI read, the result stays pending.
 Consumption does not mark a Todo done or certify peer acceptance. The requester
 checks the actual artifact, incorporates or rejects the findings, and reports
 the original owner conclusion through its original request. A second review
@@ -1207,8 +1226,9 @@ the normal governed Turn arguments:
 Use the Python interpreter with this LoopX checkout/release installed and
 absolute configuration paths. Each server exposes only `read_context`,
 `assess_request`, `link_work`, `request_peer`, `return_result` and `consume_peer_result`.
-Identity and filesystem roots are host-bound, absent from model tool arguments;
-every call rechecks the registered actor. The server has no shell, Todo/lease
+The managed invocation supplies the current Turn key to the scoped tool process.
+Identity and filesystem roots are host-bound. Every call rechecks the
+registered actor. The server has no shell, Todo/lease
 writer, credential tools or network listener. Installing/configuring it does not
 launch another worker or grant access to another Goal. Removing the patch and
 restarting the worker disables these tools without deleting pending requests or

@@ -334,7 +334,55 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
     }, scope=scope)
 
 
-def _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key):
+def _deferred_acknowledgement(
+    path: Path, acknowledgement: dict[str, Any], *, record: bool,
+) -> bool:
+    """Validate the latest deferred review and optionally advance it to this Turn."""
+    from ...turn_identity import normalize_turn_instance_id
+
+    prior = _read(path) if path.exists() else None
+    if prior is not None:
+        stable = {key: expected for key, expected in acknowledgement.items()
+                  if key not in {"turn_instance_id", "disposition"}}
+        try:
+            prior_turn = normalize_turn_instance_id(prior.get("turn_instance_id"))
+        except ValueError as exc:
+            raise ValueError("peer deferred acknowledgement is invalid") from exc
+        if (not prior_turn or prior.get("disposition") != "deferred"
+                or not isinstance(prior.get("acknowledged_at"), str)
+                or not prior["acknowledged_at"]
+                or len(prior["acknowledged_at"]) > 80
+                or any(prior.get(key) != expected for key, expected in stable.items())):
+            raise ValueError("peer deferred acknowledgement is invalid")
+        replay = bool(prior_turn == acknowledgement["turn_instance_id"])
+    else:
+        replay = False
+    if record and not replay:
+        _write(path, {**acknowledgement, "disposition": "deferred", "acknowledged_at": _now()})
+    return replay
+
+
+def _record_return_disposition_locked(
+    folder: Path, result_key: str, acknowledgement: dict[str, Any],
+) -> bool:
+    """Record the disposition under the caller's request lock and report replay."""
+    consumed_path = folder / (result_key + ".consumed.json")
+    if consumed_path.exists():
+        consumed = _read(consumed_path)
+        if any(consumed.get(key) != value for key, value in acknowledgement.items()):
+            raise ValueError("peer consumption receipt scope mismatch")
+        return True
+
+    acknowledgement_path = folder / (result_key + ".acknowledgement.json")
+    if acknowledgement["disposition"] == "deferred":
+        return _deferred_acknowledgement(acknowledgement_path, acknowledgement, record=True)
+    _deferred_acknowledgement(acknowledgement_path, acknowledgement, record=False)
+    _write(consumed_path, {**acknowledgement, "consumed_at": _now()})
+    return False
+
+
+def _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key, *,
+                                          turn_instance_id, disposition):
     from .inbox import result_paths, result_identity_matches
     requester = {"goal_ref": scope.caller_goal_ref, "agent_id": agent_id} if scope and scope.exact else None
     if route.get("kind") != "peer" or route.get("requester") != requester or requester["goal_ref"]["goal_id"] != goal_id:
@@ -358,13 +406,16 @@ def _consume_original_conversation_return(root, route, goal_id, agent_id, scope,
         if not result_identity_matches(reply, row, result) or delivery.get("status") != "delivered" or any(
                 delivery.get(key) != row.get(key) for key in ("recipient", "requester")):
             raise ValueError("read the exact original conversation conclusion before acknowledging it")
+        visible = delivery.get("model_turn")
+        if not isinstance(visible, dict) or visible.get("turn_instance_id") != turn_instance_id:
+            raise ValueError("read the exact original conversation conclusion in this work Turn before acknowledging it")
         value = {"request_id": request_id, "requester": requester, "recipient": recipient,
-            **({"result_key": result_key} if "result_key" in reply else {})}
-        path = folder / (result_key + ".consumed.json")
-        if path.exists() and any(_read(path).get(key) != val for key, val in value.items()):
-            raise ValueError("peer consumption receipt scope mismatch")
-        if not path.exists():
-            _write(path, {**value, "consumed_at": _now()})
+            **({"result_key": result_key} if "result_key" in reply else {}),
+            "turn_instance_id": turn_instance_id, "disposition": disposition}
+        replay = _record_return_disposition_locked(folder, result_key, value)
+        if disposition == "deferred":
+            return {"ok": True, "request_id": request_id, "result_key": result_key,
+                "status": "deferred", "consumed": False, "replay": replay}
     return {"ok": True, "request_id": request_id, "result_key": result_key, "consumed": True}
 
 
@@ -378,7 +429,12 @@ def consume_return(
     caller_goal_ref=None,
     scope=None,
     result_key="conclusion",
+    turn_instance_id=None,
+    disposition=None,
 ):
+    from ...turn_identity import normalize_turn_instance_id
+
+    turn_instance_id = normalize_turn_instance_id(turn_instance_id)
     if scope is None and registry is not None:
         with collaboration_goal_scope(
             registry,
@@ -393,10 +449,17 @@ def consume_return(
                 request_id,
                 scope=goal_scope,
                 result_key=result_key,
+                turn_instance_id=turn_instance_id,
+                disposition=disposition,
             )
+    if not turn_instance_id:
+        raise ValueError("peer result acknowledgement requires the current Turn identity")
+    if disposition not in {"accepted", "deferred", "rejected"}:
+        raise ValueError("peer result acknowledgement requires accepted, deferred, or rejected disposition")
     route = _read(_root(root) / "roundtrips" / (_request_id(request_id) + ".json"))
     if "recipient" in route:
-        return _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key)
+        return _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key,
+            turn_instance_id=turn_instance_id, disposition=disposition)
     if (
         route.get("kind") != "peer"
         or route.get("goal_id") != goal_id
@@ -452,6 +515,9 @@ def consume_return(
         "goal_ref" in row and delivery.get("goal_ref") != row["goal_ref"]
     ):
         raise ValueError("read the peer conclusion before acknowledging it")
+    visible = delivery.get("model_turn")
+    if not isinstance(visible, dict) or visible.get("turn_instance_id") != turn_instance_id:
+        raise ValueError("read the peer conclusion in this work Turn before acknowledging it")
     if scope is not None:
         decide_collaboration_lifecycle(
             scope,
@@ -459,45 +525,25 @@ def consume_return(
             record=row,
             route=route,
         )
-    path = folder / (result_key + ".consumed.json")
-    with _request_lock(root, request_id, scope, path.with_suffix(".lock")):
-        if path.exists() and any(
-            _read(path).get(k) != v
-            for k, v in {
-                "request_id": request_id,
-                **({"result_key": result_key} if "result_key" in reply else {}),
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                **(
-                    {"goal_ref": row["goal_ref"]}
-                    if "goal_ref" in row
-                    else {}
-                ),
-            }.items()
-        ):
-            raise ValueError("peer consumption receipt scope mismatch")
-        if not path.exists():
-            _write(
-                path,
-                {
-                    "request_id": request_id,
-                    **({"result_key": result_key} if "result_key" in reply else {}),
-                    "goal_id": goal_id,
-                    "agent_id": agent_id,
-                    "consumed_at": _now(),
-                    **(
-                        {"goal_ref": row["goal_ref"]}
-                        if "goal_ref" in row
-                        else {}
-                    ),
-                },
-            )
+    acknowledgement = {
+        "request_id": request_id,
+        **({"result_key": result_key} if "result_key" in reply else {}),
+        "goal_id": goal_id,
+        "agent_id": agent_id,
+        "turn_instance_id": turn_instance_id,
+        "disposition": disposition,
+        **({"goal_ref": row["goal_ref"]} if "goal_ref" in row else {}),
+    }
+    mutation_lock = folder / (result_key + ".acknowledgement.lock")
+    with _request_lock(root, request_id, scope, mutation_lock):
+        replay = _record_return_disposition_locked(folder, result_key, acknowledgement)
     return {
         "ok": True,
         "request_id": request_id,
-        "status": "consumed",
+        "status": "deferred" if disposition == "deferred" else "consumed",
         **({"result_key": result_key} if "result_key" in reply else {}),
         "work_state_changed": False,
+        **({"replay": replay} if disposition == "deferred" or replay else {}),
     }
 
 
@@ -606,7 +652,9 @@ def read_inbox(
     operation_cursor=None,
     request_id=None,
     caller_goal_ref=None,
+    turn_instance_id=None,
 ):
+    """Read the Inbox. Only the host's invocation-bound reader supplies a Turn ID."""
     from .inbox import _pending_result
     from .inbox import read_inbox_transaction
     from .turn_context_observation import delegation_read_command
@@ -614,9 +662,12 @@ def read_inbox(
     from ..effect_runtime import EffectRuntimeResponseAmbiguous
     from ...command_invocation import loopx_cli_argv
     from ...install_contract import render_host_cli_command
+    from ...turn_identity import normalize_turn_instance_id
 
+    turn_instance_id = normalize_turn_instance_id(turn_instance_id)
     read_command = delegation_read_command(root, registry, goal_id, agent_id)
-    read_arguments = {"cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id}
+    read_arguments = {"cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id,
+        **({"turn_instance_id": turn_instance_id} if turn_instance_id else {})}
     with collaboration_goal_scope(
         registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref,
     ) as goal_scope:
@@ -665,6 +716,7 @@ def read_inbox(
                     "items": result["items"],
                     "deliveries": snapshot["deliveries"], "work_observations": work,
                     "native_child_result_ids": snapshot.get("native_child_result_ids", []),
+                    **({"turn_instance_id": turn_instance_id} if turn_instance_id else {}),
                     "include_context": request_id is None and not native_continuation, "read_command": read_command,
                 }, scope=goal_scope)
             except EffectRuntimeResponseAmbiguous as exc:
@@ -680,6 +732,16 @@ def read_inbox(
         if receipt is not None:
             item["request_read_receipt"] = receipt
         item["receiver_followthrough"] = advice
+    if turn_instance_id:
+        for peer_result in result.get("peer_returns", {}).get("items", []):
+            command = [*loopx_cli_argv(), "--registry", str(registry), "--runtime-root", str(root),
+                "--format", "json", "manager-inbox", "acknowledge-return", "--goal-id", goal_id,
+                "--agent-id", agent_id, "--request-id", peer_result["request_id"],
+                "--turn-instance-id", turn_instance_id,
+                "--disposition", "<accepted|deferred|rejected>"]
+            if peer_result.get("result_key"):
+                command.extend(["--result-key", peer_result["result_key"]])
+            peer_result["acknowledge_command"] = render_host_cli_command(command)
     if request_id is None and not native_continuation:
         result["unfinished_delegations"] = final["context"]["unfinished_delegations"]
     result["followthrough"] = (
@@ -690,11 +752,21 @@ def read_inbox(
         "For adopted work, resume the linked commitment or assess whether this can be answered directly; "
         "do not manufacture a Todo for a short answer. "
         "Independently assess requests and actual input versions before accepting work. "
-        "Use request_peer for help or independent review. Assess peer conclusions against "
-        "actual artifacts, then consume_peer_result after using or rejecting the result. "
+        "Use request_peer for help or independent review. Assess peer conclusions against actual artifacts. "
         "Finish the original request with return_result, including evidence and remaining gaps. "
         "Adoption, file hashes and returned opinions are not independent acceptance or Todo completion."
     )
+    if result.get("peer_returns", {}).get("items"):
+        if turn_instance_id:
+            result["followthrough"] += (
+                " Use the supplied acknowledgement command to record accepted, rejected or deferred. "
+                "Deferral keeps the same result visible on the next Turn."
+            )
+        else:
+            result["followthrough"] += (
+                " Peer conclusions stay pending after this read. Use the current host-bound "
+                "read_context tool to receive them for acknowledgement when it is available."
+            )
     if result.get("native_child_results", {}).get("items"):
         result["followthrough"] += (
             " For each native_child_result, inspect the result and its evidence, then run native-child "
