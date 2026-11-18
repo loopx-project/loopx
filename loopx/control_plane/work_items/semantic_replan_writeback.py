@@ -396,7 +396,9 @@ def qualify_replan_writeback(
                 obligation, None, goal_id=goal_id, agent_id=safe_agent_id,
                 source_status=status_payload, stride_strategy=context["stride_strategy"],
                 explore_reader=replan_explore_reader,
-                goal_acceptance_contract=(agent_todos or {}).get("goal_acceptance_contract"),
+                goal_acceptance_contract=(
+                    contract if isinstance(contract := (agent_todos or {}).get("goal_acceptance_contract"), Mapping) else None
+                ),
                 todo_items=agent_todo_source_items,
             )
     if not obligation:

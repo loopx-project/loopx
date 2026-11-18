@@ -412,7 +412,7 @@ function quotaStateForShare(row?: GoalDirectoryRow) {
 
 function buildAgentManagementRows(
   rows: GoalDirectoryRow[],
-  todoIndex?: TodoIndexSummary | null,
+  _todoIndex?: TodoIndexSummary | null,
   projection?: AgentManagementProjection | null,
 ): AgentManagementRow[] {
   const items: TodoExplorerItem[] = [];

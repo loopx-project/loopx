@@ -209,7 +209,8 @@ def _bound_work_turn_identity(goal_id: str, agent_id: str, workspace: Path) -> s
     """Read the host-owned Turn identity without exposing it as a model argument."""
     from .turn_identity import normalize_turn_instance_id
 
-    turn_instance_id = normalize_turn_instance_id(os.environ.get("LOOPX_TURN_KEY"))
+    host_turn_key = os.environ.get("LOOPX_TURN_KEY", "").strip()
+    turn_instance_id = normalize_turn_instance_id(host_turn_key or None)
     if turn_instance_id is None:
         return None
     bound_workspace = os.environ.get("LOOPX_TURN_WORKSPACE")

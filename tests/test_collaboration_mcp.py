@@ -133,6 +133,18 @@ main()
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("host_turn_key", [None, "", " \t "])
+def test_collaboration_mcp_accepts_unbound_turn(tmp_path, monkeypatch, host_turn_key):
+    from loopx.collaboration_mcp import _bound_work_turn_identity
+
+    if host_turn_key is None:
+        monkeypatch.delenv("LOOPX_TURN_KEY", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_TURN_KEY", host_turn_key)
+
+    assert _bound_work_turn_identity("delivery", "worker", tmp_path) is None
+
+
 def test_collaboration_mcp_rejects_mismatched_host_bound_turn_scope(tmp_path, monkeypatch):
     from loopx.collaboration_mcp import _bound_work_turn_identity
 

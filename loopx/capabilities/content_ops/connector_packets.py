@@ -21,11 +21,8 @@ def _connector_trial_from_public_packet(
     runtime_policy: Mapping[str, Any],
     index: int,
 ) -> dict[str, Any]:
-    observation = (
-        packet.get("observation")
-        if isinstance(packet.get("observation"), Mapping)
-        else {}
-    )
+    raw_observation = packet.get("observation")
+    observation = raw_observation if isinstance(raw_observation, Mapping) else {}
     surface = str(packet.get("surface") or observation.get("surface") or "public_feed")
     source_item_id = str(source_item.get("source_item_id") or "").strip()
     if not source_item_id:
@@ -58,11 +55,8 @@ def _connector_trial_from_private_gate_packet(
     source_item: Mapping[str, Any],
     index: int,
 ) -> dict[str, Any]:
-    connector = (
-        packet.get("connector")
-        if isinstance(packet.get("connector"), Mapping)
-        else {}
-    )
+    raw_connector = packet.get("connector")
+    connector = raw_connector if isinstance(raw_connector, Mapping) else {}
     source_item_id = str(source_item.get("source_item_id") or "").strip()
     if not source_item_id:
         raise ValueError("private connector gate source_item_id is required")
@@ -107,11 +101,8 @@ def source_item_and_trial_from_public_packet(
     _require_packet_flag(packet, "external_writes_performed", False)
     _require_packet_flag(packet, "private_source_content_read", False)
     _require_packet_flag(packet, "autopublish_allowed", False)
-    runtime_policy = (
-        packet.get("runtime_policy")
-        if isinstance(packet.get("runtime_policy"), Mapping)
-        else {}
-    )
+    raw_runtime_policy = packet.get("runtime_policy")
+    runtime_policy = raw_runtime_policy if isinstance(raw_runtime_policy, Mapping) else {}
     if runtime_policy.get("safe_default") != "head_only_metadata_probe":
         raise ValueError("public packet runtime policy must be HEAD-only")
     if runtime_policy.get("browser_open_allowed_before_gate") is not False:
@@ -145,11 +136,8 @@ def source_item_and_trial_from_private_gate_packet(
     _require_packet_flag(packet, "external_writes_performed", False)
     _require_packet_flag(packet, "private_source_content_read", False)
     _require_packet_flag(packet, "autopublish_allowed", False)
-    runtime_policy = (
-        packet.get("runtime_policy")
-        if isinstance(packet.get("runtime_policy"), Mapping)
-        else {}
-    )
+    raw_runtime_policy = packet.get("runtime_policy")
+    runtime_policy = raw_runtime_policy if isinstance(raw_runtime_policy, Mapping) else {}
     if runtime_policy.get("safe_default") != "gate_projection_only":
         raise ValueError("private packet runtime policy must be gate-only")
     if runtime_policy.get("browser_open_allowed_before_gate") is not False:

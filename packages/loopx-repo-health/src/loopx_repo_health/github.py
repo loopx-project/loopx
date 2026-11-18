@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,7 +18,7 @@ from datetime import datetime, timezone
 from statistics import quantiles
 from typing import Any
 
-from .contract import RepoHealthSnapshot, SNAPSHOT_SCHEMA_VERSION
+from .contract import RepoHealthSnapshot
 
 
 API_BASE = "https://api.github.com"

@@ -221,19 +221,20 @@ def _preset_commands(
     agent_id: str,
     agent_scope: str,
 ) -> dict[str, str]:
+    quoted_cli = _shell(cli_bin)
     return {
         "slash_start": f"/loopx {preset.goal_text}",
         "cli_start": (
-            f"{cli_bin} start-goal --guided --project {_shell(project)} "
+            f"{quoted_cli} start-goal --guided --project {_shell(project)} "
             f"--goal-text {_shell(preset.goal_text)}"
         ),
         "quota_guard": (
-            f"{cli_bin} --format json quota should-run "
+            f"{quoted_cli} --format json quota should-run "
             f"--goal-id {_shell(goal_id)} --agent-id {_shell(agent_id)} "
             "--runtime-profile codex_app_heartbeat"
         ),
         "heartbeat_prompt": (
-            f"{cli_bin} heartbeat-prompt --thin --goal-id {_shell(goal_id)} "
+            f"{quoted_cli} heartbeat-prompt --thin --goal-id {_shell(goal_id)} "
             f"--agent-id {_shell(agent_id)} --agent-scope {_shell(agent_scope)} "
             "--runtime-profile codex_app_heartbeat"
         ),
@@ -304,9 +305,9 @@ def build_beginner_preset_packet(
             "project": project,
         },
         "common_setup": [
-            f"{cli_bin} doctor",
-            f"{cli_bin} slash-commands --install",
-            f"{cli_bin} preset list",
+            f"{_shell(cli_bin)} doctor",
+            f"{_shell(cli_bin)} slash-commands --install",
+            f"{_shell(cli_bin)} preset list",
         ],
         "presets": [
             _preset_to_dict(
@@ -332,10 +333,18 @@ def render_beginner_preset_markdown(payload: dict[str, Any]) -> str:
         "",
         "Common setup:",
     ]
-    for command in payload.get("common_setup", []):
+    raw_setup = payload.get("common_setup")
+    common_setup = raw_setup if isinstance(raw_setup, list) else []
+    for command in common_setup:
         lines.append(f"- `{command}`")
     lines.append("")
-    presets = payload.get("presets") if isinstance(payload.get("presets"), list) else []
+    cli_prefix = (
+        str(common_setup[0]).rsplit(" ", 1)[0]
+        if common_setup and isinstance(common_setup[0], str)
+        else "loopx"
+    )
+    raw_presets = payload.get("presets")
+    presets = raw_presets if isinstance(raw_presets, list) else []
     for preset in presets:
         if not isinstance(preset, dict):
             continue
@@ -353,17 +362,21 @@ def render_beginner_preset_markdown(payload: dict[str, Any]) -> str:
                 "Useful when:",
             ]
         )
-        for item in preset.get("useful_when", []):
+        raw_useful = preset.get("useful_when")
+        for item in raw_useful if isinstance(raw_useful, list) else []:
             lines.append(f"- {item}")
         lines.extend(["", "Safety defaults:"])
-        for item in preset.get("safety_defaults", []):
+        raw_safety = preset.get("safety_defaults")
+        for item in raw_safety if isinstance(raw_safety, list) else []:
             lines.append(f"- {item}")
         lines.extend(["", "Commands:", ""])
-        commands = preset.get("commands") if isinstance(preset.get("commands"), dict) else {}
+        raw_commands = preset.get("commands")
+        commands = raw_commands if isinstance(raw_commands, dict) else {}
         for label in ("slash_start", "cli_start", "quota_guard", "heartbeat_prompt"):
             command = commands.get(label)
             if command:
-                lines.extend([f"{label}:", "```bash", str(command), "```", ""])
-        lines.append(f"Show only this preset: `loopx preset show {preset.get('id')}`")
+                fence = "text" if label == "slash_start" else "bash"
+                lines.extend([f"{label}:", f"```{fence}", str(command), "```", ""])
+        lines.append(f"Show only this preset: `{cli_prefix} preset show {preset.get('id')}`")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

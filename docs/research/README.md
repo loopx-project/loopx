@@ -38,7 +38,7 @@ establish an equal-budget efficiency gain or a general performance guarantee.
   ([中文](budgeted-research-planning.zh-CN.md)): why conditional plans, costly
   measurements and causal comparisons serve better long-budget outcomes; links
   the existing Stride/Yardstick owners to the EdgeBench pilot and later learning.
-- [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md): current protocols,
+- [Benchmark research workspace](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md): current protocols,
   benchmark-specific practice, and links to the governing research RFC.
 - [Legacy benchmark history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy):
   retired runners, adapters, and historical packets removed from the working

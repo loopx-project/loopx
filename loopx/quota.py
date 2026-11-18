@@ -36,7 +36,6 @@ from .control_plane.quota.policy_constants import (
     MONITOR_DUE_ITEM_LIMIT,  # noqa: F401
 )
 from .control_plane.quota.monitor_poll import (
-    QUOTA_MONITOR_POLL_CLASSIFICATION as QUOTA_MONITOR_POLL_CLASSIFICATION,
     build_quota_monitor_poll_event as build_quota_monitor_poll_event,
     record_quota_monitor_poll_for_decision,
     resolve_monitor_poll_target,
@@ -113,7 +112,6 @@ from .control_plane.todos.todo_semantics import (
 _PUBLIC_COMPAT_REEXPORTS = {
     "AUTONOMOUS_CANDIDATE_CONTEXT_FIELDS": "loopx.control_plane.quota.policy_constants",
     "MONITOR_DUE_ITEM_LIMIT": "loopx.control_plane.quota.policy_constants",
-    "QUOTA_MONITOR_POLL_CLASSIFICATION": "loopx.control_plane.quota.monitor_poll",
     "build_quota_monitor_poll_event": "loopx.control_plane.quota.monitor_poll",
     "render_quota_markdown": "loopx.presentation.renderers.quota_markdown",
     "render_quota_scheduler_ack_markdown": "loopx.presentation.renderers.quota_markdown",
@@ -1460,9 +1458,10 @@ def record_quota_monitor_poll(
         goal_ref=goal_ref,
         recovery_effect_id=recovery_effect_id,
     )
-    continuation = result.get("turn_continuation") or {}
+    continuation = result.get("turn_continuation")
     if (
         result.get("ok") is True
+        and isinstance(continuation, Mapping)
         and continuation.get("settlement_binding_matches_observation") is False
     ):
         # The open-work readback may now select another Todo. Render the
@@ -1531,12 +1530,13 @@ def record_quota_monitor_poll(
         }
         # A later discovery projection is not a second settlement plan. The
         # top-level resume/readback above owns this original Turn's closeout.
-        after = result.get("after") or {}
-        cli = (after.get("interaction_contract") or {}).get("cli_channel")
-        if (
-            isinstance(cli, dict)
-            and (after.get("selected_todo") or {}).get("todo_id") != identity.todo_id
-        ):
+        raw_after = result.get("after")
+        after = raw_after if isinstance(raw_after, Mapping) else {}
+        contract = after.get("interaction_contract")
+        cli = contract.get("cli_channel") if isinstance(contract, Mapping) else None
+        selected = after.get("selected_todo")
+        selected_id = selected.get("todo_id") if isinstance(selected, Mapping) else None
+        if isinstance(cli, dict) and selected_id != identity.todo_id:
             cli.pop("settlement_plan", None)
             cli.pop("next_cli_actions", None)
             cli.update(

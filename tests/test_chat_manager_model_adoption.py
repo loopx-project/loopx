@@ -413,7 +413,7 @@ def test_model_edit_keeps_early_context_through_public_resume(upstream_boundary,
 
 
 @pytest.mark.parametrize("source", ["working", "stale_context", "missing_rollout", "wrong_provider"])
-def test_bound_steward_model_edit_uses_original_native_checkpoint(steward, monkeypatch, source):
+def test_bound_steward_model_edit_uses_original_native_checkpoint(steward, monkeypatch, source):  # noqa: F811
     from loopx.capabilities.native_chat import codex_auth
 
     store, runtime, provider, transport, binding, capture, workspace = steward
@@ -736,3 +736,15 @@ def test_native_account_epoch_reopens_only_unstarted_codex_adapter(conversation,
         assert preparation["planned_method"] == "thread/resume" and preparation["history_message_count"] == 0
     else:
         assert preparation is None
+
+
+def test_manager_session_model_allocation_ignores_partial_pre_v0_record(conversation) -> None:
+    root, _store, runtime, session, _starts = conversation
+    configure(root, model="gpt-6.1-sol", effort="high", endpoint="codex", policy="preferred")
+    partial_allocation = {
+        "schema_version": 1,
+        "selection_policy": "preferred",
+    }
+    partial_session = {**session, "manager_executor_allocation": partial_allocation}
+    assert manager_session_model_allocation(runtime, partial_session) is None
+    assert partial_session["manager_executor_allocation"] == partial_allocation

@@ -1036,7 +1036,7 @@ test("durable replay rejects receipt path escape and lost pre-existing index his
   params.expected_index_digest = `sha256:${createHash("sha256")
     .update(await readFile(indexPath))
     .digest("hex")}`;
-  const written = await evaluateQuotaMonitorPollCommit(params);
+  await evaluateQuotaMonitorPollCommit(params);
   await unlink(indexPath);
   await assert.rejects(
     () => evaluateQuotaMonitorPollCommit(params),

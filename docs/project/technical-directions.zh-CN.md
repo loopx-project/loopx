@@ -38,7 +38,7 @@
 
 Goal、typed todo、quota、scheduler hint、evidence、Effect Program settlement、
 recovery 与 host parity 是所有战略方向共用的底座。其可靠性工作继续通过
-[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+[Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
 和 `control-plane` label
 推进；这是持续的产品 hardening，不是另一套方向事实源。
 
@@ -97,7 +97,7 @@ matched baseline（或显式标为更弱的 baseline）、acceptance criteria、
    public fixture 或浏览器状态。
 
 `@maxliux5` 是当前 implementation lead，不代表仓库级 maintainer 任命。Lark 专属
-路径遵循[项目治理](https://github.com/huangruiteng/loopx/blob/main/.github/GOVERNANCE.md)
+路径遵循[项目治理](https://github.com/loopx-project/loopx/blob/main/.github/GOVERNANCE.md)
 记录的 subsystem review route；
 跨子域和 mainline 晋级决策仍由 lead maintainer 负责。
 
@@ -131,7 +131,7 @@ module 或重复 authority。
 ## 贡献与治理闭环
 
 1. 选择最接近的 direction tracker，阅读当前阶段与边界。
-2. 在 [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+2. 在 [Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
    寻找有界任务；如果没有，
    用 contributor task 模板创建 issue，写明方向、目标 base branch、最小切片、
    non-goal 与验证方式。

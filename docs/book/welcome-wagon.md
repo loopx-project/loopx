@@ -136,11 +136,11 @@ loopx first-run-report
 
 | 你的情况 | 使用入口 | 应包含 |
 | --- | --- | --- |
-| 第一次安装或连接 | [First-run feedback](https://github.com/huangruiteng/loopx/issues/new?template=first_run.yml) | 版本、OS、Host、完成步骤 |
-| 运行了数小时或数天 | [Usage story](https://github.com/huangruiteng/loopx/issues/new?template=usage_story.yml) | 时长、使用能力、恢复方式、结果 |
-| 可复现错误 | [Bug report](https://github.com/huangruiteng/loopx/issues/new?template=bug_report.yml) | 最小复现、期望、实际、脱敏诊断 |
-| 使用或设计问题 | [GitHub Q&A](https://github.com/huangruiteng/loopx/discussions/categories/q-a) | 目标、当前版本、已尝试路径 |
-| 可公开工作流或成果 | [Show and tell](https://github.com/huangruiteng/loopx/discussions/categories/show-and-tell) | 真实运行方式、证据与限制 |
+| 第一次安装或连接 | [First-run feedback](https://github.com/loopx-project/loopx/issues/new?template=first_run.yml) | 版本、OS、Host、完成步骤 |
+| 运行了数小时或数天 | [Usage story](https://github.com/loopx-project/loopx/issues/new?template=usage_story.yml) | 时长、使用能力、恢复方式、结果 |
+| 可复现错误 | [Bug report](https://github.com/loopx-project/loopx/issues/new?template=bug_report.yml) | 最小复现、期望、实际、脱敏诊断 |
+| 使用或设计问题 | [GitHub Q&A](https://github.com/loopx-project/loopx/discussions/categories/q-a) | 目标、当前版本、已尝试路径 |
+| 可公开工作流或成果 | [Show and tell](https://github.com/loopx-project/loopx/discussions/categories/show-and-tell) | 真实运行方式、证据与限制 |
 
 如果只是想先与其他使用者交流，可以加入
 [Discord](https://discord.gg/XmGgQyCFZd)。聊天适合探索；最终 bug、决定和可复现结论应回到
@@ -158,11 +158,11 @@ Issue、Discussion、PR 或版本化文档。
    shipped、incubating、research、draft 还是 held；
 2. [Contributor Task Board](/loopx/docs/development/contributor-tasks/)：选择 `Starter / Good First`
    或已有共识的 bounded task；
-3. [CONTRIBUTING](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md)：安装、DCO、
+3. [CONTRIBUTING](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md)：安装、DCO、
    public/private boundary 和验证要求。
 
 任务板是动态事实源。本书不会复制“当前可认领任务”列表；如果任务没有关联 Issue，先用
-[Contributor task 表单](https://github.com/huangruiteng/loopx/issues/new?template=contributor-task.yml)
+[Contributor task 表单](https://github.com/loopx-project/loopx/issues/new?template=contributor-task.yml)
 建立公开协作边界。
 
 <!-- welcome-wagon:claim-bounded-slice -->
@@ -249,7 +249,7 @@ problem
 
 不要只贴一大段日志，也不要只说“不能用”。好的问题让其他人能复现、判断 owner，并给出下一条
 可执行动作。渠道与响应边界见
-[LoopX Support](https://github.com/huangruiteng/loopx/blob/main/.github/SUPPORT.md)。
+[LoopX Support](https://github.com/loopx-project/loopx/blob/main/.github/SUPPORT.md)。
 
 ## 你的下一站 {#next-stop}
 

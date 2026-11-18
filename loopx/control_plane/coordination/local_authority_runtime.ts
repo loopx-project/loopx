@@ -13,8 +13,7 @@ import {executeTodoContinuation} from "./todo_continuation.ts";
 import {canonicalAuthorityRouteFailure, requireCanonicalAuthority, withCanonicalWriter} from "./local_authority_write.ts";
 import { ShadowManagementError, withShadowMaintenanceLock } from "./shadow_management.ts";
 import { isAbsolute, join } from "node:path";
-import {readFile, realpath} from "node:fs/promises";
-import {createHash} from "node:crypto";
+import {realpath} from "node:fs/promises";
 
 import type { JsonObject } from "../effect_program.ts";
 import {decodeCompletionValidationRevision} from "../todos/completion_validation_revision.ts";
@@ -27,10 +26,6 @@ import {
   LOCAL_COORDINATION_PROMOTION_RESULT_SCHEMA,
   LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
   LOCAL_COORDINATION_PROMOTION_REVIEW_RESULT_SCHEMA,
-  LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
-  LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
-  LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA,
-  LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA,
 } from "./coordination_state_contract.generated.ts";
 import {
   indexCoordinationProjection,

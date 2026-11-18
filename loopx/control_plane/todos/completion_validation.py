@@ -22,10 +22,6 @@ from .completion_policy import (
     build_completion_policy_request,
     linked_successors_from_state,
 )
-from .completion_transaction import (
-    reduce_todo_completion_transaction,
-    todo_completion_source_snapshot,
-)
 from .completion_validation_projection import (
     completion_validation_declaration,
     completion_validation_declaration_sha256,
@@ -477,128 +473,6 @@ def resolve_private_completion_validation_declaration(
             declaration=declaration,
         )
     return declaration
-
-
-def run_completion_validation_gate_with_source(
-    *,
-    state_file: Path,
-    todo_id: str,
-    role: str | None,
-    registry_path: Path,
-    goal_id: str,
-    dry_run: bool,
-    no_followup: bool = False,
-    completion_turn_key: str | None = None,
-    completion_identity_source: str | None = None,
-    requested_has_successor: bool = False,
-    completion_policy_facts: Mapping[str, Any] | None = None,
-    requested_successor_todo_ids: list[str] | None = None,
-    completion_delivery_workspace: Mapping[str, Any] | None = None,
-    completion_validation_workspace_path: Path | None = None,
-) -> dict[str, Any]:
-    """Run the caller-approved completion validation gate, OUTSIDE the mutation lock.
-
-    Returns one envelope containing the source snapshot and typed transaction.
-    ``failure`` is a ``validation_blocked_completion`` payload when a declared
-    command does not pass, otherwise ``None``. The caller returns failures
-    unchanged so durable writeback and quota spend are skipped. Dry runs and
-    terminal replays do not execute validation. This function is read-only
-    w.r.t. the state file and safe to call before acquiring the mutation lock,
-    so a multi-second validation command does not block concurrent Todo writes.
-    """
-    from ...history import load_registry
-    from ...registry import registry_goals
-    from ..goals.legacy_event_source import require_no_legacy_todo_events
-    goal = next((item for item in registry_goals(load_registry(registry_path)) if item.get("id") == goal_id), {})
-    require_no_legacy_todo_events(goal, state_path=state_file)
-    projection_source = "materialized"
-    source_authority: dict[str, Any] | None = None
-    todo = _materialized_todo_item(state_file=state_file, todo_id=todo_id, role=role)
-    if todo is None:
-        return {"todo": None, "validation": None, "failure": None,
-            "source_authority": None, "source_snapshot": None, "transaction": None}
-    source_snapshot = todo_completion_source_snapshot(todo)
-    completion_policy_source = None
-    if completion_policy_facts is not None:
-        try:
-            lines = state_file.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            lines = []
-        completion_policy_source = completion_policy_source_from_state(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            lines=lines,
-            successor_todo_ids=requested_successor_todo_ids or [],
-            facts=completion_policy_facts,
-        )
-    transaction = reduce_todo_completion_transaction(
-        todo=todo,
-        projection_source=projection_source,
-        completion_turn_key=completion_turn_key,
-        no_followup=no_followup,
-        dry_run=dry_run,
-        completion_identity_source=completion_identity_source,
-        goal_id=goal_id,
-        todo_id=todo_id,
-        requested_has_successor=requested_has_successor,
-        validation_receipt=None,
-        # The coarse reducer returns policy success or typed failure as data.
-        # The public writer consumes that projection only after actor and lease
-        # admission, preserving legacy error priority without a second IPC.
-        completion_policy_request=completion_policy_source,
-    )
-    completion_validation = None
-    if transaction["decision"] == "execute_validation":
-        effect = transaction["validation_effect"]
-        completion_validation = run_declared_completion_validation_effect(
-            effect=effect,
-            registry_path=registry_path,
-            goal_id=goal_id,
-            delivery_workspace=completion_delivery_workspace,
-            validation_workspace_path=completion_validation_workspace_path,
-        )
-        if completion_validation is None:
-            raise RuntimeError("Todo completion validation effect produced no receipt")
-        transaction = reduce_todo_completion_transaction(
-            todo=todo,
-            projection_source=projection_source,
-            completion_turn_key=completion_turn_key,
-            no_followup=no_followup,
-            dry_run=dry_run,
-            completion_identity_source=completion_identity_source,
-            goal_id=goal_id,
-            todo_id=todo_id,
-            requested_has_successor=requested_has_successor,
-            validation_receipt=completion_validation,
-            completion_policy_request=completion_policy_source,
-        )
-    if transaction["decision"] != "reject":
-        return {
-            "failure": None,
-            "source_authority": source_authority,
-            "source_snapshot": source_snapshot,
-            "completion_policy_source": completion_policy_source,
-            "transaction": transaction,
-        }
-    failure_payload = transaction["failure"]
-    completion_validation = dict(failure_payload["validation_receipt"])
-    failure = {
-        "ok": False,
-        "dry_run": dry_run,
-        "completed": False,
-        "goal_id": goal_id,
-        "todo_id": todo_id,
-        "changed": False,
-        "validation": completion_validation,
-        "validation_blocked_completion": True,
-    }
-    return {
-        "failure": failure,
-        "source_authority": source_authority,
-        "source_snapshot": source_snapshot,
-        "completion_policy_source": completion_policy_source,
-        "transaction": transaction,
-    }
 
 
 def completion_policy_source_from_state(

@@ -11,7 +11,7 @@ export function MessageActivity({ message, onInterruptTurn, onAdjustTurn, onCanc
   onInterruptTurn?: (turnId: string) => Promise<void>;
   onAdjustTurn?: (turnId: string) => void;
 }) {
-  const { locale, t } = useWorkspaceI18n();
+  const { locale } = useWorkspaceI18n();
   const zh = locale === "zh-CN";
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);

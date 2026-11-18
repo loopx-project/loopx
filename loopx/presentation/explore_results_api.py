@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..control_plane.todos.list_readback import list_goal_todos
 from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+from ..control_plane.status.goal_source import SourceScopeError
 
 from ..capabilities.explore.result_log import (
     build_explore_result_projection,
@@ -33,14 +34,15 @@ def _result_rows(runtime_root, goal_id, registry_path):
         # Task authority is independent of the verified evidence log. Reuse
         # the source reader's unavailable-associations view; never present a
         # partial list as complete or fall back to legacy task state.
-        return _finding_rows(events, None, goal_id=goal_id)
-    return _finding_rows(events, todos.values(), goal_id=goal_id)
+        return _finding_rows(events, None, goal_id=goal_id, validated=True)
+    return _finding_rows(events, todos.values(), goal_id=goal_id, validated=True)
 
 
-def _finding_rows(events, todos, *, goal_id):
+def _finding_rows(events, todos, *, goal_id, validated: bool = False):
     """Same Explore projection and task associations for every physical source."""
     from ..control_plane.work_items.yardstick_decision import project_work_yardstick_presentations
-    events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
+    if not validated:
+        events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
     projection = build_explore_result_projection(
         events, goal_id=goal_id, finding_limit=len(events),
     )
@@ -150,13 +152,24 @@ class ExploreResultsRequestMixin:
                 original_goal_id = reader.source.goal_id
                 if view == "history-timing":
                     status = reader.registered_status(original_goal_id, fresh=True)
+                    native_goals = (status.get("run_history") or {}).get("goals") or []
+                    native_goal = next(
+                        (
+                            goal
+                            for goal in native_goals
+                            if isinstance(goal, dict) and goal.get("id") == original_goal_id
+                        ),
+                        None,
+                    )
+                    if native_goal is None:
+                        raise SourceScopeError("The original Goal is no longer registered")
                     events = (
                         validate_explore_result_event(event, expected_goal_id=original_goal_id)
                         for event in reader.source.read_events(original_goal_id)
                     )
                     page = _history_timing(
                         events, goal_id=original_goal_id, source_namespace=reader.source.namespace,
-                        native_goal=status["run_history"]["goals"][0],
+                        native_goal=native_goal,
                     )
                 elif view == "history":
                     page = reader.history(original_goal_id, cursor)
@@ -192,6 +205,8 @@ class ExploreResultsRequestMixin:
                     _result_rows(runtime_root, goal_id, self.server.registry_path),
             )
             self._send_json({**page, "goal_id": goal_id})
+        except SourceScopeError:
+            self._send_error("Goal or connection is not available in this source.", status=404)
         except ValueError as exc:
             expired = str(exc) == "history_cursor_expired"
             self._send_error(

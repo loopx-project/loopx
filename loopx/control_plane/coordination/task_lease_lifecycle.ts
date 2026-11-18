@@ -13,7 +13,7 @@ import {decideTaskLeaseLifecycle, materializeTaskLeaseLifecycle,
 import {requireStringLiteral} from "../runtime_decode.ts";
 import {HANDOFF_MODES, EXECUTION_HANDOFF_MODES, retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON,
   type ExecutionHandoffMode} from "./handoff_mode_policy.ts";
-import {leaseEpoch, leaseIsActive, leaseVersion, normalizeAgent, normalizeGoalId,
+import {leaseEpoch, leaseIsActive, leaseVersion, normalizeGoalId,
   normalizeIdempotencyKey, normalizeOwner, normalizeTodoId,
   normalizeTtl, utcIsoformat, TaskLeaseAcquireError, type LeaseRecord} from "../work_items/task_lease_acquire.ts";
 import {taskLeaseOperationIdentity, taskLeaseOperationRequestDigest} from "../work_items/task_lease_operation_identity.ts";
