@@ -1083,6 +1083,12 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
 也不豁免第 9 节相对原 quota 基线的验证。
 
+公开分发隔离现在复用 runtime 制品元数据 owner：runtime 资格检查观察已安装的普通
+writer，桌面打包观察归档 writer，发布要求声明的支持契约与观察一致。现有 quota
+packet 默认保持支持；未资格化的完整契约默认不能只凭安装检查通过。此改动不证明
+第 9 节的成果/成本，不替换已安装 writer、不增加当前 producer，也不退役历史 reader。
+扩大支持 profile 仍须原采用证据，详见[发布边界](../../product/release-readiness.md)。
+
 原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。
 `codex-cli` 和 `codex-app-server` 都调用既有
 `current_turn_host_launch_decision` owner；观察到的 replan packet 是上下文，
