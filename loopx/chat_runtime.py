@@ -368,13 +368,25 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         if owns_adapter or always_close:
             adapter.close_session()
 
-    def _release_done_event(self, key: tuple[str, str], done_event: threading.Event, *, drop_event: bool = True) -> None:
-        done_event.set()
-        self.turn_release_wakeup.notify()
-        if drop_event:
+    def _release_done_event(
+        self,
+        key: tuple[str, str],
+        done_event: threading.Event,
+        *,
+        drop_event: bool = True,
+        drop_before_notify: bool = False,
+    ) -> None:
+        def drop() -> None:
             with self.lock:
                 if self.turn_done_events.get(key) is done_event:
                     self.turn_done_events.pop(key, None)
+
+        if drop_event and drop_before_notify:
+            drop()
+        done_event.set()
+        self.turn_release_wakeup.notify()
+        if drop_event and not drop_before_notify:
+            drop()
 
     def _session_adapter_lock(self, session_id: str) -> threading.Lock:
         with self.lock:
@@ -467,7 +479,13 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                         session_id=session_id, turn_id=str(accepted.turn["turn_id"]), message=message,
                         attachments=attachments or [], adapter=adapter, loopx_execution=loopx_execution)
             except Exception:
-                self._drop_owned_adapter(session_id, adapter)
+                with self.lock:
+                    has_live_worker = any(
+                        sid == session_id and not done.is_set()
+                        for (sid, _), done in self.turn_done_events.items()
+                    )
+                if not has_live_worker:
+                    self._drop_owned_adapter(session_id, adapter)
                 raise
         return accepted.turn, accepted.created
 
@@ -487,7 +505,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         try:
             worker.start()
         except Exception:
-            self._release_done_event(key, done_event)
+            self._release_done_event(key, done_event, drop_before_notify=True)
             raise
         return True
 
