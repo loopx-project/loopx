@@ -1388,6 +1388,9 @@ observed replies, not successful mutations or proved unnecessary recovery.
 Only literal simple shell argv, Python `-m loopx`, `-m loopx.cli` or
 `-m loopx.entrypoint`, and an exact
 single literal `const/await tools.exec_command/text` wrapper are recognized.
+For the quota guard, the parser can resolve a literal Turn assignment on the
+preceding line. It accepts both UTC Turn IDs and the benchmark worker's IDs.
+Duplicate Turn options, with either a separated value or `=value`, remain unassigned.
 Compound shell, arbitrary JavaScript, indirect commands, continuation tools and
 file reads remain unassigned. Non-text content is counted as unmeasured parts.
 The byte share covers the recorded component only: injected LoopX instructions
@@ -1401,6 +1404,8 @@ estimate and provider counters; do not add their different units or denominators
 再次返回不等于无益重复。这不是全量控制面、逐请求重放或计费 token 的占比。
 租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
 不证明状态写入成功或恢复操作可以省略。
+配额 guard 可识别前一行的 UTC 或 worker 字面量 Turn；重复 Turn 选项无论使用空格或
+等号传值，都保持未分类，不据此认领整次请求输入或返回字节。
 
 #### Whole requests issuing LoopX commands and capture comparison
 
