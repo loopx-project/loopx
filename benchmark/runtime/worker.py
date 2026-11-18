@@ -529,8 +529,8 @@ def _phase_timeout(timeout: float | None, deadline: float | None) -> tuple[float
     return timeout, False
 
 
-def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> None:
-    """Check the pinned product's carrier before a Short arm can start a model."""
+def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> bool:
+    """Verify the pinned Short carrier, returning False if the phase expires."""
     from loopx.control_plane.quota.turn_envelope import (
         COMPLETE_TURN_DECISION_VERSION,
         TURN_ENVELOPE_SCHEMA_VERSION,
@@ -542,8 +542,6 @@ def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> None:
         "eligible": False,
     }
     receipt.update(quota_input_contract=contract, host_invoked=False)
-    deadline = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
-    timeout, _ = _phase_timeout(120, float(deadline) if deadline else None)
     # This preview runs the same product projection without a Turn, capture,
     # or admission. Keep optional delivery out of the carrier observation.
     command = loopx_command(env) + [
@@ -552,11 +550,16 @@ def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> None:
         "--available-capability", "shell", "--available-capability", "filesystem_write",
         "--turn-envelope", "--context-delivery", "off",
     ]
+    deadline = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
+    timeout, phase_limited = _phase_timeout(120, float(deadline) if deadline else None)
     try:
         result = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env,
                                 capture_output=True, text=True, timeout=timeout, check=True)
         payload = read_json(result.stdout)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        if phase_limited and isinstance(exc, subprocess.TimeoutExpired):
+            receipt.update(ok=True, budget_exhausted=True)
+            return False
         raise ValueError("Short envelope requires a successful v0 quota preview from the pinned product.") from exc
     if payload.get("ok") is not True:
         raise ValueError("Short envelope requires a successful v0 quota preview from the pinned product.")
@@ -574,6 +577,7 @@ def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> None:
             raise ValueError("Short envelope requires the direct v0 guard. "
                              "A fresh_replan checkpoint preloads a different view.")
     contract["eligible"] = True
+    return True
 
 
 def run_once(env: dict[str, str]) -> dict:
@@ -679,8 +683,8 @@ def run_once(env: dict[str, str]) -> dict:
                 execution, timeout_seconds=(remaining - reserve if execution.timeout_seconds is None
                                              else min(execution.timeout_seconds, remaining - reserve))
             )
-        if execution.turn_envelope:
-            _qualify_short_envelope(env, receipt)
+        if execution.turn_envelope and not _qualify_short_envelope(env, receipt):
+            return receipt
         prepare_codex_home(
             home,
             execution=execution,
