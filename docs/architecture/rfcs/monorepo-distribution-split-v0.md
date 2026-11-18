@@ -435,6 +435,13 @@ holds further dependent effects for readback or intervention; “not observed”
 does not mean “not executed.” Device idempotency, physical interlocks and
 compensation remain provider responsibilities, not invented kernel guarantees.
 
+After a generic CLI result is durably recorded, the original Turn can resume
+validation or settlement without the adapter command or its request schema.
+The caller retains the approved workspace and supplies the independent checker
+if validation is pending. An already settled Turn reads back its saved result.
+If the recovery owner requires a Host attempt, the caller must supply the
+adapter before admission can advance.
+
 Model cancellation, process termination and confirmed device stop are separate
 facts. A stopped model must not produce a “device stopped” claim without device
 evidence. Providers needing persistent supervision cannot be unloaded while

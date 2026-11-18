@@ -789,6 +789,7 @@ def execute_turn_run_once(
             timeout_seconds=args.timeout_seconds,
             execute=bool(args.execute),
             retry_failed=bool(args.retry_failed_turn),
+            resume_existing_turn=args.host == "generic-cli" and bool(getattr(args, "resume_turn_key", None)),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
             writeback=(codex_writeback if args.host == "codex-cli" else writeback)
