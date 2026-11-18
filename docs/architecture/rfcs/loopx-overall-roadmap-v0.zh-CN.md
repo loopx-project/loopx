@@ -7,6 +7,7 @@
   `08e290fb5`。管家故障复现基线单独保留在第 8 节。历史工作集 RFC 的清单新增
   使用 2026-11-09 的 `701795db2`；面向终局目标的切片选择、零仪式感渐进式入口、
   结构性护城河及所选当前优先级／RFC 边界依据 2026-11-11 的 `bf8a66eb9c` 核对更新，
+  并依据 `e235cde9c8` 细化 Bitter-Lesson 减法纪律与六大结构性护城河，
   不代表对所有历史子系统重新审计。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
@@ -80,22 +81,46 @@ LoopX 内部保持严格、唯一 owner 的类型化内核（`AuthorityStore`、
 - **控制面税计入完整成本：** 控制 token、工具调用、额外 RPC 往返与人工打断都消耗任务总预算。
   在事实未发生实质变化时强加每 Turn 必填表单、额外 RPC 往返或冗长治理提示词，会降低净长程效率，
   应当拒绝。
+- **Bitter-Lesson 减法纪律：** 随着前沿基座模型持续增强，拒绝脆弱的手写提示词微操、投机性兼容垫片，
+  以及会被更强模型原生吸收或诱发上下文重力的回合中动态提示词改写（见[减法门禁](controller-executor-unified-contract-v0.zh-CN.md#subtraction-gate)）。
+  工程与研究只投入单次前向推理之外的可验证确定性不变量，一旦单一类型化 owner 替代旧路径，
+  立即退役被取代的封装与无引用适配器。
 
-### 三大复利结构性护城河
+<a id="three-compounding-structural-moats"></a>
 
-随着前沿基座模型快速升级，LoopX 避免投入会被更强基模原生吸收的脆弱手写提示词微操
-（预设工具调用顺序、每 Turn 机械清单、冗长战术提醒），把工程与研究重心集中在单次模型前向推理之外的
-三项复利结构能力：
+### 六大复利结构性护城河
 
-1. **端云异构连续性与权限围栏（`S2/S4/S9`、`R5/R6`）：** 在唯一 owner 事务租约、旧执行器
-   围栏与可撤销授权下，把本地个人上下文、交互登录态和 owner 确认门禁安全桥接到无人值守或云端
-   执行 worker。
-2. **确定性静默 Checkpoint 与同状态反事实接续底座（`S4/S10/S11`、`R5`、`T01/T03`）：**
-   在已消耗预算 $t_0$ 处精确恢复任务、会话、权限、已验收 incumbent 与评测冷却状态，使候选策略与
-   harness 机制通过匹配的同状态接续（$\tau_B(s; a, a_0, \pi)$）评估，而非混淆了起点状态的观察动作日志。
-3. **闭环轨迹归因记忆与预算内计算选择飞轮（`S6/S7/S11`、`T01–T04`）：** 将已验证终局成果、
-   邻域范围化的 yardstick 保真度与同 checkpoint 反事实证据转化为可复用的过程召回，以及经校准的
-   `Target/Yardstick/Stride` 预算内接续选择（`当前模型试验 -> 校准预期 -> 学习预算分配`）。
+随着前沿基座模型快速升级，LoopX 贯彻上述 Bitter-Lesson 减法纪律——避免投入会被更强基模原生吸收的
+脆弱手写提示词微操（预设工具调用顺序、每 Turn 机械清单、冗长战术提醒；见
+[研究计划 Bitter-Lesson 边界](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#22-bitter-lesson-边界原始产物重置与受治理控制面)），
+把工程与研究重心集中在单次模型前向推理之外的**六项复利结构能力**：
+
+1. **非标量 Yardstick 校准（`S3/S6/S11`、`T01–T04`）：**
+   围绕 `Target/Yardstick/Stride` 联合决策（`grow / switch / verify`）开展多证据、决策局部邻域
+   保真度校准，而非依赖未校准的标量代理指标；并将已验证轨迹成果沉淀为闭环过程召回与经校准的预算分配
+   （`当前模型试验 -> 校准预期 -> 学习预算分配`；见[联合决策](target-yardstick-stride-decisions-v0.zh-CN.md)）。
+2. **树外确定性 Merge、Visual 与 Boundary 门禁（`S5/S8/S11/S12`）：**
+   在求解器写边界之外执行宿主与进程隔离的确定性验证——包含 `benchmark_integrity_audit_v0` 的
+   verifier/挂载隔离与反 Reward-Hacking 根因认证、公私边界扫描、精确 head 的 `loopx pr-review` 与
+   merge-readiness 契约，以及高信息密度首屏视觉与行为证据；Agent 无法在文本中改写、伪造或自证通过。
+3. **唯一 owner `AuthorityStore` + CAS + 默认拒绝 ACL（`S2/S3/S9`、`R4/R5/R6`）：**
+   将 Goal/Todo/effect 真相锚定在事务化事件、投影与回执提交中，跨 File/SQLite/NoKV/PostgreSQL
+   provider 强制条件版本 `CAS`、独占 `claim/lease` 与代际围栏、显式 `ambiguous_commit` 处理、
+   仅一次幂等结算，以及默认拒绝的受众、凭据与能力 ACL 隔离边界。
+4. **管家异步 inbox 闭环（`S1/S3/S4/S5`、`R1–R3`）：**
+   通过作用域受限的 `collaboration_brief_v0` 委派载荷、有界 `remaining_work` 投影与类型化
+   `resume_when` 恢复谓词完成跨 Agent 协作与原路回报，使管家与 controller 会话在已验证唤醒触发器
+   到达前保持休眠（**零空轮询循环**）。
+5. **前缀 KV-Cache 保序上下文交付（`S2/S6/S7`、`T02`）：**
+   保持单调仅追加的规范前缀稳定性与精确 full/delta 传输（`progressive_context.ts` /
+   `context_delivery.ts` 配合回执门控的 `KeepRaw` / `FoldToReceipt` / `EpochReset` 状态迁移；
+   见[历史工作集策略](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)），
+   避免回合中破坏前缀缓存的动态改写，并分别计量 cached 与 uncached 前缀 token 成本。
+6. **持久状态与临时沙盒分离（`S2/S4/S10/S11`、`R5/R6`）：**
+   将持久 `AuthorityStore`、capture 与静默 checkpoint 状态——可在已消耗预算 $t_0$ 处精确恢复，
+   支持端云异构连续性与同状态反事实接续（$\tau_B(s; a, a_0, \pi)$），而非混淆起点的观察动作日志——与
+   一次性 worker 沙盒及 worktree（`--worker turn-resume`、隔离容器、归一化补丁交付）严格分离，
+   确保沙盒重置或故障不会破坏控制权威或暴露宿主凭据。
 
 ### 总纲与现有文档的关系
 
