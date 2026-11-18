@@ -141,8 +141,8 @@ def _register_declared_implementation_providers(
 
 
 def _record_for_installed_recall(
-    registry: CapabilityRegistry, record: Mapping[str, Any],
-) -> Mapping[str, Any]:
+    registry: CapabilityRegistry, record: Mapping[str, object],
+) -> Mapping[str, object]:
     if record is not AGENT_TURN_RECALL_CATALOG_ENTRY or find_spec(
         "loopx.capabilities.agent_turn_recall.core"
     ) is not None:
