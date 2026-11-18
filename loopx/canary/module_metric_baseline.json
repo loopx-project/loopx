@@ -5,6 +5,11 @@
     "lines": 2000
   },
   "module_metric_ceilings": {
+    "loopx/authority.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 686
+    },
     "loopx/bootstrap_command_pack.py": {
       "any_count": 32,
       "dict_any_count": 0,
@@ -130,6 +135,11 @@
     "loopx/todos.py": {
       "any_count": 48,
       "dict_any_count": 0
+    },
+    "loopx/upgrade.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1062
     },
     "loopx/worker_bridge.py": {
       "any_count": 28,
