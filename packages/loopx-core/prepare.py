@@ -12,8 +12,25 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 # These are distribution exclusions, not an authority or activation policy.
-EXCLUDED_TREES = ("loopx/chat/", "loopx/web/", "loopx/canary/")
-EXCLUDED_MODULES = {"loopx/cli.py", "loopx/chat.py"}
+EXCLUDED_PREFIXES = (
+    "loopx/chat/",
+    "loopx/web/",
+    "loopx/canary/",
+    "loopx/capabilities/benchmark_toolkit/",
+    "loopx/cli_commands/benchmark_",
+)
+EXCLUDED_MODULES = {
+    "loopx/cli.py",
+    "loopx/chat.py",
+    "loopx/presentation/research_analysis_api.py",
+    "loopx/presentation/runtime_workspace.py",
+}
+# Keep the catalog in a namespace package so discovery skips the execution facade.
+BENCHMARK_CATALOG_FILES = {
+    "loopx/capabilities/benchmark_toolkit/README.md",
+    "loopx/capabilities/benchmark_toolkit/catalog_entry.py",
+    "loopx/capabilities/benchmark_toolkit/four_arm_contract.py",
+}
 SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
 
 
@@ -31,7 +48,8 @@ def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
     sources = [path for path in sources if path.suffix in SOURCE_SUFFIXES
                and path.as_posix() not in EXCLUDED_MODULES
                and not (path.parent == Path("loopx") and path.name.startswith("chat_"))
-               and not path.as_posix().startswith(EXCLUDED_TREES)]
+               and (path.as_posix() in BENCHMARK_CATALOG_FILES
+                    or not path.as_posix().startswith(EXCLUDED_PREFIXES))]
     if not sources or not (repository / "loopx/entrypoint.py").is_file():
         raise ValueError("a complete LoopX source checkout is required")
     output.mkdir(parents=True, exist_ok=True)

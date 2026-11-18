@@ -343,6 +343,14 @@ objective. Moving a file while retaining its shim does not reduce that count;
 combining unrelated responsibilities to meet it is not a successful refactor.
 Measure representative change locality and installation cost separately.
 
+The standalone Core artifact keeps benchmark catalog metadata and its referenced
+four-arm contract. The ordinary distribution still delivers benchmark execution,
+CLI adapters, and the workspace research-analysis API from their existing owners.
+Core projects the benchmark provider as unavailable through the existing registry
+and redirects explicit benchmark requests to the ordinary installation. This is
+one installation boundary toward D2. Separate capability packaging, installed
+Standard, and model-visible overhead still require qualification.
+
 ### State model and schema
 
 No canonical record changes. The only new durable artefact is the architecture

@@ -239,6 +239,12 @@ import 方向、剩余兼容接缝和从失败定位 owner 的路径。每个发
 把无关职责塞进一个文件来满足预算不构成成功重构。代表性修改局部性与安装成本
 分别测量。
 
+独立 Core 产物保留 benchmark 目录元数据及其引用的四臂实验契约。普通发行物由
+既有 owner 继续交付 benchmark 执行、CLI 适配器和工作台研究分析 API。Core 通过
+既有 registry 将 benchmark provider 报告为不可用，显式 benchmark 请求会提示
+使用普通安装。这是 D2 的一项安装边界。独立 capability 打包、Standard 安装和
+模型可见开销仍需验收。
+
 ### 状态模型与 schema
 
 不改任何规范记录。唯一新增的持久产物是架构 fixture：

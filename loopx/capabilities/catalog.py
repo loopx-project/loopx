@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -155,7 +156,19 @@ def build_capability_registry(
             "ready": True,
         }
     )
+    # The benchmark command uses the ordinary distribution's CLI facade.
+    # Inspect its presence without loading commands or benchmark implementations.
+    has_full_cli = find_spec("loopx.cli") is not None
+    if not has_full_cli:
+        registry.register_provider(
+            {"id": "loopx", "origin": "builtin", "installed": False}
+        )
     for record in BUILTIN_CAPABILITIES:
+        if record is BENCHMARK_TOOLKIT_CATALOG_ENTRY and not has_full_cli:
+            record = record | {
+                "provider_id": "loopx",
+                "next_real_step": "Use the ordinary LoopX installation for benchmark commands.",
+            }
         registry.register_capability(record)
     for record in BUILTIN_CAPABILITIES:
         _register_declared_implementation_providers(registry, record)
