@@ -334,7 +334,7 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
         "turn_envelope_action_dimensions_v1"
     )
     assert payload["scheduler_hint"]["cadence_class"] == "human_gate"
-    assert payload["scheduler_hint"]["codex_app"]["recommended_interval_minutes"] == 30
+    assert payload["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 30
     assert payload["long_task_cadence_hint"] == {
         "schema_version": "cadence_hint_v0",
         "signal": "blocked",
@@ -345,7 +345,7 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
         ],
     }
 
-    initial_backoff = payload["scheduler_hint"]["codex_app"]["stateful_backoff"]
+    initial_backoff = payload["scheduler_hint"]["app_automation"]["stateful_backoff"]
     next_hint = build_scheduler_hint(
         payload,
         user_action_required=True,
@@ -360,10 +360,10 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
     )
 
     assert next_hint["cadence_class"] == "human_gate"
-    assert next_hint["codex_app"]["recommended_interval_minutes"] == 60
-    assert next_hint["codex_app"]["stateful_backoff"]["progression_index"] == 1
-    assert next_hint["codex_app"]["stateful_backoff"]["apply_needed"] is True
-    assert next_hint["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60"
+    assert next_hint["app_automation"]["recommended_interval_minutes"] == 60
+    assert next_hint["app_automation"]["stateful_backoff"]["progression_index"] == 1
+    assert next_hint["app_automation"]["stateful_backoff"]["apply_needed"] is True
+    assert next_hint["app_automation"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60"
 
 
 def _runtime_recovery_gate_status(
@@ -515,7 +515,7 @@ def test_acked_human_gate_advances_despite_unrelated_historical_host_failure(
         agent_id=AGENT_ID,
         scheduler_execution_context=APP_CONTEXT,
     )
-    first_rrule = payload["scheduler_hint"]["codex_app"]["stateful_backoff"][
+    first_rrule = payload["scheduler_hint"]["app_automation"]["stateful_backoff"][
         "current_rrule"
     ]
     historical_failure = {
@@ -542,7 +542,7 @@ def test_acked_human_gate_advances_despite_unrelated_historical_host_failure(
         codex_app_current_rrule=first_rrule,
         scheduler_execution_context=APP_CONTEXT,
     )
-    matched_app = host_matched["codex_app"]
+    matched_app = host_matched["app_automation"]
     assert matched_app["stateful_backoff"]["apply_needed"] is False
     assert matched_app["stateful_backoff"]["ack_needed"] is True
     assert matched_app["ack_hint"]["after"] == "matching_host_rrule_observed"
@@ -575,7 +575,7 @@ def test_acked_human_gate_advances_despite_unrelated_historical_host_failure(
         scheduler_execution_context=APP_CONTEXT,
     )
 
-    next_app = next_hint["codex_app"]
+    next_app = next_hint["app_automation"]
     assert next_app["stateful_backoff"]["progression_index"] == 1
     assert next_app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=60"
     assert next_app["stateful_backoff"]["apply_needed"] is True

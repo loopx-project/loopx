@@ -301,10 +301,10 @@ def main() -> int:
         assert blocked_turn["scheduler_hint"]["cadence_class"] == (
             "peer_coordination_wait"
         ), blocked_turn
-        assert blocked_turn["scheduler_hint"]["codex_app"][
+        assert blocked_turn["scheduler_hint"]["app_automation"][
             "recommended_interval_minutes"
         ] == 10, blocked_turn
-        assert blocked_turn["scheduler_hint"]["codex_app"][
+        assert blocked_turn["scheduler_hint"]["app_automation"][
             "example_progression_minutes"
         ] == [10, 20, 30, 60], blocked_turn
         assert blocked_turn["scheduler_hint"]["unchanged_poll"]["limits"][

@@ -513,92 +513,85 @@ def bind_scheduler_followup_cli_routes(
     scheduler_hint = payload.get("scheduler_hint")
     if not isinstance(scheduler_hint, dict):
         return
+    app_packet = scheduler_hint.get("app_automation")
+    if not isinstance(app_packet, dict):
+        return
     launcher_args = loopx_cli_argv()[1:]
-    app_packets = [
-        packet
-        for packet_key in ("app_automation", "codex_app")
-        if isinstance((packet := scheduler_hint.get(packet_key)), dict)
-    ]
-    fallback_launcher: list[str] | None = None
-    for app_packet in app_packets:
-        for hint_name in ("ack_hint", "failure_hint", "fallback_hint"):
-            followup_hint = app_packet.get(hint_name)
-            if not isinstance(followup_hint, dict):
+    safe_turn_instance_id = str(turn_instance_id or "").strip()
+    for hint_name in ("ack_hint", "failure_hint", "fallback_hint"):
+        followup_hint = app_packet.get(hint_name)
+        if not isinstance(followup_hint, dict):
+            continue
+        cli_args = followup_hint.get("cli_args")
+        if not isinstance(cli_args, list) or not cli_args:
+            continue
+        if hint_name == "fallback_hint":
+            if cli_args[0] != "loopx-apply-rrule" or "--registry" in cli_args:
                 continue
-            cli_args = followup_hint.get("cli_args")
-            if not isinstance(cli_args, list) or not cli_args:
-                continue
-            if hint_name == "fallback_hint":
-                if cli_args[0] != "loopx-apply-rrule" or "--registry" in cli_args:
-                    continue
-                if fallback_launcher is None:
-                    fallback_launcher = _scheduler_fallback_launcher()
-                bound_cli_args = [
-                    *fallback_launcher,
-                    "--registry",
-                    str(registry_path.expanduser().resolve()),
-                    "--runtime-root",
-                    str(runtime_root.expanduser().resolve()),
-                    *cli_args[1:],
-                ]
-                safe_turn_instance_id = str(turn_instance_id or "").strip()
-                # The fallback replays this decision through ``loopx quota
-                # should-run``, so it needs the Turn that owns the receipt.
-                # Projections leave a shell reference here; a native Windows
-                # host cannot expand the POSIX form and would replay an empty
-                # Turn instead of the decision it came from.
-                bound_turn = _bind_followup_turn_argument(
-                    bound_cli_args,
-                    turn_reference(safe_turn_instance_id),
-                    authoritative=bool(safe_turn_instance_id),
-                )
-                followup_hint["cli_args"] = bound_cli_args
-                args_value = followup_hint.get("args")
-                if isinstance(args_value, dict) and "turn_instance_id" in args_value:
-                    args_value["turn_instance_id"] = bound_turn
-                followup_hint["route_binding"] = {
-                    "schema_version": "codex_app_scheduler_fallback_route_v0",
-                    "source": source,
-                    "registry_bound": True,
-                    "runtime_root_bound": True,
-                    "turn_instance_bound": bool(safe_turn_instance_id),
-                }
-                continue
-            bound_cli_args = list(cli_args)
-            # Standalone Core emits an interpreter route. Its launcher
-            # arguments must precede the CLI's global options.
-            option_index = len(launcher_args) if cli_args[:len(launcher_args)] == launcher_args else 0
-            if bound_cli_args[option_index:option_index + 1] != ["--registry"]:
-                bound_cli_args[option_index:option_index] = [
-                    "--registry", str(registry_path.expanduser().resolve()),
-                    "--runtime-root", str(runtime_root.expanduser().resolve()),
-                ]
-            safe_turn_instance_id = str(turn_instance_id or "").strip()
-            if safe_turn_instance_id and "--turn-instance-id" not in bound_cli_args:
-                execute_index = (
-                    bound_cli_args.index("--execute")
-                    if "--execute" in bound_cli_args
-                    else len(bound_cli_args)
-                )
-                bound_cli_args[execute_index:execute_index] = [
-                    "--turn-instance-id",
-                    safe_turn_instance_id,
-                ]
-                args_value = followup_hint.get("args")
-                if isinstance(args_value, dict):
-                    args_value["turn_instance_id"] = safe_turn_instance_id
+            bound_cli_args = [
+                *_scheduler_fallback_launcher(),
+                "--registry",
+                str(registry_path.expanduser().resolve()),
+                "--runtime-root",
+                str(runtime_root.expanduser().resolve()),
+                *cli_args[1:],
+            ]
+            # The fallback replays this decision through ``loopx quota
+            # should-run``, so it needs the Turn that owns the receipt.
+            # Projections leave a shell reference here; a native Windows
+            # host cannot expand the POSIX form and would replay an empty
+            # Turn instead of the decision it came from.
+            bound_turn = _bind_followup_turn_argument(
+                bound_cli_args,
+                turn_reference(safe_turn_instance_id),
+                authoritative=bool(safe_turn_instance_id),
+            )
             followup_hint["cli_args"] = bound_cli_args
+            args_value = followup_hint.get("args")
+            if isinstance(args_value, dict) and "turn_instance_id" in args_value:
+                args_value["turn_instance_id"] = bound_turn
             followup_hint["route_binding"] = {
-                "schema_version": (
-                    "scheduler_ack_cli_route_v0"
-                    if hint_name == "ack_hint"
-                    else "scheduler_failure_cli_route_v0"
-                ),
+                "schema_version": "codex_app_scheduler_fallback_route_v0",
                 "source": source,
                 "registry_bound": True,
                 "runtime_root_bound": True,
                 "turn_instance_bound": bool(safe_turn_instance_id),
             }
+            continue
+        bound_cli_args = list(cli_args)
+        # Standalone Core emits an interpreter route. Its launcher
+        # arguments must precede the CLI's global options.
+        option_index = len(launcher_args) if cli_args[:len(launcher_args)] == launcher_args else 0
+        if bound_cli_args[option_index:option_index + 1] != ["--registry"]:
+            bound_cli_args[option_index:option_index] = [
+                "--registry", str(registry_path.expanduser().resolve()),
+                "--runtime-root", str(runtime_root.expanduser().resolve()),
+            ]
+        if safe_turn_instance_id and "--turn-instance-id" not in bound_cli_args:
+            execute_index = (
+                bound_cli_args.index("--execute")
+                if "--execute" in bound_cli_args
+                else len(bound_cli_args)
+            )
+            bound_cli_args[execute_index:execute_index] = [
+                "--turn-instance-id",
+                safe_turn_instance_id,
+            ]
+            args_value = followup_hint.get("args")
+            if isinstance(args_value, dict):
+                args_value["turn_instance_id"] = safe_turn_instance_id
+        followup_hint["cli_args"] = bound_cli_args
+        followup_hint["route_binding"] = {
+            "schema_version": (
+                "scheduler_ack_cli_route_v0"
+                if hint_name == "ack_hint"
+                else "scheduler_failure_cli_route_v0"
+            ),
+            "source": source,
+            "registry_bound": True,
+            "runtime_root_bound": True,
+            "turn_instance_bound": bool(safe_turn_instance_id),
+        }
 
 
 def bind_action_selection_cli_routes(

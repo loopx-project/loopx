@@ -27,27 +27,12 @@ export function goalRuntimeContinuation(hint: JsonObject, frontierSeconds: unkno
   return continuation;
 }
 
-function codexResetAliases(hint: JsonObject): void {
-  const reset = jsonObject(hint.reset_policy);
-  if (reset) {
-    reset.codex_app_initial_interval_minutes = reset.app_automation_initial_interval_minutes;
-    reset.codex_app_initial_rrule = reset.app_automation_initial_rrule;
-  }
-  const detail = jsonObject(jsonObject(hint.cold_path_detail)?.reset_policy_detail);
-  if (detail) {
-    detail.codex_app_initial_interval_minutes = detail.app_automation_initial_interval_minutes;
-    detail.codex_app_initial_rrule = detail.app_automation_initial_rrule;
-    detail.codex_app_tool = detail.app_automation_tool;
-    detail.codex_app_apply = detail.app_automation_apply;
-  }
-}
-
 function omitAppResetFields(hint: JsonObject): void {
   const cold = jsonObject(hint.cold_path_detail);
   if (cold) delete cold.stateful_backoff_detail;
   for (const reset of [jsonObject(hint.reset_policy), jsonObject(cold?.reset_policy_detail)]) {
     if (reset) for (const key of Object.keys(reset)) {
-      if (key.startsWith("app_automation_") || key.startsWith("codex_app_")) delete reset[key];
+      if (key.startsWith("app_automation_")) delete reset[key];
     }
   }
 }
@@ -62,10 +47,6 @@ export function applyHintExecutionContext(hint: JsonObject, context: JsonObject,
     const apply = backoff.apply_needed === true || app.host_action_required === true;
     const ack = backoff.ack_needed === true;
     hint.app_automation = app;
-    if (context.host_surface === "codex_app") {
-      if (!jsonObject(hint.codex_app)) hint.codex_app = structuredClone(app);
-      codexResetAliases(hint);
-    } else delete hint.codex_app;
     const cold = jsonObject(hint.cold_path_detail);
     if (cold) {
       cold.execution_context = context;
@@ -77,8 +58,7 @@ export function applyHintExecutionContext(hint: JsonObject, context: JsonObject,
   }
   const continuation = context.scheduler_owner === "goal_runtime" ? goalRuntimeContinuation(hint, frontierSeconds) : null;
   hint.execution_context = context;
-  delete hint.app_automation;
-  hint.codex_app = {applicability: "not_applicable", reason_code: `cadence_owned_by_${context.scheduler_owner}`,
+  hint.app_automation = {applicability: "not_applicable", reason_code: `cadence_owned_by_${context.scheduler_owner}`,
     apply: "none", host_action: "none", ack_required: false, no_spend_for_cadence_change: true};
   omitAppResetFields(hint);
   hint.execution_phase = {schema_version: "scheduler_execution_phase_v0", host_surface: context.host_surface,

@@ -117,10 +117,10 @@ def test_compat_followup_preserves_the_read_authority_through_public_entry_point
 
     decision = guard()
     app = decision["scheduler_hint"]["app_automation"]
-    compat = decision["scheduler_hint"]["codex_app"]
+    assert "codex_app" not in decision["scheduler_hint"]
     assert app["stateful_backoff"]["progression_index"] == 1
     assert app["stateful_backoff"]["state_key"] == selected_key
-    hint = compat["ack_hint" if operation == "ack" else "failure_hint"]
+    hint = app["ack_hint" if operation == "ack" else "failure_hint"]
     if operation == "ack":
         write_codex_heartbeat_fixture(
             codex_home, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID,
@@ -218,7 +218,6 @@ def test_compat_followup_preserves_the_read_authority_through_public_entry_point
             failed_rrule="FREQ=MINUTELY;INTERVAL=60",
             observed_host_rrule="FREQ=MINUTELY;INTERVAL=30",
         )
-    assert compat["stateful_backoff"]["state_key"] == selected_key
     assert result["ok"] is True, result
     assert result["state_key"] == selected_key
     assert result["scheduler_commit"]["status"] == "written"

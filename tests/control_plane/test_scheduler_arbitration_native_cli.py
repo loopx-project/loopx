@@ -14,6 +14,7 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from loopx.control_plane.coordination.canonical_snapshot import read_canonical_snapshot
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import effect_runtime_result, restart_effect_runtime
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.control_plane.scheduler.state import APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY, load_scheduler_state
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
@@ -64,7 +65,9 @@ def make_scheduler_fixture(
     registry = root / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": status, "repo": str(project), "state_file": state.name,
-        "activation_state": "stopped" if scenario == "stopped" else "active",
+        **({"activation": build_goal_activation(
+            state="stopped", updated_at="2026-01-01T00:00:00Z", reason="Fixture stop",
+        )} if scenario == "stopped" else {}),
         "domain": "synthetic-scheduler",
         "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
         "quota": {"compute": 0.0 if scenario == "paused" else 1.0, "window_hours": 24},
@@ -139,6 +142,7 @@ def test_quota_cli_keeps_scheduler_authority_without_premature_effects(
         authority = scheduler_authority_snapshot(fixture)
         packet = call_scheduler_cli(fixture, *fixture["guard"])
         hint = packet["scheduler_hint"]
+        assert "codex_app" not in hint
         assert packet["interaction_contract"]["mode"] == mode, packet
         assert (hint["schema_version"], hint["action"], hint["cadence_class"], hint["reason_code"]) == (
             "scheduler_hint_v0", action, cadence, reason,
@@ -160,12 +164,12 @@ def test_quota_cli_keeps_scheduler_authority_without_premature_effects(
             assert not index.exists()
         if scenario == "invalid_context":
             assert hint["execution_phase"]["disposition"] == "contract_error"
-            assert hint["codex_app"]["apply"] == "none"
+            assert hint["app_automation"]["apply"] == "none"
             assert hint["consistency_error"]["source"] == "scheduler_execution_context"
         elif scenario in {"paused", "stopped"}:
             assert packet["should_run"] is False
-            assert hint["codex_app"]["ack_required"] is False
-            assert "recommended_rrule" not in hint["codex_app"]
+            assert hint["app_automation"]["ack_required"] is False
+            assert "recommended_rrule" not in hint["app_automation"]
         if scenario == "active":
             assert packet["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO
             refresh = call_scheduler_cli(fixture, "refresh-state", "--goal-id", GOAL,

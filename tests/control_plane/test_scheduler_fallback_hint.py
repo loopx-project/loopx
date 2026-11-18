@@ -114,7 +114,7 @@ def _ack_state(
 
 def test_apply_needed_projects_fallback_hint_when_automation_id_resolved() -> None:
     hint = _hint(_active_decision(), automation_id="loopx")
-    codex_app = hint["codex_app"]
+    codex_app = hint["app_automation"]
     assert codex_app["stateful_backoff"]["apply_needed"] is True
 
     fallback = codex_app["fallback_hint"]
@@ -137,7 +137,7 @@ def test_apply_needed_projects_fallback_hint_when_automation_id_resolved() -> No
 
 def test_apply_needed_without_automation_id_projects_deterministic_fallback() -> None:
     hint = _hint(_active_decision(), automation_id=None)
-    fallback = hint["codex_app"]["fallback_hint"]
+    fallback = hint["app_automation"]["fallback_hint"]
     assert fallback["available"] is True
     assert fallback["automation_id_projected"] is True
     assert fallback["action"] == "create_then_apply_rrule_via_fallback"
@@ -151,7 +151,7 @@ def test_apply_needed_without_automation_id_projects_deterministic_fallback() ->
 def test_settled_cadence_omits_fallback_hint(tmp_path: Path) -> None:
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     first = _hint(_active_decision(), automation_id="loopx")
-    applied_rrule = first["codex_app"]["recommended_rrule"]
+    applied_rrule = first["app_automation"]["recommended_rrule"]
     settled = _ack_state(
         first,
         runtime_root=tmp_path,
@@ -165,8 +165,8 @@ def test_settled_cadence_omits_fallback_hint(tmp_path: Path) -> None:
         host_rrule=applied_rrule,
         automation_id="loopx",
     )
-    assert second["codex_app"]["stateful_backoff"]["apply_needed"] is False
-    assert "fallback_hint" not in second["codex_app"]
+    assert second["app_automation"]["stateful_backoff"]["apply_needed"] is False
+    assert "fallback_hint" not in second["app_automation"]
 
 
 def test_fallback_hint_cli_route_binds_registry_and_runtime(tmp_path: Path) -> None:

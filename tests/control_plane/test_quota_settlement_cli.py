@@ -3746,7 +3746,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
-    original_ack_hint = guard["scheduler_hint"]["codex_app"]["ack_hint"]
+    original_ack_hint = guard["scheduler_hint"]["app_automation"]["ack_hint"]
 
     complete_args = (
         "todo",
@@ -6859,7 +6859,7 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     assert plan_identity["binding_id"] == identity["binding_id"]
     assert plan_identity["replan_obligation_id"] == obligation_id
     assert plan_identity["turn_instance_id"] == turn_instance_id
-    original_scheduler_ack_args = guard["scheduler_hint"]["codex_app"][
+    original_scheduler_ack_args = guard["scheduler_hint"]["app_automation"][
         "ack_hint"
     ]["cli_args"]
     original_scheduler_ack_args = original_scheduler_ack_args[

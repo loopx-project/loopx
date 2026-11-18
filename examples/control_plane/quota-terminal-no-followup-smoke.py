@@ -96,7 +96,7 @@ def status_payload() -> dict:
                 {
                     "id": GOAL_ID,
                     "registry_member": True,
-                    "status": "paused",
+                    "status": "active",
                     "adapter_kind": "harness_self_improvement",
                     "adapter_status": "connected-read-only",
                     "quota": quota,
@@ -142,11 +142,12 @@ def assert_terminal_guard_stops_recurring_automation() -> None:
 
     scheduler = guard["scheduler_hint"]
     assert scheduler["action"] == "stop_until_explicit_resume", guard
-    assert scheduler["codex_app"]["apply"] == "pause_or_delete_current_heartbeat_if_possible", guard
-    assert scheduler["codex_app"]["host_action_required"] is True, guard
-    assert scheduler["codex_app"]["attempt_limit"] == 1, guard
-    assert scheduler["codex_app"]["verify_host_result"] is True, guard
-    assert scheduler["codex_app"]["ack_required"] is False, guard
+    assert "codex_app" not in scheduler, scheduler
+    assert scheduler["app_automation"]["apply"] == "pause_or_delete_current_heartbeat_if_possible", guard
+    assert scheduler["app_automation"]["host_action_required"] is True, guard
+    assert scheduler["app_automation"]["attempt_limit"] == 1, guard
+    assert scheduler["app_automation"]["verify_host_result"] is True, guard
+    assert scheduler["app_automation"]["ack_required"] is False, guard
     assert scheduler["unchanged_poll"]["codex_cli_tui"] == "exit", guard
 
 
