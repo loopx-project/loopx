@@ -26,10 +26,14 @@ def _independently_reviewed(item: Mapping[str, Any]) -> bool:
         and evidence.get("head_oid") == item.get("head_oid")
 
 
-def review_action_kind(item: Mapping[str, Any]) -> str | None:
+def review_action_kind(
+    item: Mapping[str, Any], *, cross_model_review_needed: bool = False
+) -> str | None:
     state = str(item.get("state") or "").upper()
     if item.get("is_draft") is True or state == "CLOSED":
         return None
+    if state == "OPEN" and cross_model_review_needed:
+        return "rereview_pull_request_exact_head"
     conclusion = item.get("review_conclusion")
     conclusion = conclusion if isinstance(conclusion, Mapping) else {}
     if conclusion.get("valid") is True:
@@ -82,8 +86,9 @@ def materialize_review_execution(
     readiness_observations: Mapping[str, Mapping[str, Any]] | None = None,
     repository: str | None = None,
     review_threads: Mapping[str, Any] | None = None,
+    cross_model_review_needed: bool = False,
 ) -> dict[str, Any]:
-    action_kind = review_action_kind(item)
+    action_kind = review_action_kind(item, cross_model_review_needed=cross_model_review_needed)
     key = exact_head_key(item)
     readiness_observation: dict[str, Any] | None = None
     if action_kind == "qualify_pull_request_merge_readiness" and key and repository:
@@ -153,6 +158,8 @@ def materialize_review_execution(
         "review_goal": (
             "Run a fresh exact-head audit despite the valid prior conclusion. "
             if fresh_audit_requested
+            else "The current head needs review coverage from the invoking model family. "
+            if cross_model_review_needed
             else ""
         ) + "Follow review_execution_contract.decision_procedure: establish the goal and "
         "specification first, then execute this exact-head review_plan and its evidence commands.",

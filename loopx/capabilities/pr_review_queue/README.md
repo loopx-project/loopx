@@ -661,6 +661,20 @@ published GitHub reviews are recognized (`check_review_body` is unchanged).
 reference as an error, and a spec-basis gap as an approval blocker. Regenerate
 results made under revision 13 rather than adding these fields to them.
 
+In a Goal-bound GitHub queue, a recognized model family from the invoking
+runtime can reopen an open, non-draft exact head with a declared review from
+another family. The queue uses complete provider history. An independent
+review from the same family suppresses repeat work even when another account
+submitted a later review. A qualifying review published under the shared
+author login with a matching runtime declaration also suppresses repeat work
+for that model. GitHub independence still requires independent account
+evidence. The declarations record their source as published provenance.
+
+Missing model identity or incomplete history retains the existing queue
+behavior. A review with unknown provenance supplies no model-family coverage.
+The review action leaves the formal conclusion, dissent, CI policy, approval
+and merge-readiness rules in their existing owners.
+
 ### Semantic alignment and CI constraint recovery
 
 The semantic triage introduced in policy revision 5 replaces universal detailed

@@ -221,6 +221,7 @@ def scan_github_pull_requests(
     state_filter: str = "open",
     since: str | None = None,
     wait_for_ci: bool = True,
+    model_review_coverage: bool = False,
 ) -> dict[str, Any]:
     repo_args = ["--repo", repo] if repo else []
     api_repository = repo or resolve_current_github_repository(cwd=cwd)
@@ -285,6 +286,7 @@ def scan_github_pull_requests(
             cwd=cwd,
             attach=_attach_pr_review_details,
             **({"wait_for_ci": False} if not wait_for_ci else {}),
+            **({"model_review_coverage": True} if model_review_coverage else {}),
             run_gh_json=_run_gh_json,
         )
         detail_read_failures = sum(not result for result in detail_results)
@@ -785,6 +787,7 @@ def _review_conclusion(
     *,
     reviewer_login: str | None,
     behavior_bearing: bool = True,
+    reviewer_model_family: str | None = None,
 ) -> dict[str, Any]:
     head_oid = str(pr.get("headRefOid") or pr.get("head_oid") or "").strip()
     pr_author = str(
@@ -859,7 +862,7 @@ def _review_conclusion(
     if len(reviews) == 1 and pr.get("reviews_complete") is not True:
         return conclusions[0]
     from .capabilities.pr_review_queue.approval_closeout import select_review_history
-    selection = select_review_history({"head": head_oid, "author": pr_author,
+    history = {"head": head_oid, "author": pr_author,
         "reviews_complete": pr.get("reviews_complete") is True,
         "reviews": [{"state": conclusion["state"],
             "login": str(_as_dict(review.get("author")).get("login") or ""),
@@ -870,10 +873,22 @@ def _review_conclusion(
             "is_bot": _as_dict(review.get("author")).get("is_bot"),
             "submitted_at": review.get("submittedAt"),
             "conclusion": conclusion}
-            for review, conclusion in zip(reviews, conclusions)]})
+            for review, conclusion in zip(reviews, conclusions)]}
+    selection = select_review_history(history)
     index = cast(int, selection["index"])
-    return conclusions[index] | ({"independent_review": selection["independent_review"]}
-        if "independent_review" in selection else {})
+    independent = selection.get("independent_review")
+    conclusion = conclusions[index]
+    if reviewer_model_family and history["reviews_complete"] and (conclusion["valid"] or independent):
+        from .capabilities.pr_review_queue.model_coverage import needs_cross_model_review, published_review_model
+
+        if needs_cross_model_review(
+            family=reviewer_model_family,
+            history=history,
+            selection=selection,
+            model_reports=[published_review_model(review.get("body")) for review in reviews],
+        ):
+            conclusion["cross_model_review_needed"] = True
+    return conclusion | ({"independent_review": independent} if independent else {})
 
 
 def _review_sequence_entry(item: dict[str, Any], *, rank: int) -> dict[str, Any]:
@@ -914,6 +929,7 @@ def _normalize_pr(
     readiness_observations: Mapping[str, Mapping[str, object]] | None = None,
     repository: str | None = None,
     owner_authored: bool | None = None,
+    reviewer_model_family: str | None = None,
 ) -> dict[str, Any]:
     files = _files(pr)
     checks = _checks(pr)
@@ -937,8 +953,10 @@ def _normalize_pr(
         else 0.0
     )
     conclusion = _review_conclusion(pr, reviewer_login=reviewer_login,
-        behavior_bearing=bool({item["area"] for item in files} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS)))
+        behavior_bearing=bool({item["area"] for item in files} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS)),
+        reviewer_model_family=reviewer_model_family if raw_state == "OPEN" and not pr.get("isDraft") else None)
     independent = conclusion.pop("independent_review", None)
+    cross_model_review_needed = conclusion.pop("cross_model_review_needed", False)
     item: dict[str, Any] = {
         "number": number,
         "title": _redact_text(pr.get("title"), limit=180),
@@ -997,6 +1015,7 @@ def _normalize_pr(
             readiness_observations=readiness_observations or {},
             repository=repository,
             review_threads=_as_dict(pr.get("review_thread_summary")),
+            cross_model_review_needed=cross_model_review_needed,
         )
     )
     if owner_authored is not None:
@@ -1030,6 +1049,7 @@ def build_pr_review_packet(
     owner_logins: Sequence[str] = (),
     wait_for_ci: bool = True,
     readiness_observations: Mapping[str, Mapping[str, object]] | None = None,
+    reviewer_model_family: str | None = None,
 ) -> dict[str, Any]:
     normalized_state_filter = normalize_pr_state_filter(state_filter)
     normalized_priority = normalize_review_priority(review_priority)
@@ -1054,6 +1074,7 @@ def build_pr_review_packet(
             readiness_observations=readiness_observations,
             repository=repository,
             owner_authored=owner_identity["owner_authored"][index] if owner_identity else None,
+            reviewer_model_family=reviewer_model_family,
         )
         for index, item in enumerate(pull_requests)
     ]
