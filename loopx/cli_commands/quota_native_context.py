@@ -278,7 +278,8 @@ def project_saved_context_capture(
             goal_id=args.goal_id, agent_id=args.agent_id, surface="complete_turn" if complete else "quota_packet",
             capture_id=args.capture_sha256,
             continuity_generation=getattr(args, "_context_delivery_generation", None),
-            progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
+            progressive_enabled=activation["progressive_enabled"], max_page_output_bytes=caller_output_limit,
+            selection_command_args_template=transport,
             captured_decision=captured_decision if activation["progressive_enabled"]
                 and (args.initial_read or "sha256" in captured_decision) else None,
             hook_session=hook_session, saved_capture=True, publication_guard=publication_guard)
