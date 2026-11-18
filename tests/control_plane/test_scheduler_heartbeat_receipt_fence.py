@@ -549,6 +549,157 @@ def test_damaged_committed_successor_still_supersedes_the_older_turn(
     assert result["scheduler_state_mutated"] is False
 
 
+def _duplicate_committed_identity(path: Path, turn_id: str) -> None:
+    """Repeat the receipt's own top-level agent identity once.
+
+    A stray rewrite can add a member the writer never duplicated.  Repeating
+    the exact same value still names one identity, so it must not erase the
+    Turn the row already proves.
+    """
+    lines = path.read_bytes().split(b"\n")
+    for index, line in enumerate(lines):
+        if turn_id.encode() not in line:
+            continue
+        payload = json.loads(line)
+        agent = payload["agent_id"]
+        close = line.rfind(b"}")
+        duplicate = b',"agent_id": ' + json.dumps(agent, ensure_ascii=False).encode()
+        lines[index] = line[:close] + duplicate + line[close:]
+        path.write_bytes(b"\n".join(lines))
+        return
+    raise AssertionError("fixture receipt not found")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
+def test_duplicate_scope_identity_does_not_hide_the_committed_successor(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-duplicate", scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    for turn_id in ("turn-1", "turn-2"):
+        code, guard = run_json_cli_result(
+            "quota",
+            "should-run",
+            "--goal-id",
+            goal_id,
+            "--agent-id",
+            SCOPED_AGENT_ID,
+            "--trae_app",
+            "--app-automation-current-rrule",
+            "FREQ=MINUTELY;INTERVAL=3",
+            "--turn-instance-id",
+            turn_id,
+            registry_path=registry,
+            runtime_root=runtime_root,
+            cwd=project,
+        )
+        assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    _duplicate_committed_identity(log_path, "turn-2")
+    _damage_committed_summary(log_path, "turn-2")
+    before = log_path.read_bytes()
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        "turn-1",
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # A duplicate that repeats the same scope names one identity, so the Turn
+    # it already proves still retires the older return.
+    assert code == 1, result
+    assert result["ok"] is False
+    assert result["status"] == "heartbeat_receipt_stale"
+    assert result["scheduler_state_mutated"] is False
+    assert log_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
+def test_foreign_duplicate_identity_with_damaged_summary_is_tolerated(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-foreign-duplicate", scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    code, guard = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--app-automation-current-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--turn-instance-id",
+        "turn-1",
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    foreign = build_rollout_event(
+        goal_id=goal_id,
+        event_kind="quota_should_run",
+        agent_id="another-agent",
+        run_id="turn-other",
+        summary="heartbeat quota receipt committed for turn=turn-other stall=not_applicable",
+        details={"quota_command": "should-run"},
+    )
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(foreign, sort_keys=True, ensure_ascii=False) + "\n")
+    _duplicate_committed_identity(log_path, "turn-other")
+    _damage_committed_summary(log_path, "turn-other")
+    before = log_path.read_bytes()
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        "turn-1",
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # Every agent identity the row shows is another Agent's, so the damaged
+    # audit row is provably unrelated and the current return must complete.
+    assert code == 0, result
+    assert result["ok"] is True
+    assert result["scheduler_state_mutated"] is True
+    assert log_path.read_bytes() == before
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize(
     "command", ["scheduler-ack-current", "scheduler-fail-current"],

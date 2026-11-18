@@ -286,8 +286,12 @@ test("a committed successor stays superseding after its early field is damaged",
 });
 
 /** A committed successor row shaped like the writer's sorted-key output. */
-function receiptRowWithDetails(turnId: string, agentId = scope.agent_id): string {
-  return JSON.stringify({
+function receiptRowWithDetails(
+  turnId: string,
+  agentId = scope.agent_id,
+  duplicateAgentIds: readonly string[] = [],
+): string {
+  const row = JSON.stringify({
     agent_id: agentId,
     boundary: { absolute_paths_recorded: false, credential_values_recorded: false },
     details: {
@@ -305,6 +309,11 @@ function receiptRowWithDetails(turnId: string, agentId = scope.agent_id): string
     status: "normal_run",
     summary: `receipt ${turnId}`,
   });
+  if (duplicateAgentIds.length === 0) return row;
+  const close = row.lastIndexOf("}");
+  return row.slice(0, close) +
+    duplicateAgentIds.map((value) => `,"agent_id":${JSON.stringify(value)}`).join("") +
+    row.slice(close);
 }
 
 function damageLineAt(line: string, index: number): Buffer {
@@ -320,6 +329,7 @@ test("a damaged quote inside details cannot hide a committed successor", async (
   const cases: readonly {
     name: string;
     agentId?: string;
+    duplicateAgentIds?: readonly string[];
     stale: boolean;
     at: (line: string) => number;
   }[] = [
@@ -349,14 +359,41 @@ test("a damaged quote inside details cannot hide a committed successor", async (
       stale: false,
       at: (line) => line.indexOf('"quota_command":"') + '"quota_command":'.length,
     },
+    {
+      // A duplicate that repeats the same identity says nothing new.  It must
+      // not erase the Turn the row already proves.
+      name: "duplicate identical agent identity beside damaged detail",
+      duplicateAgentIds: [scope.agent_id],
+      stale: true,
+      at: (line) => line.indexOf('"quota_command":"') + '"quota_command":'.length,
+    },
+    {
+      // One duplicate names this scope and one names another, so the row
+      // cannot be resolved into a single successor identity.
+      name: "conflicting agent identities beside damaged detail",
+      duplicateAgentIds: ["other-agent"],
+      stale: true,
+      at: (line) => line.indexOf('"quota_command":"') + '"quota_command":'.length,
+    },
+    {
+      // Every duplicate agent identity is somebody else's: the row is
+      // provably foreign and its damage may be tolerated.
+      name: "foreign duplicate agent identities beside damaged detail",
+      agentId: "other-agent",
+      duplicateAgentIds: ["other-agent-2"],
+      stale: false,
+      at: (line) => line.indexOf('"quota_command":"') + '"quota_command":'.length,
+    },
   ];
   for (const operation of OPERATIONS) {
     await t.test(operation, { timeout: 30_000 }, async (t) => {
-      for (const { name, agentId, stale, at } of cases) {
+      for (const { name, agentId, duplicateAgentIds, stale, at } of cases) {
         const runtimeRoot = await tempRuntime(t);
         await appendReceipt(runtimeRoot, "turn-followup-1");
         const path = receiptLogPath(runtimeRoot);
-        const line = receiptRowWithDetails("turn-followup-2", agentId);
+        const line = receiptRowWithDetails(
+          "turn-followup-2", agentId, duplicateAgentIds,
+        );
         const index = at(line);
         assert.ok(index > 0, `${name}: fixture lost its damage point`);
         await appendFile(path, Buffer.concat([

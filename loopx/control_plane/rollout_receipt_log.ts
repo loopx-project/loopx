@@ -245,47 +245,50 @@ function committedSuccessor(
   agentId: string,
   goalRef: JsonObject | null,
 ): CommittedSuccessor | null {
-  const fields = new Map<string, unknown>();
-  // Whether the row carries more than one Turn identity.  Its scope is checked
-  // first: an ambiguous Turn in somebody else's row must not retire this
-  // transaction, and neither must a diagnostic row that is not a receipt at all.
-  let ambiguousTurn = false;
+  // Every value the row shows for a member, not just the first.  A duplicate
+  // that names the same value as its twin says nothing new, while a duplicate
+  // that disagrees must not be allowed to erase the identity it contradicts.
+  const observed = new Map<string, unknown[]>();
   for (const [key, value] of damaged.members) {
-    if (
-      fields.has(key) &&
-      (ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key)
-    ) {
-      if (key !== "run_id") return null;
-      if (fields.get(key) !== value) ambiguousTurn = true;
+    const existing = observed.get(key);
+    if (existing === undefined) observed.set(key, [value]);
+    else existing.push(value);
+  }
+  const equal = (left: unknown, right: unknown): boolean =>
+    JSON.stringify(left) === JSON.stringify(right);
+  const distinct = (key: string): unknown[] => {
+    const seen: unknown[] = [];
+    for (const value of observed.get(key) ?? []) {
+      if (!seen.some((item) => equal(item, value))) seen.push(value);
     }
-    fields.set(key, value);
-  }
-  for (const key of damaged.unreadable) {
-    if (!(ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key)) continue;
-    // Only the Turn id may be unknown: without the receipt kind or its scope the
-    // row cannot be attributed to this transaction at all.
-    if (key !== "run_id") return null;
-    if (fields.has("run_id")) ambiguousTurn = true;
-  }
-  // A member that is present with another value proves the row is outside this
-  // scope; only then may damage elsewhere in the row be tolerated.  Missing
-  // members are handled below, because damage can hide a member entirely.
-  if (fields.has("schema_version") &&
-    fields.get("schema_version") !== ROLLOUT_EVENT_SCHEMA_VERSION) return null;
-  if (fields.has("event_kind") &&
-    fields.get("event_kind") !== HEARTBEAT_RECEIPT_EVENT_KIND) return null;
-  if (fields.has("goal_id") && fields.get("goal_id") !== goalId) return null;
-  if (fields.has("agent_id") && fields.get("agent_id") !== agentId) return null;
+    return seen;
+  };
+  const confirms = (key: string, expected: unknown): boolean =>
+    distinct(key).includes(expected);
+  const goalRefMatches = (value: unknown): boolean => {
+    if (goalRef === null) return false;
+    const eventGoalRef = jsonObject(value);
+    return eventGoalRef !== null &&
+      eventGoalRef.goal_id === goalRef.goal_id &&
+      eventGoalRef.goal_instance_id === goalRef.goal_instance_id;
+  };
+
+  // A member that shows a value of this scope keeps the row inside it.  Only a
+  // member whose every value is foreign proves the row unrelated, which is the
+  // one case where damage elsewhere may be tolerated without a successor.
+  if (observed.has("schema_version") &&
+    !confirms("schema_version", ROLLOUT_EVENT_SCHEMA_VERSION)) return null;
+  if (observed.has("event_kind") &&
+    !confirms("event_kind", HEARTBEAT_RECEIPT_EVENT_KIND)) return null;
+  if (observed.has("goal_id") && !confirms("goal_id", goalId)) return null;
+  if (observed.has("agent_id") && !confirms("agent_id", agentId)) return null;
   if (goalRef === null) {
-    if (fields.has("goal_ref")) return null;
-  } else if (fields.has("goal_ref")) {
-    const eventGoalRef = jsonObject(fields.get("goal_ref"));
-    if (
-      eventGoalRef === null ||
-      eventGoalRef.goal_id !== goalRef.goal_id ||
-      eventGoalRef.goal_instance_id !== goalRef.goal_instance_id
-    ) return null;
+    if (observed.has("goal_ref")) return null;
+  } else if (observed.has("goal_ref") &&
+    !(observed.get("goal_ref") ?? []).some(goalRefMatches)) {
+    return null;
   }
+
   // Scope members whose bytes could not be read keep the row inside this
   // transaction without proving which Turn admitted it.
   for (const key of damaged.unreadable) {
@@ -293,24 +296,30 @@ function committedSuccessor(
     if (key !== "run_id") return { kind: "unknown" };
   }
   const identityUncertain = damaged.lostKeyName || damaged.ambiguous;
-  const required = goalRef === null
+  const scopeKeys = goalRef === null
     ? ["schema_version", "event_kind", "goal_id", "agent_id"]
     : ["schema_version", "event_kind", "goal_id", "agent_id", "goal_ref"];
-  if (required.some((key) => !fields.has(key))) {
+  if (scopeKeys.some((key) => distinct(key).length === 0)) {
     // Without damage such a row simply is not one of this scope's receipts.
     // Damage can have hidden the member behind a key name or separator it
     // could not read, so the row is unreadable instead of unrelated.
     return identityUncertain ? { kind: "unknown" } : null;
   }
-  // The row now proves it is one of this scope's heartbeat receipts.  Only then
-  // does an unknown Turn mean "somebody else's turn superseded mine".
+  // The row proves it is one of this scope's heartbeat receipts.  A duplicate
+  // scope member that names two different values cannot be resolved, and the
+  // same row with only one of them written would still be a successor.
+  if (scopeKeys.some((key) => distinct(key).length > 1)) {
+    return { kind: "unknown" };
+  }
+  // Only then does an unknown Turn mean "somebody else's turn superseded mine".
   if (damaged.ambiguous) return { kind: "unknown" };
-  if (ambiguousTurn) return { kind: "unattributed" };
-  const runId = fields.get("run_id");
+  const turnValues = distinct("run_id");
+  if (turnValues.length > 1) return { kind: "unattributed" };
+  if (damaged.unreadable.includes("run_id")) return { kind: "unattributed" };
+  const runId = turnValues[0];
   if (typeof runId === "string" && runId.trim().length > 0) {
     return { kind: "superseded", runId };
   }
-  if (damaged.unreadable.includes("run_id")) return { kind: "unattributed" };
   // Nothing names a Turn here.  A lost key name could have been that Turn, so
   // only a row whose key names all survived may be read as a diagnostic.
   return damaged.lostKeyName ? { kind: "unknown" } : null;
