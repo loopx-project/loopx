@@ -30,6 +30,7 @@ from ..capabilities.explore.composition_frontier import (
 from ..capabilities.periodic_report.pending_intent import (
     periodic_report_pending_intent_interaction_hook,
 )
+from ..capabilities.progress_review.context import external_progress_review_context
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.capability_hooks import TurnStartContextProjector
 from ..control_plane.quota.effective_action import EffectiveAction
@@ -188,6 +189,7 @@ def _build_turn_decision(
             bounded_research_frontier_projector=(
                 project_live_explore_composition_frontier
             ),
+            progress_review_context_reader=external_progress_review_context,
             requested_action_todo_id=requested_action_todo_id,
             # Preserve ordinary Todo decision/context behavior. Only an
             # already bound empty-frontier replan needs this scoped reentry.
@@ -385,6 +387,7 @@ def current_turn_host_launch_decision(
         scheduler_execution_context=scheduler_execution_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
+        progress_review_context_reader=external_progress_review_context,
         receipt_bound_todo_id=identity.todo_id or None,
         receipt_bound_replan_obligation_id=identity.replan_obligation_id,
         turn_instance_id=identity.turn_instance_id,
@@ -482,6 +485,7 @@ def current_heartbeat_host_launch_decision(
         scheduler_execution_context=scheduler_execution_context_for_runtime_profile("generic_cli"),
         operator_inbox_urgency_projector=build_lark_operator_inbox_urgency_projector(runtime_root_arg=runtime_root),
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
+        progress_review_context_reader=external_progress_review_context,
         receipt_bound_todo_id=selection.receipt_bound_todo_id,
         receipt_bound_replan_obligation_id=selection.receipt_bound_replan_obligation_id,
         retained_action_selection_todo_id=selection.retained_todo_id_for_decision,
