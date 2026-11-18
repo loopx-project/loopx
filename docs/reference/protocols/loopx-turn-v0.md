@@ -101,6 +101,10 @@ the effect projection, scheduler/automation execution data and
 `interaction_contract.cli_channel` remain with the outer executor. The model
 view resolves existing replan authoring and Explore guidance references before
 hiding their outer owner, preserving the original scalar values and text.
+Recognized unconfigured recall keeps its Goal, Agent and disabled status.
+Known empty pre-turn observations keep their hook, capability and status.
+The full readbacks stay with the executor. Available context, failed
+observations, required reads and extended readbacks reach the Worker intact.
 The model receives the original `source_decision_hash`, reader references and
 `source_schema_version`; that hash commits the original source, not the task
 view. Inline task context does not require a filesystem read of a private
@@ -115,7 +119,9 @@ their renderer.
 范围、执行要求和未知新增信息。来源绑定、effect projection、scheduler/automation
 执行数据及 `interaction_contract.cli_channel` 留在外层执行器。
 来源中指向外层 owner 的 replan 编写和 Explore 指导引用在隐藏该 owner 前展开，
-保留原始标量和文本。模型仍收到原始
+保留原始标量和文本。能识别的未配置召回保留 Goal、Agent 和停用状态。已知的空观察
+保留钩子、能力和状态。完整回执留在外层执行器。有可用上下文、观察失败、必需读取
+或扩展回执时，Worker 仍收到完整内容。模型仍收到原始
 `source_decision_hash`、reader 引用和 `source_schema_version`；该 hash 绑定原始
 来源，不绑定任务视图。已内联的任务上下文不要求 sandbox 读取不可访问的私有 capture，
 缺少必需证据仍暂停依赖该证据的工作。此呈现不是 adapter 请求，也不授予权限、结算或

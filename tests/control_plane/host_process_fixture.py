@@ -34,6 +34,21 @@ def assert_host_task_context(model_input, source):
             and heartbeat.get("recommended_mode") == "steering_audit_then_one_step"
             and isinstance(heartbeat.get("spend_policy"), str)):
         expected["heartbeat_recommendation"] = {k: v for k, v in heartbeat.items() if k != "spend_policy"}
+    observations = expected.get("turn_start_capability_hook_dispatch")
+    rendered_observations = context.get("turn_start_capability_hook_dispatch")
+    if isinstance(observations, dict) and isinstance(rendered_observations, dict) and set(rendered_observations) == {"results"}:
+        assert observations["failures"] == observations["required_reads"] == []
+        assert all(row["status"] in {"empty", "not_applicable"} and row["observation_count"] == 0
+                   for row in observations["results"])
+        expected["turn_start_capability_hook_dispatch"] = {"results": [
+            {key: row[key] for key in ("hook_id", "capability_id", "status")} for row in observations["results"]
+        ]}
+    recall = expected.get("reward_memory_recall")
+    rendered_recall = context.get("reward_memory_recall")
+    if isinstance(recall, dict) and isinstance(rendered_recall, dict) and set(rendered_recall) == {"status", "goal_id", "agent_id"}:
+        assert recall["status"] == "disabled" and recall["context"] is None
+        assert recall["experiment"]["automatic_recall"] is recall["experiment"]["automatic_ingest"] is False
+        expected["reward_memory_recall"] = {key: recall[key] for key in ("status", "goal_id", "agent_id")}
     assert set(context) == set(expected), {
         "unexpected": sorted(context.keys() - expected.keys()),
         "missing": sorted(expected.keys() - context.keys()),

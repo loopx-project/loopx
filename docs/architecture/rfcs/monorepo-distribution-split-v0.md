@@ -411,7 +411,10 @@ A Worker launched by a built-in Host receives task requirements, scoped
 authority, and the original read route. Todo-authoring directions and the
 ordinary delivery mode's quota spend instructions stay with the outer executor
 in the complete captured contract. Work, repair, and stop conditions remain
-available to the Worker.
+available to the Worker. Unconfigured memory recall and empty pre-turn
+observations expose their current scoped status in this view. Their full
+receipts stay in the original capture, with observations, failures, required
+reads and unfamiliar data still delivered when present.
 
 Context reuse must be invalidated by relevant source/requirement revisions,
 session generation changes, compaction or lost acknowledgements. A smaller

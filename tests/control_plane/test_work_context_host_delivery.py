@@ -200,12 +200,20 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     codex_input = json.loads(_prompt(request).split('Turn request:\n', 1)[1])
     assert model_input == codex_input
     worker = assert_host_task_context(model_input, full)
+    assert worker["reward_memory_recall"] == {"status": "disabled", "goal_id": GOAL_ID, "agent_id": AGENT_ID}
+    full_dispatch = full["turn_start_capability_hook_dispatch"]
+    assert full_dispatch["results"] and full_dispatch["registered_count"] >= 1
+    assert worker["turn_start_capability_hook_dispatch"] == {"results": [
+        {key: row[key] for key in ("hook_id", "capability_id", "status")} for row in full_dispatch["results"]
+    ]}
     worker_context = worker['interaction_contract']['agent_channel']['work_context']
     worker_sources = {source['source']: source['content'] for source in worker_context['sources']}
     primary = worker_sources['selected_todo']['todo']
     assert primary['note'] == note
     assert primary.get('text', worker['selected_todo']['text']) == source_task['text']
     assert goal in worker_sources['goal_state']['text']
+    if provider == "sqlite" and repetitions == 1:
+        _assert_optional_readbacks_survive_when_relevant(full)
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)
     code, ordinary = _run_cli(registry, runtime, *args)
     assert code == 0, ordinary
@@ -220,6 +228,37 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
     assert _spend_run_count(runtime) == 0
     assert saved.read_bytes() == original_bytes
+
+
+def _assert_optional_readbacks_survive_when_relevant(full):
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+
+    for case in ("active", "failed", "extended"):
+        source = copy.deepcopy({key: value for key, value in full.items() if key not in {"schema_version", "contract_binding"}})
+        recall = source["reward_memory_recall"]
+        dispatch = source["turn_start_capability_hook_dispatch"]
+        if case == "active":
+            recall["context"] = {"guidance": ["Use independent verification before reporting."]}
+            recall["automatic_recall"] = True
+            recall["experiment"].update(enabled=True, automatic_recall=True)
+            dispatch["results"][0].update(status="observed", observation_count=1,
+                                          readback={"summary_lines": ["A required artifact is available."]})
+        elif case == "failed":
+            recall.update(status="runtime_unavailable", reason_code="runtime_unavailable")
+            dispatch["results"][0].update(status="unavailable", error_code="context_unavailable")
+        else:
+            recall["experiment"]["host_coverage"][0]["future_context"] = {"must_read": "captured evidence"}
+            dispatch["results"][0]["readback"] = {"future_context": {"must_read": "captured evidence"}}
+        decision = compose_turn_decision(source)
+        plan = build_loopx_turn_plan(decision, host="generic-cli", execution_mode="isolated-headless",
+                                    turn_instance_id=TURN_ID)
+        request = build_loopx_turn_host_request(plan)
+        model = json.loads(_prompt(request).split("Turn request:\n", 1)[1])["task_context"]
+        assert model["reward_memory_recall"] == recall, case
+        assert model["turn_start_capability_hook_dispatch"] == dispatch, case
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])

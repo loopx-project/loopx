@@ -30,7 +30,7 @@ import {
   type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
+import { projectEmptyTurnStartObservations, projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral,
   sourceNumberTokens } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
@@ -1867,6 +1867,45 @@ export function completeHostSource(request: JsonObject): {decision: JsonObject; 
   return {decision, projection};
 }
 
+/** Collapse the unconfigured recall readback. Known active, failed and extended
+ * records still carry their full context. This only classifies presentation. */
+function disabledRewardMemoryView(value: unknown): JsonObject | null {
+  const readback = jsonObject(value);
+  const experiment = jsonObject(readback?.experiment);
+  const route = jsonObject(experiment?.config_runtime_route);
+  if (!readback || readback.status !== "disabled" || !experiment || !route ||
+      typeof readback.goal_id !== "string" || typeof readback.agent_id !== "string" ||
+      typeof route.registry_role !== "string" || typeof route.runtime_scope !== "string" ||
+      !Array.isArray(experiment.host_coverage)) return null;
+  const coverage = experiment.host_coverage;
+  if (!coverage.every(value => {
+    const host = jsonObject(value);
+    return host && Object.keys(host).length === 3 && typeof host.host_id === "string" &&
+      typeof host.automatic_recall === "string" && typeof host.automatic_ingest === "string";
+  })) return null;
+  const {goal_id, agent_id, status} = readback;
+  const expected = {
+    schema_version: "agent_turn_recall_v0", ok: true, status, goal_id, agent_id,
+    surface_id: "agent_workflow.turn_admission", host_wiring: "agent_turn_admission",
+    reason_code: null, context: null, automatic_recall: false, provider_call_count: 0,
+    fail_open: true, provider_failure_is_user_gate: false, grants_new_action_authority: false,
+    quota_spend_performed: false, external_writes_performed: false, suppress_external_sinks: true,
+    experiment: {
+      schema_version: "reward_memory_experiment_status_v1", ok: true, status, goal_id, agent_id,
+      experimental: false, enabled: false, available: false, configured_for_agent: false,
+      config_pointer_registered: false, automatic_ingest: false, automatic_recall: false,
+      fail_open: true, external_writes_performed: false, host_coverage: coverage,
+      config_runtime_route: {
+        schema_version: "reward_memory_config_runtime_route_v0", registry_source: "invoked_registry",
+        registry_role: route.registry_role, runtime_scope: route.runtime_scope, goal_source: "registry.goals",
+        config_source: "goal_repo_relative_config_pointer", readback_status: "not_attempted",
+        exact_readback_verified: false,
+      },
+    },
+  };
+  return isDeepStrictEqual(value, expected) ? {status, goal_id, agent_id} : null;
+}
+
 /** Task presentation is derived only after full-source validation. Keep task
  * facts (including unknown additions) and original scalar carriers intact;
  * scheduler/effect instructions remain with the outer executor. This view is
@@ -1899,6 +1938,10 @@ function hostModelContextChanges(decision: JsonObject): JsonObject {
     delete heartbeat.spend_policy;
     context.heartbeat_recommendation = heartbeat;
   }
+  const emptyObservations = projectEmptyTurnStartObservations(decision.turn_start_capability_hook_dispatch);
+  if (emptyObservations) context.turn_start_capability_hook_dispatch = emptyObservations;
+  const disabledRecall = disabledRewardMemoryView(decision.reward_memory_recall);
+  if (disabledRecall) context.reward_memory_recall = disabledRecall;
   const interaction = {...object(decision.interaction_contract)};
   const agent = object(interaction.agent_channel);
   // The complete source may share task authoring/evidence with its effect
