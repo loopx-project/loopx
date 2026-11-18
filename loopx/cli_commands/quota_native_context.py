@@ -372,6 +372,8 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                 and event.get("hook_event_name") in CONTEXT_LIFECYCLE_HOOKS):
             directory = codex_context_directory(directory=args.codex_context_dir,
                 root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
+            scenario = activation["scenario"]
+            progressive_enabled = activation["progressive_enabled"]
             payload = codex_context_hook(directory, event)
             request = None
             preparation_context = ""
@@ -383,15 +385,19 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                     if "claim_source_sha256" not in request or not request.get("turn_instance_id"):
                         raise LegacyNativePreparationCapture()
                     if request.get("readback_only") is True:
-                        preparation_context = codex_execution_preparation_readback_context(request) or ""
+                        preparation_context = codex_execution_preparation_readback_context(
+                            request, scenario=scenario, context_directory=directory,
+                            progressive_enabled=progressive_enabled,
+                        ) or ""
                     else:
                         capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                         receipt = execute_codex_execution_preparation(
                             request,
                             cwd=workspace.resolve(),
-                            scenario=activation["scenario"],
+                            scenario=scenario,
                             capture_directory=capture,
                             context_directory=Path(directory),
+                            progressive_enabled=progressive_enabled,
                         )
                         record_native_execution_preparation(
                             directory,
@@ -434,7 +440,10 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                         directory, event, readback_for=request["source_sha256"],
                     )
                     if readback is not None:
-                        preparation_context = codex_execution_preparation_readback_context(readback) or ""
+                        preparation_context = codex_execution_preparation_readback_context(
+                            readback, scenario=scenario, context_directory=directory,
+                            progressive_enabled=progressive_enabled,
+                        ) or ""
             if preparation_context:
                 existing = payload.get("hookSpecificOutput")
                 existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
