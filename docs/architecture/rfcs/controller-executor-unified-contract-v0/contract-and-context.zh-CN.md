@@ -28,6 +28,12 @@ Status、plan 与 scheduler-observation 保留各自用途；本切片不退役�
 新的完整 carrier。Wire/page 上限和终态 actor 的十次调用预算不变。冻结的 raw/v0
 模型对照继续独立保留。
 
+Benchmark worker 在启动规划或执行模型前核实显式历史 Short 请求。它从已固定
+的 CLI 只读预演 quota 响应，不准入工作，并在 wake 回执记录预期与实际版本及
+资格。v1 或无法核实的响应会拒绝 Short。Fresh-replan checkpoint 会预载另一种
+输入，不能算作直接 Short。当前普通与 Complete 请求继续复用 C1 producer。
+历史实验保留原版本与回执。
+
 Todo 验收完成、replan-successor 返回及 blocked-completion 恢复的当前续接计划复用
 既有 TypeScript 结算 composer，保留原身份、路由与已提供的 lease 证明。JSON 与
 Markdown 展示随写回执行的运行时扣额，不再要求模型执行第二条 spend 命令。

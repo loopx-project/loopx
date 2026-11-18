@@ -618,20 +618,15 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-此前捕获目录同时启用短包的行为已修正。需要短包的调用者须对
-`heartbeat-prompt` 显式传 `--turn-envelope`；省略该开关时仍使用普通输入，
-选择、结算、身份与完整私有捕获不变。旧运行的实际输入与设置不得追溯改写。
+历史 Short 使用曾交付 v0 的产品版本，并保留原请求与捕获。当前 C1 中
+`--turn-envelope` 是完整契约的兼容别名，已有实验按其记录版本解释。
 
-This is Python filesystem/command transport under the existing quota/context
-owner, not a new capability or Python decision rule. The shared benchmark
-heartbeat worker has a separate default-off `turn_envelope` option documented in
-[its runtime guide](../../../benchmark/runtime/RUNTIME.md). Native `/goal`, Turn
-driver, installed App automations, frontend and Lark are not switched by this
-research-runner setting. Real local worker/renderer/selection/settlement tests
-qualify transport; model token/IO costs, decision quality and long-run adoption
-still require a separately pinned experiment. Capture grants no additional
-read/write/lease authority. Keep captures private; disable the option in the
-next run and use ordinary file management to remove unneeded records.
+The benchmark heartbeat worker verifies a historical `turn_envelope` request
+against the pinned CLI's v0 response before launching a model. Its read-only
+preview and eligibility are recorded in the wake receipt. See the [runtime
+guide](../../../benchmark/runtime/RUNTIME.md) for supported configurations.
+Model cost, decision quality and long-run adoption require a separately pinned
+experiment. A capture carries its original read and recovery scope.
 
 Whole-Goal requirements and selected work have different sources. After final
 delivery admission, the shared typed interaction owner adds these pre-work reads
