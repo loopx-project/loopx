@@ -251,10 +251,13 @@ does not interrupt an active Turn or treat visibility as consumption.
 
 Ordinary peer results may wait for the next work Turn. Cancellation, blocking
 and priority-control paths keep their immediate handling. Use the invocation-bound
-`read_peer_returns` tool when only the peer results need review. It records the
-same `model_turn` supply fact as the full `read_context` tool. The required CLI
-read and its paged recovery record transport delivery. Peer results stay
-eligible for the next Turn until a bound Turn accepts or rejects them.
+`read_peer_returns` tool when only the peer results need review. It binds each
+result's `read_token` to the current Turn. A committed receipt can outlast a
+lost response, so pass the token from the returned body when acknowledging
+the result. If the read fails ambiguously, repeat the same page in the same
+Turn. The required CLI read and its paged recovery record transport delivery.
+Peer results stay eligible for the next Turn until a bound Turn accepts or
+rejects them.
 
 Outgoing requests to an original project conversation use the same typed address
 reader as explicit peer returns. The agenda retains that conversation recipient
@@ -913,11 +916,12 @@ Retry the same update with the same id and text. Each update has its own
 after verified delivery of the preceding result. Unknown delivery blocks later
 sends rather than allowing them to overtake it. After the bound tool supplies
 an update, use its acknowledgement command with the exact `--result-key` or
-call `consume_peer_result` with that key. `accepted` and `rejected` consume it.
+call `consume_peer_result` with that key and the result's `read_token` when
+supplied. `accepted` and `rejected` consume it.
 `deferred` records the review but keeps it visible on the next Turn. Consuming
 the first result does not consume later updates. MCP callers use the corresponding
 `return_result(update_id=...)` and
-`consume_peer_result(disposition=..., result_key=...)`; the MCP host binds the
+`consume_peer_result(disposition=..., result_key=..., read_token=...)`; the MCP host binds the
 current Turn identity and does not expose it as a model-selected argument.
 Full texts stay in immutable receipts;
 the typed publication planner receives identities and content digests.
@@ -1154,12 +1158,14 @@ The peer independently acknowledges a request and reports a conclusion
 through the same commands as a manager request. The original requester can
 inspect it under `peer_returns` in `manager-inbox read`. In a host with the
 invocation-bound tools configured, call `read_peer_returns` for the results alone
-and `consume_peer_result` after evaluating them. A read records delivery and
+and supply each result's `read_token` to `consume_peer_result` after evaluating it.
+A read records delivery and
 leaves the results pending. Follow `next_cursor` as `cursor` in the same Turn to
 read later results even when earlier ones are deferred. Omit the cursor to
 restart the live scan and discover results added before the previous page
 boundary. The full `read_context` response also carries a CLI acknowledgement
-command for each exact delivery:
+command for each exact delivery. When the result carries a `read_token`, the
+supplied command includes the corresponding `--read-token`:
 
 ```sh
 loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \

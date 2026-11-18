@@ -1,6 +1,6 @@
 import deliveryContract from "./return_delivery_contract.json" with {type: "json"};
 /** Local Inbox read transactions; provider observations remain explicit Host IO. */
-import {createHash} from "node:crypto";
+import {createHash, randomBytes} from "node:crypto";
 import {constants, closeSync, fstatSync, openSync, readSync, readdirSync, statSync} from "node:fs";
 import {basename, dirname, isAbsolute, join, resolve, toNamespacedPath} from "node:path";
 import {setImmediate as yieldToRuntime} from "node:timers/promises";
@@ -466,6 +466,7 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
       return null;
     }));
   }
+  const peerReadTokens: Record<string, string> = {};
   for (const raw of params.deliveries) {
     const delivered = requireJsonObject(raw, "supplied peer result"), key = requireNonEmptyString(delivered.key, "result key");
     if (!RESULT_KEY.test(key)) fail("invalid peer result key");
@@ -474,9 +475,10 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
     if ((conversation ? !equal((row.requester as JsonObject)?.goal_ref, source.scope.caller_goal_ref)
       || (row.requester as JsonObject)?.agent_id !== source.agent : row.goal_id !== source.goal)
       || Object.hasOwn(reply, "result_key") && reply.result_key !== key) fail("peer return scope mismatch");
-    const path = join(source.root, "replies", requestId(row.request_id), key + ".delivery.json");
-    const lock = source.exact ? join(source.root, "request-locks", String(row.request_id)) : join(dirname(path), key + ".lock");
-    await withFileMutationLock(lock, async () => {
+    const id = requestId(row.request_id);
+    const path = join(source.root, "replies", id, key + ".delivery.json");
+    const lock = source.exact ? join(source.root, "request-locks", id) : join(dirname(path), key + ".lock");
+    const readToken = await withFileMutationLock(lock, async () => {
       const stored = conversation ? entry({...source, recipient: normalizeOriginalConversationRecipient(row.recipient)}, String(row.request_id))
         : entry(source, String(row.request_id), requireNonEmptyString(row.agent_id, "peer Agent"));
       if (stored.source_agent_id !== source.agent) fail("peer return scope mismatch");
@@ -490,13 +492,24 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
         fail("peer return delivery receipt scope mismatch");
       }
       const priorTurn = jsonObject(prior?.model_turn);
-      if (!prior || turn !== null && priorTurn?.turn_instance_id !== turn) {
+      const sameTurn = turn !== null && priorTurn?.turn_instance_id === turn;
+      const priorToken = sameTurn ? priorTurn?.read_token : undefined;
+      if (priorToken !== undefined && (typeof priorToken !== "string" || !BARE_SHA256_PATTERN.test(priorToken))) {
+        fail("peer return read token is invalid");
+      }
+      // Stamping the Turn can succeed before the focused response reaches its caller.
+      // The same result retains its token on reread, including across host restarts.
+      const token = priorToken ?? (turn !== null && params.operation === "returns" ? randomBytes(32).toString("hex") : undefined);
+      if (!prior || turn !== null && (!sameTurn || token !== priorToken)) {
         await atomicWriteJson(path, {...identity,
           delivered_at: prior?.delivered_at ?? params.observed_at, kind: "requester_cli_read",
-          ...(turn !== null ? {model_turn: {turn_instance_id: turn, supplied_at: params.observed_at}}
-            : priorTurn ? {model_turn: priorTurn} : {})});
+          ...(turn !== null ? {model_turn: {turn_instance_id: turn,
+            supplied_at: sameTurn ? priorTurn?.supplied_at : params.observed_at,
+            ...(token !== undefined ? {read_token: token} : {})}} : {})});
       }
+      return token;
     });
+    if (readToken !== undefined) peerReadTokens[`${id}:${key}`] = readToken;
   }
   if (nativeResultIds.length) {
     await nativeChildResultInbox({operation: "mark_delivered", runtime_root: params.runtime_root,
@@ -505,6 +518,7 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
       result_ids: nativeResultIds, observed_at: params.observed_at});
   }
   return {read_receipts: receipts, followthrough,
+    ...(Object.keys(peerReadTokens).length ? {peer_read_tokens: peerReadTokens} : {}),
     ...(params.include_context === true ? {context: await turnContext(source, params)} : {})};
 }
 
@@ -556,7 +570,13 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
   if (operation === "record_read") return recordReads(source, params);
   if (operation === "returns") {
     const offered = await collectReturns(source, peerReturnPage(source, params));
-    if (params.mark_read === true) await recordReads(source, {...params, items: [], deliveries: offered.deliveries});
+    if (params.mark_read === true) {
+      const recorded = await recordReads(source, {...params, items: [], deliveries: offered.deliveries});
+      const tokens = jsonObject(recorded.peer_read_tokens);
+      if (tokens) for (const item of offered.view.items as JsonObject[]) {
+        item.read_token = tokens[`${item.request_id}:${item.result_key ?? "conclusion"}`];
+      }
+    }
     return offered.view;
   }
   if (operation === "turn_context") return turnContext(source, params);

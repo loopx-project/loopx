@@ -121,25 +121,40 @@ main()
             delivery = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
             receipt = delivery.read_bytes()
             assert json.loads(receipt)["model_turn"]["turn_instance_id"] == turn_key
+            refused = await session.call_tool("consume_peer_result", disposition)
+            assert refused.isError and "read_token" in refused.content[0].text
+            cli_acknowledge = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                "--registry", str(registry), "--runtime-root", str(tmp_path), "manager-inbox",
+                "acknowledge-return", "--goal-id", "delivery", "--agent-id", "worker",
+                "--request-id", rid, "--turn-instance-id", turn_key, "--disposition", "accepted"]
+            refused_cli = subprocess.run(cli_acknowledge, capture_output=True, timeout=15)
+            assert refused_cli.returncode == 1 and "read_token" in json.loads(refused_cli.stdout)["error"]
+            assert not list((_root(tmp_path) / "replies").rglob("*.consumed.json"))
             recovered_peer = await session.call_tool("read_peer_returns", {})
             assert not recovered_peer.isError
             result, = json.loads(recovered_peer.content[0].text)["peer_returns"]["items"]
             assert result["request_id"] == rid and result["text"] == "Private peer conclusion"
+            read_token = result["read_token"]
+            assert read_token not in failed_peer_read.content[0].text
             assert delivery.read_bytes() == receipt
             assert [_receipt(tmp_path, "reads", row)[0] for row in tail] == receipts
             recovered = await session.call_tool("read_context", {"cursor": cursor})
             assert not recovered.isError
-            assert {row["request_id"] for row in json.loads(recovered.content[0].text)["items"]} == {row["request_id"] for row in tail}
+            recovered_page = json.loads(recovered.content[0].text)
+            assert {row["request_id"] for row in recovered_page["items"]} == {row["request_id"] for row in tail}
+            full_result, = recovered_page["peer_returns"]["items"]
+            assert full_result["read_token"] == read_token
+            assert read_token in full_result["acknowledge_command"]
             assert all(path.read_bytes() == data for path, data in before.items())
             delivery = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
             assert json.loads(delivery.read_text())["model_turn"]["turn_instance_id"] == turn_key
             assert not list((_root(tmp_path) / "replies").rglob("*.consumed.json"))
-            for replay in (False, True):
-                result = await session.call_tool("consume_peer_result", disposition)
-                assert not result.isError
-                acknowledgement = json.loads(result.content[0].text)
-                assert acknowledgement["status"] == "consumed"
-                assert acknowledgement.get("replay", False) is replay
+            consumed = await session.call_tool("consume_peer_result", {**disposition, "read_token": read_token})
+            assert not consumed.isError
+            assert json.loads(consumed.content[0].text)["status"] == "consumed"
+            replay = subprocess.run([*cli_acknowledge, "--read-token", read_token], capture_output=True,
+                                    timeout=15, check=True)
+            assert json.loads(replay.stdout)["replay"] is True
             with source_session_registry_transaction(registry, operation="revoke_fixture_agent") as transaction:
                 changed = transaction.payload_copy()
                 changed["goals"][0]["coordination"]["registered_agents"] = ["source"]
@@ -234,7 +249,7 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
             read_tool = next(tool for tool in tools.tools if tool.name == "read_context")
             consume_tool = next(tool for tool in tools.tools if tool.name == "consume_peer_result")
             assert set(read_tool.inputSchema["properties"]) == {"cursor"}
-            assert set(consume_tool.inputSchema["properties"]) == {"request_id", "disposition", "result_key"}
+            assert set(consume_tool.inputSchema["properties"]) == {"request_id", "disposition", "result_key", "read_token"}
             assert set(consume_tool.inputSchema["required"]) == {"request_id", "disposition"}
             for tool in tools.tools:
                 assert not {
@@ -363,7 +378,7 @@ def test_bound_peer_read_preserves_result_without_resupplying_inbox(tmp_path, mo
             narrow = json.loads(result.content[0].text)
             assert set(narrow) == {"peer_returns"}
             peer, = narrow["peer_returns"]["items"]
-            assert peer == opening_view["peer_returns"]["items"][0]
+            assert {key: value for key, value in peer.items() if key != "read_token"} == opening_view["peer_returns"]["items"][0]
             assert peer["request_id"] == rid and peer["text"] == "One finding needs a follow-up."
             assert json.loads(delivery.read_text())["model_turn"]["turn_instance_id"] == turn
             assert not list((_root(root) / "replies" / rid).glob("*.consumed.json"))
@@ -375,7 +390,7 @@ def test_bound_peer_read_preserves_result_without_resupplying_inbox(tmp_path, mo
             previous_peer, = full_view["peer_returns"]["items"]
             assert {key: value for key, value in previous_peer.items() if key != "acknowledge_command"} == peer
 
-            consumed = await session.call_tool("consume_peer_result", args)
+            consumed = await session.call_tool("consume_peer_result", {**args, "read_token": peer["read_token"]})
             assert not consumed.isError and json.loads(consumed.content[0].text)["status"] == "consumed"
             empty = await session.call_tool("read_peer_returns", {})
             assert not empty.isError
@@ -441,7 +456,8 @@ def test_bound_peer_return_pages_keep_deferred_results_for_the_next_turn(tmp_pat
 
             for row in first["items"]:
                 request_id, key = result_id(row)
-                disposition = {"request_id": request_id, "result_key": key, "disposition": "deferred"}
+                disposition = {"request_id": request_id, "result_key": key, "disposition": "deferred",
+                    "read_token": row["read_token"]}
                 reply = await session.call_tool("consume_peer_result", disposition)
                 assert not reply.isError and json.loads(reply.content[0].text)["status"] == "deferred"
             assert await page(session) == first
@@ -457,7 +473,10 @@ def test_bound_peer_return_pages_keep_deferred_results_for_the_next_turn(tmp_pat
             assert {result_id(row) for row in tail["items"]} == results.keys() - first_ids
             assert {result_id(row): row["text"] for row in first["items"] + tail["items"]} == results
             assert json.loads(delivery.read_text())["model_turn"]["turn_instance_id"] == first_turn
-            accepted = await session.call_tool("consume_peer_result", disposition)
+            foreign = await session.call_tool("consume_peer_result", {**disposition, "read_token": first["items"][0]["read_token"]})
+            assert foreign.isError and "read_token" in foreign.content[0].text
+            read_token = next(row["read_token"] for row in tail["items"] if result_id(row) == (later_id, later_key))
+            accepted = await session.call_tool("consume_peer_result", {**disposition, "read_token": read_token})
             assert not accepted.isError and json.loads(accepted.content[0].text)["status"] == "consumed"
 
         async with stdio_client(launch(later_turn)) as (read, write), ClientSession(read, write) as session:
@@ -466,6 +485,11 @@ def test_bound_peer_return_pages_keep_deferred_results_for_the_next_turn(tmp_pat
             assert rejected.isError and "cursor scope mismatch" in rejected.content[0].text
             reopened = await page(session)
             assert {result_id(row) for row in reopened["items"]} == first_ids
+            prior = first["items"][0]
+            stale = await session.call_tool("consume_peer_result", {"request_id": prior["request_id"],
+                "result_key": prior.get("result_key", "conclusion"), "disposition": "accepted",
+                "read_token": prior["read_token"]})
+            assert stale.isError and "read_token" in stale.content[0].text
             remaining = await page(session, cursor=reopened["next_cursor"])
             assert {result_id(row) for row in remaining["items"]} == results.keys() - first_ids - {(later_id, later_key)}
 
