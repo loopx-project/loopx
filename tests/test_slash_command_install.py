@@ -1366,3 +1366,25 @@ def test_marker_retires_after_user_edits_the_entry_and_dry_run_writes_nothing(
     )
     assert _row(payload, "cursor_mcp_server")["status"] == "skipped_user_owned_mcp_entry"
     assert json.loads(config.read_text(encoding="utf-8"))["mcpServers"]["loopx"] == entry
+
+
+def test_antigravity_resident_guidance_is_isolated_to_antigravity_surfaces(tmp_path: Path) -> None:
+    ark_skills = tmp_path / "ark-skills"
+    materialize_loopx_entry_skill(
+        skills_dir=ark_skills,
+        execute=True,
+        host_surface="ark-managed-agent",
+    )
+    ark_text = (ark_skills / "loopx" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Antigravity App fixed resident session" not in ark_text
+    assert "--with-agy-hooks" not in ark_text
+
+    codex_home = tmp_path / "codex"
+    install_slash_commands(
+        execute=True,
+        surfaces=["codex"],
+        codex_home=str(codex_home),
+    )
+    codex_text = (codex_home / "skills" / "loopx" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Antigravity App fixed resident session" not in codex_text
+    assert "--with-agy-hooks" not in codex_text

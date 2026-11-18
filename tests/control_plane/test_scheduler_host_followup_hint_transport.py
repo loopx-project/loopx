@@ -142,6 +142,46 @@ def test_failure_hint_carries_the_same_versioned_native_boundary() -> None:
     assert payload["use_current_hint"] is False
 
 
+def test_native_hints_carry_the_exact_goal_instance_scope() -> None:
+    goal_ref = {
+        "goal_id": "goal-native-followup",
+        "goal_instance_id": "ginst_" + "a" * 32,
+    }
+    ack = build_app_automation_scheduler_ack_hint(
+        goal_id="goal-native-followup",
+        agent_id="agent-native-followup",
+        applied_rrule="FREQ=MINUTELY;INTERVAL=15",
+        reset_token="reset-native-followup",
+        identity_signature="identity-native-followup",
+        scheduler_host_facts=_host_facts("ack"),
+        scheduler_before=_before(),
+        goal_ref=goal_ref,
+    )
+    assert _decode(ack["cli_args"])["goal_ref"] == goal_ref
+
+    failure = build_app_automation_scheduler_failure_hint(
+        goal_id="goal-native-followup",
+        agent_id="agent-native-followup",
+        failed_rrule="FREQ=MINUTELY;INTERVAL=15",
+        observed_host_rrule="FREQ=MINUTELY;INTERVAL=3",
+        scheduler_host_facts=_host_facts("host_failure"),
+        scheduler_before=_before(),
+        goal_ref=goal_ref,
+    )
+    assert _decode(failure["cli_args"])["goal_ref"] == goal_ref
+
+    legacy = build_app_automation_scheduler_ack_hint(
+        goal_id="goal-native-followup",
+        agent_id="agent-native-followup",
+        applied_rrule="FREQ=MINUTELY;INTERVAL=15",
+        reset_token="reset-native-followup",
+        identity_signature="identity-native-followup",
+        scheduler_host_facts=_host_facts("ack"),
+        scheduler_before=_before(),
+    )
+    assert _decode(legacy["cli_args"])["goal_ref"] is None
+
+
 def test_native_facts_are_not_dropped_when_cli_args_exceed_legacy_budget() -> None:
     capabilities = [
         f"capability-{index}-" + (chr(97 + index) * 140) for index in range(12)

@@ -732,7 +732,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const required = requiredNativeContext(request, sourceValues, plan);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
-  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
+  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context), request);
   // The Python edit adapter already reconstructs this exact required view.
   // Full native delivery can use that copy; delta still carries its own edits.
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;

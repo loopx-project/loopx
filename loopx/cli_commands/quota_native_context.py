@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import stat
@@ -110,8 +109,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 else min(output_limit, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES))
         if saved_page and args.page_bytes is not None:
             _validate_context_page_window(args.offset, args.page_bytes, output_limit)
-        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256,
-                                           private=hook_session is not None)
+        path, _, payload = _read_capture(args.capture_file, args.capture_sha256,
+                                         private=hook_session is not None)
         identity = payload.get("agent_identity")
         receipt = payload.get("heartbeat_receipt")
         if (payload.get("ok") is not True or not isinstance(identity, dict) or not isinstance(receipt, dict)
@@ -147,6 +146,18 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         return _saved_context_transport_failure(exc, args=args, receipt=receipt,
             recovery=full_reference, reader_argv=reader_argv, source_unverified=True)
 
+    captured_decision = {"path": str(path)}
+    if complete and activation["progressive_enabled"]:
+        from ..control_plane.runtime.private_permissions import require_private_path
+
+        try:
+            require_private_path(path)
+        except OSError:
+            # A manually restored capture can still use the checked historical reader.
+            pass
+        else:
+            captured_decision["sha256"] = args.capture_sha256
+
     mode = "full"
     target = None
     native_prepared = False
@@ -159,7 +170,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         try:
             navigation = quota_capture.progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
-                directory=None, reader_argv=reader_argv, captured_decision_path=str(path), page_attached=saved_page)
+                directory=None, reader_argv=reader_argv, captured_decision=captured_decision, page_attached=saved_page)
             if saved_page:
                 return _saved_context_read_page(args, navigation, initial_reference=None,
                     initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
@@ -219,10 +230,11 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 presentation["host_poll_receipt"] = payload["host_poll_receipt"]
         prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="complete_turn" if complete else "quota_packet",
-            capture_id=hashlib.sha256(raw).hexdigest(),
+            capture_id=args.capture_sha256,
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
-            captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
+            captured_decision=captured_decision if activation["progressive_enabled"]
+                and (args.initial_read or "sha256" in captured_decision) else None,
             hook_session=hook_session, saved_capture=True)
         projected = prepared.delivery
         initial_read_plan = prepared.initial_read_plan

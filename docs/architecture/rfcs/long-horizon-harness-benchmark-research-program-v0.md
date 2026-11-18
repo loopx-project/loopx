@@ -133,17 +133,26 @@ outperform lossy hand-written summaries:
   discovery precisely by keeping a fixed immutable outer loop over deterministic
   programmatic verifiers without letting the solver alter its own harness or
   grading contract.
+- [AgentFlow](https://arxiv.org/abs/2510.05592) demonstrates in multi-turn tool
+  planning that offline SFT on static traces causes distribution collapse under
+  trajectory shift, whereas in-the-loop segment optimization (`Flow-GRPO`) keeps
+  exploration grounded in live tool outcomes while leaving frozen executors clean;
+  and [HELIX](https://arxiv.org/abs/2608.13951) demonstrates how verified
+  sibling trajectories forked from shared states separate causal policy uplift
+  from confounded starting-state drift.
 - Published LoopX context studies ([context delivery](https://loopx-project.github.io/loopx/blog/context-delivery/)
   and [EdgeBench feedback and memory](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/))
   likewise show that verbose serialization and post-peak replan loops can consume
-  substantial uncached context when raw-code inspection and local probes would
-  suffice.
+  substantial uncached context—and mid-trajectory dynamic prompt rewriting
+  breaks prefix KV-cache reuse, shifting warm-cache runs into expensive cold
+  prefill regimes—when raw-code inspection, local probes, and monotonic append
+  prefixes would suffice.
 
 However, empirical evidence establishes **five failure regimes** where raw
 artifacts, scalar rewards, and clean resets cannot replace a governed control
 plane:
 
-1. **Goodharting and verifier tampering:** Whenever the solver shares process,
+1. **Goodharting, verifier tampering, and symptom-masking shortcuts:** Whenever the solver shares process,
    filesystem, network, or secret boundaries with the grader, unguarded
    optimization exploits shortcut channels—observed in `LHTB 2.0` (`14/17` early
    perfect scores came from grader leaks prior to process freezing and verifier
@@ -154,8 +163,10 @@ plane:
    rollout reward hacking), [Darwin Gödel Machine](https://arxiv.org/abs/2505.22954)
    (Node 114 falsifying verification logs), and
    [METR reward-hacking evaluations](https://metr.org/blog/2025-06-05-recent-reward-hacking/).
-   In-agent Python probes cannot enforce OS/container verifier isolation or
-   `benchmark_integrity_audit_v0` (§6.5, §7.1).
+   In-agent Python probes cannot enforce OS/container verifier isolation,
+   `benchmark_integrity_audit_v0`, or out-of-tree **anti-reward-hacking
+   root-cause certification guards** (distinguishing real invariant repairs from
+   test-muting, threshold relaxation, or fixture hardcoding; §6.5, §7.1).
 2. **Out-of-distribution (OOD) overfitting and harness bloat:** Unregularized
    evolution over raw artifacts memorizes training traces and degrades OOD.
    [RRSI](https://arxiv.org/abs/2609.24972) finds unregularized Meta-Harness
@@ -741,7 +752,7 @@ change, not a corresponding percentage reduction in total research cost.
 | Observation | Required interpretation |
 | --- | --- |
 | Packet bytes and delivered context | Measure serialization, source reading and actual consumer input separately. References must still resolve to complete applicable instructions; smaller output obtained by omitting obligations is not an efficiency gain. |
-| Model usage | Attribute actual request identities and retained counters to their covered session/Turn window. Reconcile compaction, retries, mirrored records and cumulative snapshots without double counting; distinguish cached from uncached input. Missing request or tail coverage remains unknown. |
+| Model usage | Attribute actual request identities and retained counters to their covered session/Turn window. Reconcile compaction, retries, mirrored records and cumulative snapshots without double counting; explicitly separate `cached_prefix_tokens` (warm KV-cache hits) from `uncached_input_tokens` (cold prefill / post-`EpochReset` prefix rebuilds) and output tokens, reporting **cold vs. warm KV-cache regimes** separately. Missing request or tail coverage remains unknown. |
 | Complete marginal cost | Include task work, control, evaluation, recovery and human attention where measured. Report collection/validation overhead too; unknown components prevent a claim about full monetary cost. Preserve cancelled and failed attempts rather than dividing only by successful work. |
 | Useful result | Report the best valid retained native artifact/result, terminal completion and new verified improvements separately. Task-native ranking remains authoritative; a partial score, completed Todo or final file alone is not whole-task success. |
 
@@ -756,13 +767,28 @@ adding a parallel cost ledger or converting bytes into estimated savings.
 **Agent decision rule for harness and planning changes.** Judge every candidate
 harness, context or planning change by net terminal accepted outcome
 $\Delta J(B \mid s_0) = \mathbb{E}[Y_B^\pi - Y_B^{\pi_0} \mid s_0]$ under
-**complete budget accounting**—charging model/context processing, control-plane
-and protocol tax (RPC round trips, schema ceremony, governance prompts),
-checkpoint creation, yardstick build/repair, and evaluator/confirmation compute
-and cooldown waits. Preserve negative, null and inconclusive results in the
-denominator, and prioritize restorable quiescent same-state checkpoint
-counterfactuals ($\tau_B(s; a, a_0, \pi)$) over unattributed tweaks inferred
-from confounded observational action logs.
+**complete budget accounting**—charging model/context processing (explicitly
+separating `cached_prefix_tokens` vs. `uncached_input_tokens` across cold vs.
+warm KV-cache regimes so mid-trajectory cache-busting rewrites cannot masquerade
+as packet-byte savings), control-plane and protocol tax (RPC round trips, schema
+ceremony, governance prompts), checkpoint creation, yardstick build/repair, and
+evaluator/confirmation compute and cooldown waits. Preserve negative, null and
+inconclusive results in the denominator, and prioritize restorable quiescent
+same-state checkpoint counterfactuals ($\tau_B(s; a, a_0, \pi)$) over
+unattributed tweaks inferred from confounded observational action logs.
+
+**Counterfactual arm attribution across adaptive policy variants.** When an
+adaptive meta-policy (such as Phase 1 `KL-UCB` arm selection in
+[Joint decisions §5.9](target-yardstick-stride-decisions-v0.md#policy-evolution))
+explores among candidate `(target–yardstick, stride, context-stack)` arms, raw
+selected-arm win rates conflate state difficulty with treatment effect. Log each
+arm's exact assignment propensity $p(a \mid s)$ at decision time and evaluate
+cross-variant contrasts with inverse-propensity / Horvitz-Thompson style matched
+arm attribution ($\hat{\Delta}_{\text{HT}}(B \mid s)$ or doubly-robust
+residuals over shared-checkpoint sibling groups as in
+[HELIX](https://arxiv.org/abs/2608.13951)), verifying positivity ($p(a \mid s) > 0$),
+overlap diagnostics, and effective sample size ($N_{\text{eff}}$) rather than
+promoting observational win-rate artifacts.
 
 ### 6.3 Long-horizon control quality
 
@@ -939,6 +965,17 @@ events. The public receipt contains only stable run identity, pinned policy and
 environment digests, parity status, disposition, reason codes, and redacted
 evidence references. A public receipt cannot upgrade an unknown private audit
 to `eligible`.
+
+**Anti-reward-hacking root-cause certification guards.** Alongside mount, network,
+and hidden-verifier isolation, integrity and acceptance qualification must
+enforce deterministic out-of-tree root-cause certification guards: verifying that
+candidate fixes preserve frozen test harnesses, unmodified assertions, and
+differential invariants across held-out/adversarial checks rather than passing
+via skipped tests, weakened tolerances, fixture hardcoding, or grading-path
+shortcuts. Structured guard outcomes (missing failing-to-passing evidence,
+unauthorized test edits, or differential regressions) feed directly into
+`benchmark_integrity_audit_v0` dispositions (`quarantined` / `invalid`) without
+inferring cheating from solver prose substrings.
 
 #### Declared feedback and evaluation timing
 
@@ -1200,8 +1237,10 @@ To avoid benchmark overfitting:
 
 The [Post-Outcome Memory Utility Attribution RFC](./post-outcome-memory-utility-attribution-v0.md)
 can use verified benchmark outcomes as one evidence source. A trajectory-level
-reward does not establish per-memory causal credit. Holdout replay or a bounded
-ablation is required before assigning strong utility. Benchmark content must
+reward does not establish per-memory causal credit. Holdout replay, propensity-logged
+counterfactual arm attribution (§6.2), or a bounded ablation across batch-barrier
+`add / revise / retire` memory transitions (gated by Semantic Duplicate Gate
+deduplication) is required before assigning strong utility. Benchmark content must
 never be retained in a way that contaminates later tasks.
 
 <a id="edgebench-budgeted-planning"></a>
@@ -1358,7 +1397,13 @@ information and confirmed gain. Attribute delayed gains to the relevant sequence
 for analysis, not automatically to its last action; observational associations
 remain non-causal. Only then add an affordable lookahead-depth or calibration
 ablation where a specific uncertainty justifies it, rather than a full factorial
-matrix upfront.
+matrix upfront. When comparing Phase 1 (`KL-UCB` + batch-barrier memory) against
+Phase 2 Checkpoint-Forked `Segment Flow-GRPO` ($\Delta T$ rollouts over $O(1)$
+state projections; [Joint decisions §5.9](target-yardstick-stride-decisions-v0.md#policy-evolution))
+or evaluating `KeepRaw` / `FoldToReceipt` / `EpochReset` policies, report
+propensity-weighted Horvitz-Thompson arm contrasts (§6.2), cold-versus-warm
+KV-cache token splits, and anti-reward-hacking root-cause certification pass
+rates alongside native terminal scores.
 
 Expand when repeated terminal benefits meet frozen margins and uncertainty
 requirements without unacceptable correctness, resource or authority regressions.
@@ -1895,6 +1940,8 @@ This is a living research RFC, not a frozen benchmark snapshot.
 - [Self-Harness](https://arxiv.org/abs/2606.09498)
 - [Reward Hacking Benchmark (RHB)](https://arxiv.org/abs/2605.02964)
 - [DuoDiscover paper](https://arxiv.org/abs/2610.17184)
+- [AgentFlow paper](https://arxiv.org/abs/2510.05592)
+- [HELIX paper](https://arxiv.org/abs/2608.13951)
 - [AlphaEvolve paper](https://arxiv.org/abs/2506.13131)
 - [Darwin Gödel Machine (DGM) paper](https://arxiv.org/abs/2505.22954)
 - [Darwin Gödel Machine repository](https://github.com/jennyzzt/dgm)

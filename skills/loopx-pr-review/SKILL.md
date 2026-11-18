@@ -106,16 +106,15 @@ An explicitly authorized fresh audit uses the same exact-head override above.
 
 Each PR needs independent evidence and a standalone card; a queue table is a preface only.
 
-For managed review, pass `--goal-id GOAL` and execute the packet's current
-`validation_matrix`: its `wait_for_ci`, `validation_source` and
-`failure_attribution` (including `evidence_scope`) own CI observation and failure
-judgment. With `wait_for_ci=false`, never fetch, poll or wait for CI. Keep review
-verdict and merge readiness separate; do not substitute CI metadata for decisive
-changed-invariant evidence. Follow the packet's diagnostic-row rule for unknown
-or red CI; do not invent a CI-success or exhaustive attribution requirement.
-Configure one Goal with `configure-goal --goal-id GOAL
---no-pr-review-wait-for-ci --execute`; clear with
-`--clear-pr-review-configuration --execute`.
+For managed review (including inside worktrees or subagents), pass explicit
+`--registry` and `--goal-id GOAL` to apply `validation_matrix` (`wait_for_ci`,
+`validation_source`, `failure_attribution`); omitting them silently falls back
+to `wait_for_ci=true`. With `wait_for_ci=false`, never fetch, poll or wait for
+CI. Keep review verdict and merge readiness separate; never substitute CI metadata
+for changed-invariant evidence or invent CI-success rules on unknown/red CI.
+Configure `wait_for_ci=false` via `configure-goal --goal-id GOAL
+--no-pr-review-wait-for-ci --execute` (`--clear-pr-review-configuration --execute`
+to clear).
 
 ## Publish And Read Back
 For an open PR, publish validated actionable findings by default unless the user
@@ -135,13 +134,14 @@ owner/GitHub authority, preserving discussion and unresolved reviews. Merge rout
 `loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
 Immediately before every merge, run `loopx --format json pr-review --repo OWNER/REPO
---check-merge-readiness NUMBER@HEAD_OID`. Pass `--goal-id GOAL` when the work is already
-Goal-managed; its compact observation suppresses only unchanged requalification.
-Standalone work requires no Goal and writes no Goal observation. `ready=true` needs no
-bypass. Explicit maintainer authorization means admin bypass may override a readiness
-or GitHub policy hold, but never missing exact-head review,
-required validation, unresolved findings or threads, a changed head, an unmergeable
-conflict, or absent merge authority. Material change reopens qualification.
+--check-merge-readiness NUMBER@HEAD_OID` (pass explicit `--registry` and
+`--goal-id GOAL` on Goal-managed work so `wait_for_ci=false` is honored without
+waiting on remote CI; standalone work needs no Goal). `ready=true` permits
+immediate merge (including `--admin` for author-owned `COMMENTED` approvals or
+unconsulted status checks when `wait_for_ci=false`); explicit maintainer
+authorization means admin bypass may override a readiness or GitHub policy hold,
+never missing exact-head review, validation, unresolved threads, a changed head,
+an unmergeable conflict, or absent merge authority.
 
 ## Full PR Review And Bilingual Format
 
