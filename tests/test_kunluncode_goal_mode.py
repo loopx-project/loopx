@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -552,12 +553,14 @@ def test_installer_registers_only_the_owned_global_mcp_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[list[str]] = []
+    entries: list[dict[str, object]] = []
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(cli, "_compatible_python", lambda _python: True)
-    monkeypatch.setattr(cli, "_configured_mcp_servers", lambda _binary: [])
+    monkeypatch.setattr(cli, "_configured_mcp_servers", lambda _binary: list(entries))
 
     def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         calls.append(command)
+        entries.append({"name": cli.MCP_SERVER_NAME, "command": "/managed/.venv/bin/python", "args": [str(cli.MCP_SCRIPT)]})
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(cli, "_run", capture)
@@ -642,6 +645,7 @@ def test_installer_refuses_to_replace_a_foreign_named_entry(
 
 def test_installer_restores_previous_entry_when_replacement_fails(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     calls: list[list[str]] = []
     previous = {
@@ -649,16 +653,20 @@ def test_installer_restores_previous_entry_when_replacement_fails(
         "command": "/user/custom-server",
         "args": ["--serve"],
     }
+    entries = [previous]
+    monkeypatch.setattr(cli, "DEFAULT_MCP_VENV", tmp_path / "managed" / ".venv")
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(cli, "_compatible_python", lambda _python: True)
-    monkeypatch.setattr(
-        cli, "_configured_mcp_servers", lambda _binary: [previous]
-    )
+    monkeypatch.setattr(cli, "_configured_mcp_servers", lambda _binary: list(entries))
 
     def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         calls.append(command)
+        if command[1:3] == ["mcp", "remove"]:
+            entries.clear()
         if command[1:3] == ["mcp", "add"] and "/managed/.venv/bin/python" in command:
             return subprocess.CompletedProcess(command, 1, "", "new entry rejected")
+        if command[1:3] == ["mcp", "add"]:
+            entries.append(previous)
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(cli, "_run", capture)
@@ -720,13 +728,15 @@ def test_installer_normalizes_relative_python_to_an_absolute_path(
 ) -> None:
     interpreter = tmp_path / ".venv" / "bin" / "python"
     calls: list[list[str]] = []
+    entries: list[dict[str, object]] = []
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(cli, "_compatible_python", lambda _python: True)
-    monkeypatch.setattr(cli, "_configured_mcp_servers", lambda _binary: [])
+    monkeypatch.setattr(cli, "_configured_mcp_servers", lambda _binary: list(entries))
 
     def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         calls.append(command)
+        entries.append({"name": cli.MCP_SERVER_NAME, "command": str(interpreter), "args": [str(cli.MCP_SCRIPT)]})
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(cli, "_run", capture)
@@ -1793,3 +1803,22 @@ def test_mcp_pin_has_one_source_of_truth() -> None:
     assert cli.MCP_REQUIREMENT.startswith("mcp==")
     assert cli.MCP_SDK_VERSION not in probe_source
     assert "MCP_SDK_VERSION" in probe_source
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_optimized_python_rejects_wrong_mcp_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, matches: bool
+) -> None:
+    version = cli.MCP_SDK_VERSION if matches else "0.0.0"
+    (tmp_path / "sitecustomize.py").write_text(
+        "import importlib.metadata, sys, types\n"
+        f"importlib.metadata.version = lambda name: {version!r}\n"
+        "for name in ('mcp', 'mcp.server', 'mcp.server.fastmcp', "
+        "'loopx.kunluncode_goal_mode.server'):\n"
+        "    sys.modules[name] = types.ModuleType(name)\n"
+        "sys.modules['mcp.server.fastmcp'].FastMCP = object\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+    assert cli._compatible_python(sys.executable) is matches

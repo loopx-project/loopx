@@ -50,9 +50,20 @@ be inflated; use edge rate limiting if needed, not a new stored IP identifier.
 cd apps/usage-collector
 npx wrangler d1 create loopx-usage
 cp wrangler.example.toml wrangler.toml   # set database_id; ignored local configuration
-npx wrangler d1 execute loopx-usage --remote --file schema.sql
+npx wrangler d1 execute loopx-usage --remote --file schema-v0.sql
+npx wrangler d1 migrations apply loopx-usage --remote
 npx wrangler deploy
 ```
+
+`schema-v0.sql` bootstraps only a new database. D1 migrations then build the
+current schema and record the applied migration names for future upgrades.
+`schema.sql` is the current snapshot for local tests; it already contains
+`pings.arch` and must not be followed by migration `0001-basic-usage.sql`.
+
+If an existing database was initialized from `schema.sql`, back it up and
+inspect its schema and D1 migration ledger before upgrading. A maintainer must
+approve its migration baseline. Do not rerun the bootstrap or change the ledger
+automatically; neither operation is an existing-database repair procedure.
 
 ## Upgrade an existing v0 deployment (including #5111)
 

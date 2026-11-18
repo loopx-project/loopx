@@ -1,6 +1,6 @@
 // Runs the collector against real SQLite through a minimal D1-shaped shim.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { createServer } from "node:http";
@@ -83,6 +83,20 @@ test("ping endpoint rejects wrong method, type, size and JSON", async () => {
   assert.equal(db.raw.get("SELECT COUNT(*) AS n FROM pings").n, 0);
 });
 
+test("ping rejects invalid UTF-8 even in a duplicate JSON field", async () => {
+  const db = d1();
+  const body = Buffer.from(JSON.stringify(ping(1)).replace(
+    '"schema":"loopx_usage_ping_v0"',
+    '"schema":"X","schema":"loopx_usage_ping_v0"',
+  ));
+  body[body.indexOf(Buffer.from('"X"')) + 1] = 0xff;
+  const request = new Request("https://collector.example/v0/ping", {
+    method: "POST", headers: { "content-type": "application/json" }, body,
+  });
+  assert.equal((await handle(request, db, at("2026-10-01"))).status, 400);
+  assert.equal(db.raw.get("SELECT COUNT(*) AS n FROM pings").n, 0);
+});
+
 test("one row per installation per day; first day kept; only payload fields stored", async () => {
   const db = d1();
   assert.equal((await handle(post(ping(1)), db, at("2026-10-01"))).status, 204);
@@ -113,6 +127,22 @@ test("stats report monthly active, new installs and suppressed breakdowns", asyn
   // 3 darwin + 2 linux: both under the threshold, so neither is published.
   assert.deepEqual(stats.current_month_breakdown.os, { other: 5 });
   assert.deepEqual(stats.current_month_breakdown.version, { "1.2.0": 5 });
+});
+
+test("monthly breakdown includes only the current calendar month at year and leap-day boundaries", async () => {
+  for (const [day, previous, current, next] of [
+    ["2026-12-31", "2026-11-30", "2026-12-31", "2027-01-01"],
+    ["2024-02-29", "2024-01-31", "2024-02-29", "2024-03-01"],
+  ]) {
+    const db = d1();
+    for (let n = 1; n <= 5; n++) {
+      await handle(post(ping(n, { os: "windows" })), db, at(previous));
+      await handle(post(ping(n, { os: "linux" })), db, at(current));
+      await handle(post(ping(n + 5, { os: "darwin" })), db, at(next));
+    }
+    const response = await handle(new Request("https://collector.example/v0/stats"), db, at(day));
+    assert.deepEqual((await response.json()).current_month_breakdown.os, { linux: 5 });
+  }
 });
 
 test("suppressSmall folds small buckets into other", () => {
@@ -244,6 +274,41 @@ test("v1 heartbeat has architecture; aggregates reject identifiers and store onl
   const stats = await (await handle(new Request("https://collector.example/v1/aggregate-stats"), db)).json();
   assert.deepEqual(stats.totals.feature, { todo: 12 });
   assert.equal("install_id" in stats, false);
+});
+
+test("documented fresh deployment migrates to the current schema and keeps legacy pings", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const fresh = readme.split("## Fresh deployment\n")[1].split("\n## ")[0];
+  const commands = [...fresh.matchAll(/^npx wrangler d1 (execute|migrations apply) (\S+) (.+)$/gm)];
+  assert.deepEqual(commands.map(command => command[1]), ["execute", "migrations apply"]);
+  for (const command of commands) {
+    assert.equal(command[2], "loopx-usage");
+    assert.ok(command[3].split(/\s+/).includes("--remote"));
+  }
+  const schemaFile = /--file (\S+)/.exec(commands[0][3])?.[1];
+  assert.ok(schemaFile, "fresh bootstrap must name its schema file");
+  const db = new DatabaseSync(":memory:");
+  const snapshot = new DatabaseSync(":memory:");
+  try {
+    db.exec(readFileSync(new URL(`../${schemaFile}`, import.meta.url), "utf8"));
+    db.exec("INSERT INTO pings (day, install_id, version, os, python, channel) VALUES ('2026-09-26', 'old', '1.2.0', 'linux', '3.13', 'pip')");
+    const migrations = new URL("../migrations/", import.meta.url);
+    for (const file of readdirSync(migrations).filter(file => file.endsWith(".sql")).sort()) {
+      db.exec(readFileSync(new URL(file, migrations), "utf8"));
+    }
+    snapshot.exec(SCHEMA);
+    const objects = "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name";
+    assert.deepEqual(db.prepare(objects).all(), snapshot.prepare(objects).all());
+    for (const {type, name} of snapshot.prepare(objects).all()) {
+      const pragma = type === "table" ? "table_info" : "index_info";
+      assert.deepEqual(db.prepare(`PRAGMA ${pragma}("${name}")`).all(),
+        snapshot.prepare(`PRAGMA ${pragma}("${name}")`).all(), name);
+    }
+    assert.deepEqual({...db.prepare("SELECT install_id, arch FROM pings").get()}, {install_id: "old", arch: "other"});
+  } finally {
+    db.close();
+    snapshot.close();
+  }
 });
 
 test("existing v0 database upgrades without deleting heartbeat history", () => {

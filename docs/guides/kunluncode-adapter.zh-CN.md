@@ -244,8 +244,13 @@ connect  install  uninstall  add  run  status
 ```
 
 可以先加 `--dry-run` 查看将使用的路径。若同名 MCP entry 不是 LoopX 管理的 entry，
-安装器会拒绝覆盖；只有确认旧 entry 可以替换时才使用 `--replace`。替换新 entry 失败时，
-安装器会恢复可重建的旧 command entry；无法安全恢复的 entry 会在删除前被拒绝。
+安装器会拒绝覆盖；只有确认旧 entry 可以替换时才使用 `--replace`。添加命令返回失败且
+回读确认没有同名 entry 时，安装器会尝试恢复旧 command entry，并核对结果。无法安全恢复
+的 entry 会在删除前被拒绝。
+
+替换前，安装器把旧 entry 保存为私有 JSON。命令超时后，安装器先回读状态，不自动再次写入。
+如果有旧 entry，错误信息会给出备份路径。先检查备份和 `kunluncode config get mcp_servers`，
+再决定如何恢复。备份可能含秘密；确认配置后再删除。替换或恢复时应协调其他配置写入方。
 
 默认 native `goal-pro`/`goal` 路径本身不依赖 MCP 完成回写，因此 `--skip-mcp` 后仍可运行；
 MCP entry 用于 readback、交互使用和 `--mode headless` 兼容路径。

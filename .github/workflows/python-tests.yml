@@ -192,7 +192,11 @@ jobs:
           npm run smoke:chat-upgrade
           npm run smoke:delegation-search
           npm run smoke:task-inspector-route
+          npm run smoke:manager-goal-routing
+          LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 npm run smoke:manager-goal-routing-browser
+          npm run smoke:managed-goal-result-schema
           npm run smoke:conversation-find
+          npm run smoke:conversation-history
       - name: Qualify packaged team evidence and feedback recovery
         if: matrix.shard == 2
         working-directory: apps/presentation/dashboard
@@ -204,6 +208,7 @@ jobs:
           LOOPX_USAGE_PING: "0"
         run: |
           python -m pip install --disable-pip-version-check -e ".[test]"
+          npm --prefix apps/presentation/dashboard run smoke:bound-conversation
           node apps/presentation/dashboard/smoke/team-task-revalidation-smoke.mjs
       - name: Preserve synthetic original-task recovery views
         if: always() && matrix.shard == 2

@@ -9,9 +9,12 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
+from loopx import __version__ as LOOPX_VERSION
 from loopx.control_plane.projects.registry_codec import (
     load_project_registry,
     mutate_project_registry,
@@ -45,6 +48,12 @@ DEFAULT_MCP_VENV = (
 )
 
 
+@dataclass(frozen=True)
+class _McpBackup:
+    entry: dict[str, Any]
+    path: Path
+
+
 def _run(
     command: list[str],
     *,
@@ -70,25 +79,57 @@ def _venv_python(venv: Path) -> Path:
 
 
 def _compatible_python(value: str | Path) -> bool:
-    probe = _run(
-        [
-            str(value),
-            "-c",
-            (
-                "from importlib.metadata import version; "
-                "from mcp.server.fastmcp import FastMCP; "
-                "import loopx.kunluncode_goal_mode.server; "
-                f"assert version('mcp') == '{MCP_SDK_VERSION}'"
-            ),
-        ],
-        timeout=30,
-    )
+    try:
+        probe = _run(
+            [
+                str(value),
+                "-c",
+                (
+                    "from importlib.metadata import version; "
+                    "import sys; "
+                    "from mcp.server.fastmcp import FastMCP; "
+                    "import loopx.kunluncode_goal_mode.server; "
+                    f"sys.exit(version('mcp') != '{MCP_SDK_VERSION}')"
+                ),
+            ],
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("KunlunCode MCP Python verification timed out; status is unknown") from exc
     return probe.returncode == 0
 
 
 def _source_root() -> Path | None:
     candidate = Path(__file__).resolve().parents[2]
     return candidate if (candidate / "pyproject.toml").is_file() else None
+
+
+def _provisioned_python_matches(python: Path, source_root: Path | None) -> bool:
+    source = str((source_root / "loopx").resolve()) if source_root is not None else None
+    probe = _run(
+        [str(python), "-I", "-c", (
+            "from importlib.metadata import version; from pathlib import Path; "
+            "import sys, loopx; from mcp.server.fastmcp import FastMCP; "
+            "import loopx.kunluncode_goal_mode.server; "
+            f"source = {source!r}; "
+            f"ok = version('mcp') == {MCP_SDK_VERSION!r} and "
+            f"version('loopx') == {LOOPX_VERSION!r} and loopx.__version__ == {LOOPX_VERSION!r}; "
+            "ok = ok and (source is None or Path(loopx.__file__).resolve().is_relative_to(Path(source))); "
+            "sys.exit(not ok)"
+        )],
+        timeout=30,
+    )
+    return probe.returncode == 0
+
+
+def _create_mcp_venv(uv: str, python: Path) -> None:
+    try:
+        created = _run([uv, "venv", "--python", sys.executable, str(DEFAULT_MCP_VENV)])
+    except subprocess.TimeoutExpired as exc:
+        state = "interpreter exists" if python.is_file() else "no interpreter found"
+        raise RuntimeError(f"uv venv timed out; {state}; inspect the environment before retrying") from exc
+    if created.returncode != 0:
+        raise RuntimeError("uv venv failed: " + (created.stdout + created.stderr)[-800:])
 
 
 def provision_mcp_python(*, dry_run: bool = False) -> str:
@@ -109,23 +150,28 @@ def provision_mcp_python(*, dry_run: bool = False) -> str:
         return str(venv_python)
     DEFAULT_MCP_VENV.parent.mkdir(parents=True, exist_ok=True)
     if not venv_python.is_file():
-        created = _run([uv, "venv", "--python", sys.executable, str(DEFAULT_MCP_VENV)])
-        if created.returncode != 0:
-            raise RuntimeError(
-                "uv venv failed: " + (created.stdout + created.stderr)[-800:]
-            )
-    installed = _run(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(venv_python),
-            *loopx_requirement,
-            MCP_REQUIREMENT,
-        ],
-        timeout=300,
-    )
+        _create_mcp_venv(uv, venv_python)
+    try:
+        installed = _run(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(venv_python),
+                *loopx_requirement,
+                MCP_REQUIREMENT,
+            ],
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as exc:
+        try:
+            matches = _provisioned_python_matches(venv_python, source_root)
+        except (OSError, subprocess.TimeoutExpired) as probe_error:
+            raise RuntimeError("uv pip install timed out; environment status could not be verified") from probe_error
+        if matches:
+            return str(venv_python)
+        raise RuntimeError("uv pip install timed out; environment does not match the requested adapter") from exc
     if installed.returncode != 0 or not _compatible_python(venv_python):
         raise RuntimeError(
             "uv pip install failed: " + (installed.stdout + installed.stderr)[-1200:]
@@ -134,14 +180,26 @@ def provision_mcp_python(*, dry_run: bool = False) -> str:
 
 
 def _configured_mcp_servers(kunluncode: str) -> list[dict[str, Any]]:
-    result = _run([kunluncode, "config", "get", "mcp_servers"])
+    try:
+        result = _run([kunluncode, "config", "get", "mcp_servers"])
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("KunlunCode MCP configuration check timed out; status is unknown") from exc
     if result.returncode != 0:
         raise RuntimeError("cannot read KunlunCode MCP configuration")
     try:
-        payload = json.loads(result.stdout or "[]")
+        payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError("KunlunCode returned invalid mcp_servers JSON") from exc
-    return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise RuntimeError("KunlunCode returned invalid mcp_servers JSON")
+    return payload
+
+
+def _named_mcp_server(kunluncode: str) -> dict[str, Any] | None:
+    entries = [item for item in _configured_mcp_servers(kunluncode) if item.get("name") == MCP_SERVER_NAME]
+    if len(entries) > 1:
+        raise RuntimeError(f"multiple KunlunCode MCP entries named {MCP_SERVER_NAME!r}; inspect configuration")
+    return entries[0] if entries else None
 
 
 def _is_managed_server(entry: dict[str, Any]) -> bool:
@@ -178,6 +236,8 @@ def _mcp_add_command(
 def _restorable_mcp_command(
     kunluncode: str, entry: dict[str, Any]
 ) -> list[str] | None:
+    if set(entry) - {"name", "command", "args"}:
+        return None
     command = entry.get("command")
     args = entry.get("args", [])
     if not isinstance(command, str) or not command.strip() or not isinstance(args, list):
@@ -190,6 +250,144 @@ def _restorable_mcp_command(
         command=command,
         args=args,
     )
+
+
+def _save_mcp_backup(entry: dict[str, Any]) -> _McpBackup:
+    directory = DEFAULT_MCP_VENV.parent / "recovery"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if directory.is_symlink() or (
+        os.name != "nt" and (directory.stat().st_mode & 0o077 or directory.stat().st_uid != os.getuid())
+    ):
+        raise RuntimeError("KunlunCode MCP recovery directory is not private")
+    descriptor, name = tempfile.mkstemp(prefix="mcp-entry-", suffix=".json", dir=directory)
+    path = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(entry, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if json.loads(path.read_text(encoding="utf-8")) != entry:
+            raise RuntimeError("KunlunCode MCP recovery backup did not verify")
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return _McpBackup(entry, path)
+
+
+def _discard_mcp_backup(backup: _McpBackup | None) -> None:
+    if backup is not None:
+        backup.path.unlink()
+
+
+def _backup_hint(backup: _McpBackup | None) -> str:
+    return f"; previous entry saved at {backup.path}" if backup is not None else ""
+
+
+def _requested_mcp_server(python: str) -> dict[str, Any]:
+    return {"name": MCP_SERVER_NAME, "command": python, "args": [str(MCP_SCRIPT)]}
+
+
+def _checked_mcp_server(kunluncode: str, backup: _McpBackup | None, reason: str) -> dict[str, Any] | None:
+    try:
+        return _named_mcp_server(kunluncode)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(f"{reason}; MCP configuration could not be verified{_backup_hint(backup)}; inspect before retrying") from exc
+
+
+def _report_mcp_uncertain(
+    kunluncode: str, backup: _McpBackup | None, reason: str,
+    requested_python: str | None,
+) -> NoReturn:
+    current = _checked_mcp_server(kunluncode, backup, reason)
+    if backup is not None and current == backup.entry:
+        raise RuntimeError(f"{reason}; the previous entry is still present{_backup_hint(backup)}; verify before retrying")
+    if requested_python is not None and current == _requested_mcp_server(requested_python):
+        state = "the requested entry is present; verify it before retrying"
+    elif current is None:
+        state = "no entry is present; inspect configuration before " + ("restoring" if backup is not None else "retrying")
+    else:
+        state = "another entry is present; inspect it before retrying"
+    raise RuntimeError(f"{reason}; {state}{_backup_hint(backup)}")
+
+
+def _recover_mcp_failure(
+    kunluncode: str, backup: _McpBackup | None, reason: str,
+    requested_python: str | None,
+) -> NoReturn:
+    previous = backup.entry if backup is not None else None
+    current = _checked_mcp_server(kunluncode, backup, reason)
+    if previous is not None and current == previous:
+        _discard_mcp_backup(backup)
+        raise RuntimeError(f"{reason}; the previous entry is still present")
+    if current is not None:
+        if requested_python is not None and current == _requested_mcp_server(requested_python):
+            raise RuntimeError(f"{reason}; the requested entry is present{_backup_hint(backup)}; verify it before retrying")
+        raise RuntimeError(f"{reason}; another entry is present{_backup_hint(backup)}; inspect it before retrying")
+    if backup is None:
+        raise RuntimeError(f"{reason}; no entry is present; inspect configuration before retrying")
+    _restore_mcp_backup(kunluncode, backup, reason)
+
+
+def _restore_mcp_backup(kunluncode: str, backup: _McpBackup, reason: str) -> NoReturn:
+    previous = backup.entry
+    restore_command = _restorable_mcp_command(kunluncode, previous)
+    if restore_command is None:
+        raise RuntimeError(f"{reason}; the previous entry cannot be safely restored{_backup_hint(backup)}")
+    try:
+        restored = _run(restore_command)
+    except subprocess.TimeoutExpired:
+        restore_status = "restoration timed out"
+    except OSError:
+        restore_status = "restoration could not start"
+    else:
+        restore_status = "restoration command completed" if restored.returncode == 0 else "restoration command failed"
+    current = _checked_mcp_server(kunluncode, backup, f"{reason}; {restore_status}")
+    if current == previous and restore_status == "restoration command completed":
+        _discard_mcp_backup(backup)
+        raise RuntimeError(f"{reason}; the previous entry was restored")
+    if current == previous:
+        raise RuntimeError(f"{reason}; previous entry is present, but {restore_status}{_backup_hint(backup)}; verify before retrying")
+    raise RuntimeError(f"{reason}; {restore_status}, but previous entry was not verified{_backup_hint(backup)}; inspect before retrying")
+
+
+def _prepare_mcp_backup(kunluncode: str, previous: dict[str, Any]) -> _McpBackup:
+    try:
+        backup = _save_mcp_backup(previous)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("KunlunCode MCP entry could not be backed up; no replacement was attempted") from exc
+    current = _checked_mcp_server(kunluncode, backup, "KunlunCode MCP entry recheck failed")
+    if current != previous:
+        raise RuntimeError(f"KunlunCode MCP entry changed before removal{_backup_hint(backup)}")
+    return backup
+
+
+def _remove_mcp_for_replacement(kunluncode: str, backup: _McpBackup) -> None:
+    try:
+        removed = _run([kunluncode, "mcp", "remove", MCP_SERVER_NAME])
+    except subprocess.TimeoutExpired:
+        _report_mcp_uncertain(kunluncode, backup, "KunlunCode MCP removal timed out", None)
+    except OSError:
+        _report_mcp_uncertain(kunluncode, backup, "KunlunCode MCP removal could not start", None)
+    if removed.returncode != 0:
+        _report_mcp_uncertain(kunluncode, backup, "KunlunCode MCP removal failed", None)
+
+
+def _register_mcp_server(kunluncode: str, python: str, backup: _McpBackup | None) -> None:
+    current = _checked_mcp_server(kunluncode, backup, "KunlunCode MCP registration precheck failed")
+    if current is not None:
+        raise RuntimeError(f"KunlunCode MCP entry appeared before registration{_backup_hint(backup)}; inspect before retrying")
+    try:
+        added = _run(_mcp_add_command(kunluncode, name=MCP_SERVER_NAME, command=python, args=[str(MCP_SCRIPT)]))
+    except subprocess.TimeoutExpired:
+        _report_mcp_uncertain(kunluncode, backup, "KunlunCode MCP registration timed out", python)
+    except OSError:
+        _report_mcp_uncertain(kunluncode, backup, "KunlunCode MCP registration could not start", python)
+    if added.returncode != 0:
+        _recover_mcp_failure(kunluncode, backup, "KunlunCode MCP registration failed: " + (added.stdout + added.stderr)[-800:], python)
+    current = _checked_mcp_server(kunluncode, backup, "KunlunCode MCP registration completed")
+    if current != _requested_mcp_server(python):
+        raise RuntimeError(f"KunlunCode MCP registration did not match readback{_backup_hint(backup)}")
+    _discard_mcp_backup(backup)
 
 
 def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
@@ -208,14 +406,7 @@ def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
             f"{selected_python} must import LoopX and {MCP_REQUIREMENT}; "
             "use uv to sync the adapter environment"
         )
-    existing = next(
-        (
-            item
-            for item in _configured_mcp_servers(kunluncode)
-            if item.get("name") == MCP_SERVER_NAME
-        ),
-        None,
-    )
+    existing = _named_mcp_server(kunluncode)
     if existing and not _is_managed_server(existing) and not replace:
         raise RuntimeError(
             f"KunlunCode MCP server {MCP_SERVER_NAME!r} is user-owned; pass --replace to replace it"
@@ -230,34 +421,11 @@ def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
         )
     if dry_run:
         return selected_python
+    backup = None
     if existing:
-        removed = _run([kunluncode, "mcp", "remove", MCP_SERVER_NAME])
-        if removed.returncode != 0:
-            raise RuntimeError("failed to remove prior managed KunlunCode MCP entry")
-    added = _run(
-        _mcp_add_command(
-            kunluncode,
-            name=MCP_SERVER_NAME,
-            command=selected_python,
-            args=[str(MCP_SCRIPT)],
-        )
-    )
-    if added.returncode != 0:
-        if restore_command is not None:
-            restored = _run(restore_command)
-            if restored.returncode == 0:
-                raise RuntimeError(
-                    "KunlunCode MCP registration failed; the previous entry was restored: "
-                    + (added.stdout + added.stderr)[-800:]
-                )
-            raise RuntimeError(
-                "KunlunCode MCP registration failed and automatic restoration of the previous "
-                "entry also failed; inspect `kunluncode config get mcp_servers` before retrying"
-            )
-        raise RuntimeError(
-            "KunlunCode MCP registration failed: "
-            + (added.stdout + added.stderr)[-800:]
-        )
+        backup = _prepare_mcp_backup(kunluncode, existing)
+        _remove_mcp_for_replacement(kunluncode, backup)
+    _register_mcp_server(kunluncode, selected_python, backup)
     return selected_python
 
 
@@ -265,14 +433,7 @@ def uninstall_mcp(*, dry_run: bool) -> bool:
     kunluncode = shutil.which("kunluncode")
     if not kunluncode:
         raise RuntimeError("kunluncode is not on PATH")
-    existing = next(
-        (
-            item
-            for item in _configured_mcp_servers(kunluncode)
-            if item.get("name") == MCP_SERVER_NAME
-        ),
-        None,
-    )
+    existing = _named_mcp_server(kunluncode)
     if existing is None:
         return False
     if not _is_managed_server(existing):

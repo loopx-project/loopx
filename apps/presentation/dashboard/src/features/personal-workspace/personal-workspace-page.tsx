@@ -1061,7 +1061,7 @@ export function PersonalWorkspacePage({
   }
   const conversationKey = workspaceConversations?.managed ? conversationContextKey({kind: "managed", ...workspaceConversations.managed.target}) : originalConversation ? conversationContextKey({ kind: "bound", ...originalConversation.target }) : selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
-    : selectedGoalId ?? "manager";
+    : conversationContextKey(selectedGoalId != null ? {kind: "goal", goalId: selectedGoalId} : {kind: "manager"});
   const composerDraftKey = conversationInputKey(conversationKey, selectedAgentId, managedWorkActive || Boolean(originalConversation));
   const [modelSettingsSaving, setModelSettingsSaving] = useState<Record<string, boolean>>({});
   async function saveModelSettings(change: () => void | Promise<void>) {
@@ -1436,7 +1436,6 @@ export function PersonalWorkspacePage({
   // Draft edits do not change history. A retained history action still calls
   // the latest committed handler in its own conversation.
   const currentTimelineActions = useRef<typeof nextTimelineActions>(null);
-  const timelineActionTarget = agentWorkActive ? conversationKey : selectedGoal?.goalId ?? conversationKey;
   const canCancelTimelineTurn = !readOnly && Boolean(callbacks.onCancelConversationPreparation);
   const canInterruptTimelineTurn = !readOnly && Boolean(callbacks.onInterruptConversationTurn);
   const goalDraftTargetChanged = t("actionReview.targetChanged");
@@ -1447,8 +1446,8 @@ export function PersonalWorkspacePage({
     apply: readOnly ? undefined : confirmGoalDraft,
     suggest: readOnly ? undefined : suggestReply,
     adjust: focusTurnComposer,
-    cancel: canCancelTimelineTurn ? () => callbacks.onCancelConversationPreparation?.(timelineActionTarget) : undefined,
-    interrupt: canInterruptTimelineTurn ? (turnId: string) => callbacks.onInterruptConversationTurn?.(timelineActionTarget, turnId) : undefined,
+    cancel: canCancelTimelineTurn ? () => callbacks.onCancelConversationPreparation?.(conversationKey) : undefined,
+    interrupt: canInterruptTimelineTurn ? (turnId: string) => callbacks.onInterruptConversationTurn?.(conversationKey, turnId) : undefined,
     openEvidence: (goalId: string) => { selectGoal(goalId, "chat"); },
   };
   useLayoutEffect(() => { currentTimelineActions.current = nextTimelineActions; });
