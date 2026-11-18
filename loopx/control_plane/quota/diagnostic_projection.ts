@@ -173,6 +173,31 @@ const DIAGNOSTIC_LANES = new Set([
   "other_agent_bound_user_action_items",
 ]);
 
+/** A task view can imply the emptiness of known diagnostic lanes. Preserve all
+ * counts, rows, references and upstream truncation evidence in their own fields. */
+export function omitEmptyTaskTodoLanes(payload: JsonObject): JsonObject {
+  const result = {...payload};
+  for (const root of ["agent_todo_summary", "user_todo_summary"]) {
+    const summary = jsonObject(payload[root]);
+    if (summary?.schema_version !== "todo_summary_v0") continue;
+    const compaction = jsonObject(summary.payload_compaction);
+    const compactedLanes = jsonObject(compaction?.compacted_lanes);
+    if (Object.hasOwn(summary, "payload_compaction") &&
+        (compaction?.schema_version !== "quota_todo_summary_payload_compaction_v0" || !compactedLanes)) continue;
+    const references = new Set(Object.values(summary));
+    const visible = {...summary};
+    for (const lane of DIAGNOSTIC_LANES) {
+      const rows = summary[lane];
+      if (Array.isArray(rows) && rows.length === 0 && !Object.hasOwn(compactedLanes ?? {}, lane) &&
+          !references.has(`$.${root}.${lane}`)) {
+        delete visible[lane];
+      }
+    }
+    result[root] = visible;
+  }
+  return result;
+}
+
 /** Complete contracts keep one literal copy of equal summary lanes. A reference
  * names an array in this same signed document, never a fresh Todo read. Only
  * registered lanes participate; counts, candidate collections and unknown fields

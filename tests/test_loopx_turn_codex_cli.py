@@ -138,6 +138,8 @@ import time
 
 args = sys.argv[1:]
 prompt = sys.stdin.read()
+if os.environ.get("FAKE_CODEX_PROMPT_CAPTURE"):
+    pathlib.Path(os.environ["FAKE_CODEX_PROMPT_CAPTURE"]).write_text(prompt, encoding="utf-8")
 log = pathlib.Path(os.environ["FAKE_CODEX_LOG"])
 with log.open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(args) + "\\n")

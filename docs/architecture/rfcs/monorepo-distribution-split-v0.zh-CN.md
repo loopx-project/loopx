@@ -289,6 +289,10 @@ Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟
 authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/租约决策。
 
+普通任务获准执行后，内置 Worker 视图省去已知为空的 Todo 摘要列表。所选任务、
+非空列表、计数、引用与来源截断信息继续可见。签名来源和原有读取入口保留完整摘要，
+供恢复与诊断使用。
+
 ### 受治理生命周期与外部副作用
 
 通过统一工作契约使用既有 Goal/Agent/work/Turn 身份、revision、lease、effect id 与 receipt。
