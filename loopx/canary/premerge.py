@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from ..contract import scan_public_boundary
 from .planner import REPO_ROOT, resolve_canary_catalog_path
-from .runner import build_canary_smoke_suite_run, check_output_tail
+from .runner import MAINTAINABILITY_RATCHET_SCRIPT, build_canary_smoke_suite_run, check_output_tail
 
 
 PREMERGE_GATE_SCHEMA_VERSION = "loopx_premerge_validation_gate_v0"
@@ -94,11 +94,6 @@ CHANGE_QUALITY_TOKENS = (
     "tests/capabilities/test_change_quality.py",
     "examples/change-quality-qualification-smoke.py",
 )
-INHERITED_BASELINE_COMMANDS = (
-    "control-plane-maintainability-ratchet-smoke.py",
-)
-
-
 def _synthetic_smoke_suite_run(
     *,
     suite: str,
@@ -834,7 +829,7 @@ def downgrade_inherited_baseline_failures(
     *,
     changed_files: list[str],
 ) -> dict[str, Any] | None:
-    """Apply the baseline exception to finished failures with diagnostic output."""
+    """Apply the baseline exception only to attributable findings in a completed report."""
 
     if not isinstance(run, dict):
         return run
@@ -849,18 +844,19 @@ def downgrade_inherited_baseline_failures(
     for check in run.get("selected_checks", []):
         if not isinstance(check, dict) or check.get("ok") or check.get("status") != "failed":
             continue
-        # The maintainability ratchet exits 1 when its report contains findings.
-        # Partial output from an interrupted or invalid invocation cannot qualify.
-        if check.get("returncode") != 1:
+        if check.get("returncode") != 1 or check.get("tracked_side_effects"):
             continue
-        command = str(check.get("command") or "")
-        if not any(token in command for token in INHERITED_BASELINE_COMMANDS):
+        normalized = check.get("normalized")
+        if not isinstance(normalized, dict) or normalized.get("script") != MAINTAINABILITY_RATCHET_SCRIPT:
             continue
-        evidence = "\n".join(
-            str(check.get(key) or "")
-            for key in ("stdout_tail", "stderr_tail")
-        )
-        if not evidence.strip() or any(needle and needle in evidence for needle in changed_mentions):
+        # The runner derives these paths from the complete JSON report before
+        # clipping display output. A traceback or incomplete report has none.
+        paths = check.get("maintainability_failure_paths")
+        if not isinstance(paths, list) or not paths or not all(isinstance(path, str) and path.strip() for path in paths):
+            continue
+        finding_paths = {_norm_path(path) for path in paths}
+        finding_mentions = finding_paths | {Path(path).name for path in finding_paths if Path(path).suffix}
+        if not changed_mentions.isdisjoint(finding_mentions):
             continue
         check.update(
             {
@@ -868,7 +864,7 @@ def downgrade_inherited_baseline_failures(
                 "status": "advisory_inherited_failure",
                 "inherited_baseline_failure": True,
                 "advisory_reason": (
-                    "known baseline smoke failure did not mention changed files; "
+                    "completed maintainability findings did not involve changed files; "
                     "record it in the PR comment but do not block this diff"
                 ),
             }

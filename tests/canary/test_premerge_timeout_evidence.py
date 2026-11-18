@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from loopx.canary.premerge import _run_gate_check, downgrade_inherited_baseline_failures
+from loopx.canary.planner import REPO_ROOT
+from loopx.canary.premerge import _gate_status, _run_gate_check, downgrade_inherited_baseline_failures
 from loopx.canary.runner import run_canary_smoke_check
 
 
@@ -70,3 +72,45 @@ def test_incomplete_ratchet_stays_failed(status: str, diagnostic: str) -> None:
     assert result["ok"] is False
     assert result["failure_count"] == 1
     assert result["selected_checks"][0]["status"] == status
+
+
+
+def test_premerge_rejects_ratchet_config_error_before_report(tmp_path: Path) -> None:
+    relative_script = Path("examples/control_plane/control-plane-maintainability-ratchet-smoke.py")
+    script = tmp_path / relative_script
+    script.parent.mkdir(parents=True)
+    bad_baseline = tmp_path / "broken-baseline.json"
+    bad_baseline.write_text("{", encoding="utf-8")
+    script.write_text(
+        "import runpy\n"
+        "from pathlib import Path\n"
+        "from loopx.canary import maintainability_ratchet\n"
+        f"maintainability_ratchet.MODULE_METRIC_BASELINE_PATH = Path({str(bad_baseline)!r})\n"
+        f"runpy.run_path({str(REPO_ROOT / relative_script)!r}, run_name='__main__')\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    result = run_canary_smoke_check(
+        {"command": f"python3 {relative_script.as_posix()}"},
+        repo_root=tmp_path,
+    )
+    assert result["returncode"] == 1
+    assert "JSONDecodeError" in result["stderr_tail"]
+
+    changed_files = ["loopx/canary/premerge.py"]
+    run = downgrade_inherited_baseline_failures(
+        {"ok": False, "failure_count": 1, "selected_checks": [result]},
+        changed_files=changed_files,
+    )
+    assert run is not None
+    gate = _gate_status(
+        execute=True,
+        changed_files=changed_files,
+        direct_checks=[],
+        catalog_run=run,
+        risk_profile_run=None,
+        boundary_run=None,
+        manual_holds=[],
+    )
+    assert gate["merge_gate_passed"] is False
+    assert result["status"] == "failed"

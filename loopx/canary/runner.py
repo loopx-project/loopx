@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -37,8 +38,9 @@ EXPLICIT_GROUPED_SMOKES = {
     "canary-promotion-readiness-smoke.py",
     "dashboard-demo-readiness-smoke.py",
 }
+MAINTAINABILITY_RATCHET_SCRIPT = "examples/control_plane/control-plane-maintainability-ratchet-smoke.py"
 GIT_REQUIRED_SCRIPTS = {
-    "control-plane-maintainability-ratchet-smoke.py": (
+    Path(MAINTAINABILITY_RATCHET_SCRIPT).name: (
         "requires git ls-files so untracked local artifacts do not enter the report"
     ),
     "repository-hygiene-smoke.py": (
@@ -146,6 +148,9 @@ def normalize_canary_command(command: str, repo_root: Path | None = None) -> dic
         for arg in NO_WRITE_ARGS_BY_SCRIPT.get(script.name, [])
         if arg not in argv
     ]
+    relative_script = script.relative_to(repo_root).as_posix()
+    if relative_script == MAINTAINABILITY_RATCHET_SCRIPT and len(parts) == 2:
+        injected_args.append("--format=json")
     if injected_args:
         argv.extend(injected_args)
     return {
@@ -154,7 +159,7 @@ def normalize_canary_command(command: str, repo_root: Path | None = None) -> dic
         "argv": argv,
         "display_argv": _display_argv(argv, repo_root=repo_root),
         "injected_args": injected_args,
-        "script": script.relative_to(repo_root).as_posix(),
+        "script": relative_script,
     }
 
 
@@ -397,6 +402,33 @@ def check_output_tail(output: str | bytes | None) -> str:
     return (output or "")[-limit:]
 
 
+def _record_maintainability_report(
+    result: dict[str, Any], stdout: str, *, completed_failure: bool,
+) -> None:
+    from .maintainability_ratchet import (
+        MAINTAINABILITY_REPORT_SCHEMA_VERSION,
+        completed_maintainability_failure_paths,
+        render_control_plane_maintainability_report,
+    )
+
+    try:
+        report = json.loads(stdout)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(report, dict) or report.get("schema_version") != MAINTAINABILITY_REPORT_SCHEMA_VERSION:
+        return
+
+    if "--format=json" in result["normalized"]["injected_args"]:
+        try:
+            result["stdout_tail"] = check_output_tail(render_control_plane_maintainability_report(report))
+        except (AttributeError, TypeError, ValueError):
+            return
+    if completed_failure:
+        paths = completed_maintainability_failure_paths(report)
+        if paths:
+            result["maintainability_failure_paths"] = paths
+
+
 def _run_check(
     check: dict[str, Any],
     *,
@@ -409,6 +441,7 @@ def _run_check(
     repo_root = (repo_root or REPO_ROOT).resolve()
     normalized = normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)
     result = {**check, "normalized": normalized}
+    result.pop("maintainability_failure_paths", None)
     if check_index is not None and check_count is not None:
         result.update({"check_index": check_index, "check_count": check_count})
     if not normalized.get("ok"):
@@ -498,6 +531,13 @@ def _run_check(
     )
     if cleanup_error:
         result["reason"] = cleanup_error
+    if (
+        normalized["script"] == MAINTAINABILITY_RATCHET_SCRIPT
+        and normalized["argv"][2:] in (["--format=json"], ["--format", "json"])
+    ):
+        _record_maintainability_report(
+            result, completed.stdout, completed_failure=completed.returncode == 1 and not cleanup_error
+        )
     return result
 
 

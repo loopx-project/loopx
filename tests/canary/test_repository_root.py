@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from loopx.canary.maintainability_ratchet import MAINTAINABILITY_REPORT_SCHEMA_VERSION
 from loopx.canary.planner import DEFAULT_CATALOG_PATH
 from loopx.canary.premerge import build_premerge_validation_gate
 from loopx.canary.runner import build_canary_smoke_suite_run, normalize_canary_command
@@ -294,27 +295,55 @@ def test_premerge_scopes_cli_budget_base_to_its_child(tmp_path, base_args, expec
 
 
 @pytest.mark.parametrize(
-    ("exit_statement", "diagnostic", "returncode", "advisory"),
+    ("exit_statement", "diagnostic", "findings", "returncode", "advisory"),
     [
         pytest.param(
-            "os.kill(os.getpid(), signal.SIGTERM)", "Scanning started", -signal.SIGTERM, False,
+            "os.kill(os.getpid(), signal.SIGTERM)", "Scanning started", (), -signal.SIGTERM, False,
             marks=pytest.mark.skipif(os.name != "posix", reason="POSIX signal return code"),
             id="signal",
         ),
-        pytest.param("raise SystemExit(2)", "Invalid invocation", 2, False, id="invalid-invocation"),
-        pytest.param("raise SystemExit(1)", "path=loopx/unrelated.py", 1, True, id="unrelated-diagnostic"),
+        pytest.param("raise SystemExit(2)", "Invalid invocation", (), 2, False, id="invalid-invocation"),
+        pytest.param("raise SystemExit(1)", "Scanning started", (), 1, False, id="partial-output"),
         pytest.param(
-            "raise SystemExit(1)", "path=loopx/control_plane/testing/cli_output_budget.py", 1, False,
-            id="changed-path-diagnostic",
+            "raise SystemExit(1)", "path=loopx/unrelated.py", ("loopx/unrelated.py",), 1, True,
+            id="unrelated-report",
+        ),
+        pytest.param(
+            "raise SystemExit(1)", "path=loopx/control_plane/testing/cli_output_budget.py",
+            ("loopx/control_plane/testing/cli_output_budget.py",), 1, False, id="changed-path-report",
+        ),
+        pytest.param(
+            "raise SystemExit(1)", "path=loopx/fixture_19.py",
+            ("loopx/control_plane/testing/cli_output_budget.py", *(
+                f"loopx/fixture_{index}.py" for index in range(20)
+            )), 1, False, id="changed-path-outside-output-tail",
         ),
     ],
 )
 def test_premerge_ratchet_advisory_requires_completed_unrelated_failure(
-    tmp_path: Path, exit_statement: str, diagnostic: str, returncode: int, advisory: bool,
+    tmp_path: Path,
+    exit_statement: str,
+    diagnostic: str,
+    findings: tuple[str, ...],
+    returncode: int,
+    advisory: bool,
 ) -> None:
+    output = diagnostic
+    if findings:
+        output = json.dumps({
+            "schema_version": MAINTAINABILITY_REPORT_SCHEMA_VERSION,
+            "ok": False,
+            "unreviewed_count": len(findings),
+            "unreviewed_findings": [{"id": f"fixture-{index}", "path": path}
+                                    for index, path in enumerate(findings)],
+            "magnitude_regression_count": 0,
+            "magnitude_regressions": [],
+            "invalid_exceptions": [],
+            "stale_exceptions": [],
+        })
     repo = _cli_budget_checkout(
         tmp_path / "repo",
-        ratchet_source=f"import os, signal\nprint({diagnostic!r}, flush=True)\n{exit_statement}\n",
+        ratchet_source=f"import os, signal\nprint({output!r}, flush=True)\n{exit_statement}\n",
     )
     response = run_source_cli(
         ["--format", "json", "canary", "premerge", "--from-git-diff", "--tier", "quick",
@@ -326,6 +355,8 @@ def test_premerge_ratchet_advisory_requires_completed_unrelated_failure(
     ratchet = _check_for_script(payload["catalog_run"], _RATCHET_SCRIPT)
     assert ratchet["returncode"] == returncode
     assert diagnostic in ratchet["stdout_tail"]
+    if len(findings) > 1:
+        assert findings[0] not in ratchet["stdout_tail"]
     assert payload["gate"]["merge_gate_passed"] is advisory
     assert (response.returncode == 0) is advisory
     assert ratchet["status"] == ("advisory_inherited_failure" if advisory else "failed")
