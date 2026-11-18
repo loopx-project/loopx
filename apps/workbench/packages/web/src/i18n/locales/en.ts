@@ -2893,6 +2893,8 @@ export const en: Messages = {
   'loopx.stewardSteps': 'What the steward is doing',
   'loopx.stopping': 'Stopping…',
   'loopx.queueFull': 'The queue is full; this message was not sent.',
+  'loopx.stewardExecutableNotFound': (agent: string, cmd: string) => `The steward's current Agent ${agent} (${cmd}) was not found on this machine. Install it and retry, or switch to an available Agent.`,
+  'loopx.stewardSwitchAgent': (agent: string) => `Use ${agent}`,
   'loopx.stewardBrief': 'Brief',
   'loopx.running': 'Running',
   'loopx.runningEmpty': 'No running goals.',

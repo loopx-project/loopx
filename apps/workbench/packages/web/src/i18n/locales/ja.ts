@@ -2889,6 +2889,8 @@ export const ja: Messages = {
   'loopx.stewardSteps': '執事の作業',
   'loopx.stopping': '停止しています…',
   'loopx.queueFull': 'キューがいっぱいで、このメッセージは送られませんでした。',
+  'loopx.stewardExecutableNotFound': (agent: string, cmd: string) => `このマシンで管家が使っている ${agent}（${cmd}）が見つかりません。インストールして再試行するか、利用可能な Agent に切り替えてください。`,
+  'loopx.stewardSwitchAgent': (agent: string) => `${agent} を使う`,
   'loopx.stewardBrief': 'ブリーフ',
   'loopx.running': '実行中',
   'loopx.runningEmpty': '実行中の Goal はありません。',

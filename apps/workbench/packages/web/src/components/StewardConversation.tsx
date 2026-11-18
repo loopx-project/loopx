@@ -6,8 +6,9 @@ import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
 import { IconSend, IconStop } from './icons';
 import {
-  applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerHistory, sendManagerTurn, streamManagerEvents,
-  ManagerError, type ManagerEvent, type ManagerMessage, type ManagerTurn,
+  applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerCapabilities, readManagerHistory,
+  sendManagerTurn, streamManagerEvents, switchManagerAgent,
+  ManagerError, type ManagerCapabilities, type ManagerEvent, type ManagerMessage, type ManagerTurn,
 } from '../loopx/manager';
 import type { LoopxStatusFailure } from '../loopx/status';
 
@@ -28,9 +29,12 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ManagerMessage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<ManagerCapabilities | null>(null);
+  const [switchingAgent, setSwitchingAgent] = useState<string | null>(null);
   const [turn, setTurn] = useState<ManagerTurn | null>(null);
   const [draft, setDraft] = useState('');
   const sessionRef = useRef<string | null>(null);
+  const selectedAgentRef = useRef<string | undefined>(undefined);
   const turnRef = useRef<ManagerTurn | null>(null);
   const attemptRef = useRef(0);
   const cursorRef = useRef<string>('');
@@ -44,6 +48,19 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   const busy = turn?.state === 'sending' || turn?.state === 'streaming' || turn?.state === 'stopping';
   const stoppable = turn?.state === 'streaming' || turn?.state === 'stopping';
 
+  const recordOpenFailure = (cause: unknown, signal?: AbortSignal) => {
+    setError(managerErrorText(cause, null));
+    setCapabilities(null);
+    if (cause instanceof ManagerError && (cause.code === 'agent_endpoint_unavailable' || cause.code === 'manager_runtime_endpoint_unsupported')) {
+      const failedAgent = parseUnavailableEndpoint(cause)?.agentId ?? null;
+      void readManagerCapabilities(token, failedAgent, signal).then(caps => {
+        if (signal?.aborted || !caps) return;
+        setCapabilities(caps);
+        setError(managerErrorText(cause, caps));
+      });
+    }
+  };
+
   const openedFor = useRef<string | undefined | null>(null);
   const coreDown = failure !== null;
   useEffect(() => {
@@ -55,12 +72,14 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       sendAbort.current?.abort();
       streamAbort.current?.abort();
       sessionRef.current = null;
+      selectedAgentRef.current = undefined;
       showTurn(null);
     }
     let alive = true;
     const controller = new AbortController();
     setError(null);
-    openManagerSession(token, controller.signal)
+    setCapabilities(null);
+    openManagerSession(token, controller.signal, selectedAgentRef.current)
       .then(({ sessionId: id, messages: history }) => {
         if (!alive) return;
         sessionRef.current = id;
@@ -70,7 +89,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       })
       .catch(cause => {
         if (!alive || controller.signal.aborted) return;
-        setError(managerErrorText(cause));
+        recordOpenFailure(cause, controller.signal);
       });
     return () => { alive = false; controller.abort(); };
     // A core outage after the session opened surfaces in the send path.
@@ -204,12 +223,33 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     </div>;
   }
   if (error && !sessionId) {
+    const alternatives = capabilities?.availableAlternatives ?? [];
     return <div className="steward-chat-failure">
       <p role="alert">{error}</p>
-      <button type="button" onClick={() => {
-        setError(null); setMessages(null);
-        openManagerSession(token).then(({ sessionId: id, messages: history }) => { sessionRef.current = id; setSessionId(id); setMessages(history); }).catch(cause => setError(managerErrorText(cause)));
-      }}>{t('common.retry')}</button>
+      <div className="steward-chat-failure-actions">
+        <button type="button" disabled={switchingAgent !== null} onClick={() => {
+          setError(null); setMessages(null); setCapabilities(null);
+          openManagerSession(token, undefined, selectedAgentRef.current)
+            .then(({ sessionId: id, messages: history }) => { sessionRef.current = id; openedFor.current = token; setSessionId(id); setMessages(history); })
+            .catch(cause => recordOpenFailure(cause));
+        }}>{t('common.retry')}</button>
+        {alternatives.map(alt => (
+          <button key={alt.agentId} type="button" disabled={switchingAgent !== null} onClick={() => {
+            setSwitchingAgent(alt.agentId); setError(null); setMessages(null);
+            switchManagerAgent(token, alt.agentId, capabilities)
+              .then(({ sessionId: id, messages: history }) => {
+                selectedAgentRef.current = alt.agentId;
+                sessionRef.current = id;
+                openedFor.current = token;
+                setCapabilities(null);
+                setSessionId(id);
+                setMessages(history);
+              })
+              .catch(cause => recordOpenFailure(cause))
+              .finally(() => setSwitchingAgent(null));
+          }}>{t('loopx.stewardSwitchAgent', alt.displayName)}</button>
+        ))}
+      </div>
     </div>;
   }
 
@@ -270,10 +310,31 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   </div>;
 }
 
-function managerErrorText(cause: unknown): string {
+function parseUnavailableEndpoint(cause: ManagerError): { agentId: string; reason: string } | null {
+  const match = /^The Agent endpoint '([^']+)' cannot serve this request:\s*([a-z0-9_]+)\.?$/i.exec(cause.message.trim());
+  return match ? { agentId: match[1], reason: match[2] } : null;
+}
+
+function defaultAgentLabel(agentId: string): string {
+  if (agentId === 'codex') return 'Codex';
+  if (agentId === 'claude-code') return 'Claude Code';
+  if (agentId === 'kiro-cli') return 'Kiro CLI';
+  return agentId;
+}
+
+function managerErrorText(cause: unknown, capabilities: ManagerCapabilities | null = null): string {
   if (cause instanceof ManagerError) {
     if (cause.status === 502 || cause.body.error === 'loopx_core_unavailable') return t('loopx.coreDown');
     if (cause.code === 'session_queue_full') return t('loopx.queueFull');
+    if (cause.code === 'agent_endpoint_unavailable') {
+      const parsed = parseUnavailableEndpoint(cause);
+      if (parsed && parsed.reason === 'executable_not_found') {
+        const adapter = capabilities?.adapters.find(a => a.agentId === parsed.agentId);
+        const label = adapter?.displayName ?? defaultAgentLabel(parsed.agentId);
+        const cmd = adapter?.executable ?? parsed.agentId;
+        return t('loopx.stewardExecutableNotFound', label, cmd);
+      }
+    }
     return cause.message;
   }
   return cause instanceof Error ? cause.message : String(cause);

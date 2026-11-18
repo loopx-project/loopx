@@ -12,6 +12,7 @@ import time
 from urllib.parse import quote
 import webbrowser
 
+from .cli_commands.support_control_agent_runtime import ensure_agent_runtime_path
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .release_manifest import release_runtime_identity
 
@@ -223,6 +224,7 @@ def launch_dashboard(
     prefer_dev: bool = False,
     enable_goal_subagent_configuration: bool = False,
 ) -> int:
+    ensure_agent_runtime_path()
     release_root = dashboard_release_root()
     dev_launcher = release_root / "scripts" / "dashboard-dev.sh"
     if (prefer_dev or os.environ.get("LOOPX_DASHBOARD_DEV") == "1") and dev_launcher.is_file():

@@ -40,6 +40,27 @@ export class ManagerError extends Error {
   }
 }
 
+export interface ManagerAdapter {
+  agentId: string;
+  displayName: string;
+  available: boolean;
+  unavailableReason: string | null;
+  executable: string | null;
+}
+
+export interface ManagerCapabilities {
+  selectedAgentId: string | null;
+  runtimeProfile: 'trusted_owner' | 'restricted' | null;
+  selectionPolicy: 'preferred' | 'pinned' | 'flexible' | null;
+  eligibleEndpoints: string[];
+  adapters: ManagerAdapter[];
+  /** Available adapters the person can switch the steward to under the current policy. */
+  availableAlternatives: ManagerAdapter[];
+}
+
+const TRUSTED_OWNER_ENDPOINTS = new Set(['codex', 'antigravity']);
+const STEWARD_DEFAULT_ENDPOINTS = new Set(['codex', 'antigravity', 'dsh']);
+
 async function call<T>(token: string | undefined, path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -54,12 +75,89 @@ async function call<T>(token: string | undefined, path: string, init: RequestIni
 }
 
 /** Resume (or create) the person's manager session. Idempotent on the core. */
-export async function openManagerSession(token: string | undefined, signal?: AbortSignal): Promise<{ sessionId: string; messages: ManagerMessage[] }> {
+export async function openManagerSession(token: string | undefined, signal?: AbortSignal, agentId?: string): Promise<{ sessionId: string; messages: ManagerMessage[] }> {
   const created = await call<{ session_id: string }>(token, '/api/loopx/api/chat/sessions', {
-    method: 'POST', body: JSON.stringify({ context_kind: 'manager' }), signal,
+    method: 'POST', body: JSON.stringify({ context_kind: 'manager', ...(agentId ? { agent_id: agentId } : {}) }), signal,
   });
   if (!created.session_id) throw new ManagerError(502, 'bad_session_answer', 'the core did not name the manager session');
   return { sessionId: created.session_id, messages: await readManagerHistory(token, created.session_id, signal) };
+}
+
+/** Read the core's adapter readiness and steward channel policy when opening the steward fails. */
+export async function readManagerCapabilities(token: string | undefined, failedAgentId?: string | null, signal?: AbortSignal): Promise<ManagerCapabilities | null> {
+  try {
+    const raw = await call<Record<string, unknown>>(token, '/api/loopx/api/chat/capabilities', { signal });
+    const manager = typeof raw.manager === 'object' && raw.manager !== null ? raw.manager as Record<string, unknown> : {};
+    const runtime = typeof manager.runtime === 'object' && manager.runtime !== null ? manager.runtime as Record<string, unknown> : {};
+    const binding = typeof manager.channel_binding === 'object' && manager.channel_binding !== null ? manager.channel_binding as Record<string, unknown> : {};
+    const runtimeProfile = runtime.runtime_profile === 'trusted_owner' || runtime.runtime_profile === 'restricted' ? runtime.runtime_profile : null;
+    const selectionPolicy = binding.selection_policy === 'preferred' || binding.selection_policy === 'pinned' || binding.selection_policy === 'flexible'
+      ? binding.selection_policy : null;
+    const selectedAgentId = typeof binding.executor_endpoint === 'string' && binding.executor_endpoint ? binding.executor_endpoint : (failedAgentId ?? null);
+    const eligibleEndpoints = Array.isArray(binding.eligible_endpoints)
+      ? binding.eligible_endpoints.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
+    const adapters: ManagerAdapter[] = [];
+    for (const item of Array.isArray(raw.adapters) ? raw.adapters : []) {
+      if (typeof item !== 'object' || item === null) continue;
+      const row = item as Record<string, unknown>;
+      const agentId = typeof row.agent_id === 'string' ? row.agent_id : '';
+      if (!agentId) continue;
+      adapters.push({
+        agentId,
+        displayName: typeof row.display_name === 'string' && row.display_name ? row.display_name : agentId,
+        available: row.available === true,
+        unavailableReason: typeof row.unavailable_reason === 'string' ? row.unavailable_reason : null,
+        executable: typeof row.executable === 'string' ? row.executable : null,
+      });
+    }
+    const excluded = failedAgentId ?? selectedAgentId;
+    const availableAlternatives = selectionPolicy === 'pinned'
+      ? []
+      : adapters.filter(a => a.available && a.agentId !== excluded && (selectionPolicy !== 'flexible' || eligibleEndpoints.includes(a.agentId)));
+    return { selectedAgentId, runtimeProfile, selectionPolicy, eligibleEndpoints, adapters, availableAlternatives };
+  } catch {
+    return null;
+  }
+}
+
+async function applyMachineNamespace(token: string | undefined, namespace: string, namespaceConfiguration: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+  const preview = await call<{ plan_revision?: unknown }>(token, '/api/loopx/api/chat/machine-configuration/preview', {
+    method: 'POST',
+    body: JSON.stringify({ namespace, operation: 'upsert', namespace_configuration: namespaceConfiguration }),
+    signal,
+  });
+  const revision = typeof preview.plan_revision === 'string' ? preview.plan_revision : '';
+  if (!revision) return;
+  await call(token, '/api/loopx/api/chat/machine-configuration/apply', {
+    method: 'POST',
+    body: JSON.stringify({ namespace, operation: 'upsert', namespace_configuration: namespaceConfiguration, expected_plan_revision: revision }),
+    signal,
+  });
+}
+
+/** Switch the steward to an available Agent and open its session. */
+export async function switchManagerAgent(
+  token: string | undefined,
+  agentId: string,
+  capabilities?: ManagerCapabilities | null,
+  signal?: AbortSignal,
+): Promise<{ sessionId: string; messages: ManagerMessage[] }> {
+  // Read-only adapters (Claude Code, Kiro CLI, DSH, API endpoints) require the restricted manager runtime profile.
+  if (!TRUSTED_OWNER_ENDPOINTS.has(agentId) && capabilities?.runtimeProfile === 'trusted_owner') {
+    await applyMachineNamespace(token, 'manager_runtime', {
+      schema_version: 'manager_runtime_profile_v0',
+      runtime_profile: 'restricted',
+    }, signal);
+  }
+  if (STEWARD_DEFAULT_ENDPOINTS.has(agentId) && capabilities?.selectionPolicy !== 'pinned' && capabilities?.selectionPolicy !== 'flexible') {
+    await applyMachineNamespace(token, 'steward_executor', {
+      schema_version: 'steward_executor_machine_defaults_v1',
+      selection_policy: 'preferred',
+      executor_endpoint: agentId,
+      eligible_endpoints: [],
+    }, signal).catch(() => undefined);
+  }
+  return openManagerSession(token, signal, agentId);
 }
 
 /** The stored conversation, oldest first, ready to render before any new turn runs. */

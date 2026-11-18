@@ -134,3 +134,79 @@ test('a pending turn submission holds synchronous ownership and late acceptance 
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
   }
 });
+
+test('when the steward default endpoint is missing, the failure view offers available agents and switches on click', async () => {
+  const originalFetch = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  let renderer: ReactTestRenderer | undefined;
+  const sessionBodies: Array<Record<string, unknown>> = [];
+  const configCalls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    if (path.endsWith('/api/chat/sessions')) {
+      sessionBodies.push(body);
+      if (!body.agent_id) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "The Agent endpoint 'codex' cannot serve this request: executable_not_found.",
+          error_code: 'agent_endpoint_unavailable',
+        }), { status: 424 });
+      }
+      return json({ session_id: 'session-claude' });
+    }
+    if (path.endsWith('/api/chat/capabilities')) {
+      return json({
+        ok: true,
+        manager: {
+          runtime: { runtime_profile: 'trusted_owner' },
+          channel_binding: { executor_endpoint: 'codex', selection_policy: 'preferred', eligible_endpoints: [] },
+        },
+        adapters: [
+          { agent_id: 'codex', display_name: 'Codex', available: false, unavailable_reason: 'executable_not_found', executable: 'codex' },
+          { agent_id: 'claude-code', display_name: 'Claude Code', available: true, executable: 'claude' },
+        ],
+      });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/preview')) {
+      configCalls.push({ path, body });
+      return json({ ok: true, plan_revision: 'sha256:plan1' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/apply')) {
+      configCalls.push({ path, body });
+      return json({ ok: true });
+    }
+    if (path.endsWith('/sessions/session-claude')) return json({ messages: [] });
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    await act(async () => {
+      renderer = create(createElement(StewardConversation, { token: 'token-1', failure: null }), { createNodeMock: () => ({ scrollIntoView() {} }) });
+      await tick();
+      await tick();
+    });
+    const buttons = renderer!.root.findAllByType('button');
+    assert.equal(buttons.length, 2, 'renders Retry and Use Claude Code');
+    assert.match(JSON.stringify(renderer!.toJSON()), /Codex/);
+    assert.match(JSON.stringify(renderer!.toJSON()), /Claude Code/);
+
+    await act(async () => {
+      buttons[1].props.onClick();
+      await tick();
+      await tick();
+    });
+    assert.equal(configCalls.length, 2, 'Restricts manager_runtime before opening a read-only steward adapter');
+    assert.equal(configCalls[0].body.namespace, 'manager_runtime');
+    assert.deepEqual(sessionBodies, [
+      { context_kind: 'manager' },
+      { context_kind: 'manager', agent_id: 'claude-code' },
+    ]);
+    assert.equal(renderer!.root.findByType('textarea').props.disabled, false, 'steward composer opens after switching agent');
+  } finally {
+    await act(async () => renderer?.unmount());
+    globalThis.fetch = originalFetch;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});
