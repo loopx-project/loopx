@@ -107,6 +107,7 @@ class ChatExternalConversations:
         self.root = controller.store.root / "external-requests"
         self._source_control_discovery = FileChatDiscovery()
         self._backlog_request_discovery = FileChatDiscovery()
+        self._pending_discovery = FileChatDiscovery()
         self.actions: Any | None = None
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -1780,8 +1781,11 @@ class ChatExternalConversations:
             message=row["message"], source_id=row["request_ref"])
 
     def pending(self) -> list[dict[str, Any]]:
-        return [_read_json(path) for path in sorted(self.root.glob("*.json"))
-                if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
+        paths = (path for path in sorted(self.root.glob("*.json"))
+                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
+        return [row for _path, row in self._pending_discovery.rows(
+            self.root, paths, read=_read_json,
+            project=lambda _path, row: row if isinstance(row, dict) and row else None)]
 
     def source_controls(self) -> list[dict[str, Any]]:
         """Observe source controls and private text digests without reparsing unchanged bodies.

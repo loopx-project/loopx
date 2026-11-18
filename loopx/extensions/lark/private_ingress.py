@@ -16,6 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery
 from ...file_lock import try_exclusive_file_lock
 from ...chat_store import _read_json
 from .conversation_identity import identity_ref, lark_private_source
@@ -261,10 +262,18 @@ def project_private_reply_history(store: Any, session: dict[str, Any],
     return result
 
 
+def _project_capture(_path: Path, row: Any) -> dict[str, Any]:
+    """Validate required private-capture fields before caching an unchanged row."""
+    if not isinstance(row, dict) or not isinstance(row.get("event"), dict) or not isinstance(row.get("binding_id"), str):
+        raise ValueError("private capture read is incomplete")
+    return row
+
+
 class PrivateIngressObserver:
     def __init__(self, transport: Any) -> None:
         self.transport = transport
         self.root = transport.root.parent / "lark-private-ingress"
+        self._capture_discovery = FileChatDiscovery()
 
     def _path(self, binding_id: str) -> Path:
         return self.root / f"{identity_ref(binding_id)}.json"
@@ -458,11 +467,11 @@ class PrivateIngressObserver:
                 continue  # Preserve every gap; neither absence nor failure is an answer.
 
     def _records(self) -> list[dict[str, Any]]:
-        records = [json.loads(path.read_text(encoding="utf-8")) for path in self.transport.root.glob("*.json")]
-        if any(not isinstance(row, dict) or not isinstance(row.get("event"), dict)
-               or not isinstance(row.get("binding_id"), str) for row in records):
-            raise ValueError("private capture read is incomplete")
-        return records
+        paths = sorted(self.transport.root.glob("*.json"))
+        return [row for _path, row in self._capture_discovery.rows(
+            self.transport.root, paths,
+            read=lambda path: json.loads(path.read_text(encoding="utf-8")),
+            project=_project_capture)]
 
     def _page(self, profile: str, chat: str, end: float, *, start: float | None = None,
               token: str | None = None) -> tuple[list[Mapping[str, Any]], bool, str | None]:
