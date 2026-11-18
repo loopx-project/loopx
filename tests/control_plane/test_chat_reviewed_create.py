@@ -267,11 +267,15 @@ def test_changed_intent_cannot_apply_another_preview(tmp_path, monkeypatch, prov
     "same", "directory", "runtime", "registration", "store", "unrelated_todo",
     "edited_todo", "lost_assignment_checkpoint", "directory_during_assignment",
     "legacy_same", "legacy_runtime", "legacy_registration", "legacy_store",
-    "legacy_unrelated_todo", "legacy_edited_todo",
+    "legacy_unrelated_todo", "legacy_edited_todo", "legacy_saved_assignment",
+    "legacy_wrong_assignment", "legacy_assigned_store",
 ])
 def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypatch, provider, change):
     legacy = change.startswith("legacy_")
     change = change.removeprefix("legacy_")
+    legacy_assigned = change in {"saved_assignment", "wrong_assignment", "assigned_store"}
+    if change == "assigned_store":
+        change = "store"
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     goal_id = "goal-a"
     original_registry, original_root, _ = promoted_create_fixture(tmp_path / "original", provider=provider)
@@ -333,7 +337,16 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
             receipt = chat.apply_todo_review_preview(registry_path=original_registry, goal_id=goal_id,
                 text=text, preview_id=preview["preview_id"])["receipt"]
             checkpoint(proposal_id, step="todo_created", receipt={"todo_id": receipt["todo_id"], "canonical_receipt": receipt})
-            store.mark_failed(proposal_id, error_code="canonical_action_failed", message="Interrupted before assignment")
+            if legacy_assigned:
+                # The original Chat writer did not give its assignment an operation ID.
+                update_goal_todo(registry_path=original_registry, goal_id=goal_id,
+                    todo_id=receipt["todo_id"], claimed_by="agent-a", agent_id="agent-a",
+                    authority_reason="owner-confirmed typed Chat action")
+                checkpoint(proposal_id, step="todo_assigned", receipt={
+                    "todo_id": receipt["todo_id"],
+                    "agent_id": "another-agent" if change == "wrong_assignment" else "agent-a",
+                })
+            store.mark_failed(proposal_id, error_code="canonical_action_failed", message="Interrupted before confirmation")
         else:
             code, preview = post("/api/actions/preview", request)
             assert code == 201, preview
@@ -347,7 +360,7 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
         todo_id = created["todo_id"]
         original = read(original_root)
         assert original["todos"][0]["todo_id"] == todo_id
-        assert original["todos"][0].get("claimed_by") is None
+        assert original["todos"][0].get("claimed_by") == ("agent-a" if legacy_assigned else None)
 
         # Same public ids, independently initialized authority and different content.
         replacement_record = {**original["todos"][0], "text": "[P1] Unrelated replacement work",
@@ -386,7 +399,10 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
                 saved_root.rename(original_root)
             assert read(original_root) == original and read(replacement_root) == replacement
             saved_steps = store.load(proposal_id)["checkpoint"]["steps"]
-            assert set(saved_steps) == ({"todo_created"} if legacy else {"todo_create_prepared", "todo_created"})
+            expected_steps = {"todo_created"} if legacy else {"todo_create_prepared", "todo_created"}
+            if legacy_assigned:
+                expected_steps.add("todo_assigned")
+            assert set(saved_steps) == expected_steps
             assert saved_steps["todo_created"] == created
             directory.write_text(original_directory)
             original_registry.write_text(original_registration)
@@ -438,6 +454,10 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
             assigned_without_checkpoint = read(original_root)
             assert int(assigned_without_checkpoint["cursor"]) == int(original["cursor"]) + 1
         code, applied = post(path, {})
+        if change == "wrong_assignment":
+            assert code == 409 and applied["error_code"] == "protected_action", applied
+            assert read(original_root) == original and read(replacement_root) == replacement
+            return
         assert code == 200 and applied["proposal"]["status"] == "applied", applied
         assert applied["proposal"]["receipt"]["canonical_receipt"] == created["canonical_receipt"]
         final = read(original_root)
@@ -448,7 +468,7 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
             assert next(row for row in final["todos"] if row["todo_id"] == unrelated_todo["todo_id"]) == unrelated_todo
         if change == "lost_assignment_checkpoint":
             assert final == assigned_without_checkpoint
-        assert int(final["cursor"]) == int(original["cursor"]) + 1
+        assert int(final["cursor"]) == int(original["cursor"]) + (0 if legacy_assigned else 1)
         assert post(path, {}) == (code, applied)
         assert read(original_root) == final and read(replacement_root) == replacement
     finally:

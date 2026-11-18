@@ -187,11 +187,18 @@ class ChatTodoCreationMixin:
             binding = todo_step.get("source")
             if "source" not in todo_step:
                 try:
-                    if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
+                    assignment = steps.get("todo_assigned")
+                    assignment_completed = isinstance(assignment, dict)
+                    if isinstance(assignment, dict):
+                        if (start_execution or not agent_id or assignment.get("todo_id") != todo_id
+                                or assignment.get("agent_id") != str(agent_id)):
+                            raise ChatTodoSourceChanged("The saved assignment does not identify this Task and Agent.")
+                    elif agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
                         raise ChatTodoSourceChanged("The selected Agent is no longer registered for the Goal")
                     authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
                     binding = source.recover_legacy_creation(
-                        todo_id=todo_id, preview_id=current_fingerprint, receipt=canonical_receipt, authority=authority,
+                        todo_id=todo_id, preview_id=current_fingerprint, receipt=canonical_receipt,
+                        authority=authority, assignment_completed=assignment_completed,
                     )
                 except (ChatTodoSourceChanged, LocalCoordinationAuthorityUnavailable) as error:
                     raise ProtectedActionGate("todo.create", gate={

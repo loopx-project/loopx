@@ -67,6 +67,7 @@ class ChatTodoSource:
 
     def recover_legacy_creation(
         self, *, todo_id: str, preview_id: str, receipt: dict[str, Any], authority: dict[str, Any],
+        assignment_completed: bool,
     ) -> dict[str, Any]:
         goal_id = str(self.goal["id"])
         if (not preview_id or receipt.get("schema_version") != CHAT_TODO_RECEIPT_SCHEMA_VERSION
@@ -97,9 +98,15 @@ class ChatTodoSource:
                 "cursor": str(int(cursor) - 1),
             },
         }, timeout=15.0)
-        todo = next((row for row in authority["todos"] if row["todo_id"] == todo_id), None)
-        if not isinstance(original, dict) or original.get("status") != "loaded" or result["receipts"][0]["todo"] != todo:
-            raise ChatTodoSourceChanged("The original Task store or Todo could not be verified.")
+        if not isinstance(original, dict) or original.get("status") != "loaded":
+            raise ChatTodoSourceChanged("The original Task store could not be verified.")
+        # Assignment changes the Todo snapshot after creation. A completed
+        # assignment only needs receipt recovery. An unfinished one still
+        # requires the current Todo to match the originally reviewed write.
+        if not assignment_completed:
+            todo = next((row for row in authority["todos"] if row["todo_id"] == todo_id), None)
+            if result["receipts"][0]["todo"] != todo:
+                raise ChatTodoSourceChanged("The original Task could not be verified.")
         return {
             "operation_id": operation_id,
             "provider_revision": result["provider_revision"],
