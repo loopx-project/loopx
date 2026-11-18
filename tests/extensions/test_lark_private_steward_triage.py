@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import queue
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -14,6 +16,7 @@ import pytest
 from test_native_steward_private import finish, steward as steward
 
 from loopx.capabilities.native_chat import steward_triage
+from loopx.chat_action_store import ActionConflictError
 from loopx.extensions.lark import private_steward_triage
 from loopx.extensions.lark.conversation_identity import identity_ref
 from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
@@ -366,6 +369,185 @@ def test_private_callback_consumer_dispatches_the_steward_action_on_its_original
     )
     assert result["ok"] is True
     assert observed == [{**event, "action_value": action}]
+
+
+def test_one_callback_consumer_dispatches_both_card_protocols(tmp_path: Path):
+    from loopx.extensions.lark.goal_channel_operation import OPERATION_CARD_ACTION_SCHEMA_VERSION
+
+    actions = [
+        {"schema_version": private_steward_triage.TRIAGE_CARD_ACTION, "operation": "menu"},
+        {"schema_version": OPERATION_CARD_ACTION_SCHEMA_VERSION, "action": "confirm"},
+    ]
+    events = [event_for("om_fixture", json.dumps(action) if index == 0 else action, suffix=str(index))
+              for index, action in enumerate(actions)]
+    unknowns = [event_for("om_unknown", value) for value in
+                ({"schema_version": "unknown"}, [], 7, None, "broken-json")]
+    seen, observed, sources = threading.Event(), [], []
+    snapshot = {"private_profiles": {"steward-app": {
+        "cli_bin": "fixture-cli", "audience": "owner", "context_kind": "steward",
+    }}}
+
+    class Consumer:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def handler(payload):
+        observed.append(payload)
+        if len(observed) == 2:
+            seen.set()
+        return {"ok": True}
+
+    def messages():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        assert seen.wait(2)
+        yield "[event] exited — received 0 event(s) in 1s (reason: timeout)\n"
+
+    def process_factory(argv):
+        sources.append(argv[argv.index("consume") + 1])
+        if "card.action.trigger" in argv:
+            # Exercise the actual jq program, including its string/object
+            # normalization, rather than merely matching its schema literals.
+            lines = [json.dumps(event) for event in events]
+            if jq := shutil.which("jq"):
+                filtered = subprocess.run(
+                    [jq, "-c", argv[argv.index("--jq") + 1]],
+                    input="\n".join([*lines, *(json.dumps(event) for event in unknowns)]),
+                    capture_output=True, text=True, check=True,
+                )
+                lines = filtered.stdout.splitlines()
+                assert [json.loads(line) for line in lines] == events
+            # The dispatcher must also reject an unknown event if a provider
+            # delivers it despite the source filter.
+            return Consumer(iter([*lines, *(json.dumps(event) for event in unknowns)]))
+        return Consumer(messages())
+
+    result = stream_lark_goal_topic_profile(
+        profile="steward-app", snapshot_provider=lambda: snapshot, stop=threading.Event(),
+        runtime_root=tmp_path, answer=lambda *_: pytest.fail("ordinary turn started"),
+        process_factory=process_factory, review_callback_handler=handler,
+    )
+    assert result["ok"] is True
+    assert sorted(sources) == ["card.action.trigger", "im.message.receive_v1"]
+    assert observed == [{**event, "action_value": action} for event, action in zip(events, actions)]
+
+
+def test_chat_callback_service_preserves_operation_owner_and_private_session(steward, monkeypatch, tmp_path):
+    import test_lark_goal_channel_operation as operation_fixture
+    from datetime import datetime, timezone
+    from loopx.capabilities.native_chat.project_context import coordination_runtime_root
+    from loopx.extensions.lark import goal_channel_operation, goal_topic_runtime, goal_topic_runtime_service
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    profile = "steward-app"
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=lambda: True)
+    ordinary = provider.event(profile, "original-session", "Keep the original conversation.")
+    assert transport.admit(profile, ordinary)["status"] == "durably_accepted"
+    original = transport.core.read_request(identity_ref(binding["provider_ref"], ordinary["message_id"]))
+    assert finish(runtime, original)["status"] == "completed"
+    assert transport.reconcile() == 1
+    before = capture.read_bytes(), store.messages(original["session_id"])
+    writes, _ = fixture_card_provider(provider, transport, monkeypatch)
+    private_runner = transport.runner
+    assert transport.admit(profile, provider.event(profile, "menu", "/triage"))["status"] == "triage_queued"
+    assert transport.reconcile() == 1
+    menu_id = writes[-1]
+    action = buttons(json.loads(provider.messages[menu_id]["body"]["content"]))["总览"]
+    click = event_for(menu_id, action)
+
+    for name, value in (("APP_ID", "cli_steward_app"), ("CHAT_ID", "oc_steward_app"), ("OPERATOR_ID", "ou_steward_app")):
+        monkeypatch.setattr(operation_fixture, name, value)
+    operation_dir = tmp_path / "coordination-owner"
+    operation_dir.mkdir()
+    actions, registry, owner_root, channel_binding, target = operation_fixture._fixture(operation_dir)
+    runtime.coordination_runtime_root = coordination_runtime_root(registry, store.root.parent)
+    assert runtime.coordination_runtime_root == owner_root and owner_root != store.root
+    proposal = operation_fixture._prepare(actions, registry)
+    sent_cards, calls = {}, []
+    operation_runner = operation_fixture._runner(calls, sent_cards)
+
+    def run(argv, cwd=None, timeout=None):
+        operation_io = (
+            any("om_operation_card_fixture" in arg or "interactive/v1/card/update" in arg for arg in argv)
+            or ("--profile" in argv and argv[argv.index("--profile") + 1] == "operation-bot")
+            or "+chat-members-list" in argv or ("chats" in argv and "get" in argv)
+            or ("+messages-send" in argv and json.loads(argv[argv.index("--content") + 1]).get("schema") == "2.0")
+        )
+        return (operation_runner if operation_io else private_runner)(argv, cwd, timeout)
+
+    monkeypatch.setattr(transport, "runner", run)
+    delivered = goal_channel_operation.deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"], action_store_root=actions.root, runtime_root=owner_root,
+        binding_path=channel_binding, target_path=target, execute=True, runner=run,
+        executor_binding_resolver=lambda *_: {"revision": "simulator-v0"},
+    )
+    assert delivered["status"] == "awaiting_confirmation" and delivered["readback_verified"] is True
+    durable = actions.load(proposal["proposal_id"])
+    operation_event = operation_fixture._event(durable, sent_cards[durable["operation"]["delivery"]["message_id"]])
+    operation_event["action_value"] = json.loads(operation_event["action_value"])
+    executed = []
+
+    def execute(claimed, *, runtime_root):
+        assert runtime_root == owner_root
+        executed.append(claimed["proposal_id"])
+        operation = claimed["operation"]
+        return {
+            "schema_version": "loopx_operation_outcome_v0", "outcome": "simulated_filled",
+            "projection_verified": True, "operation_id": operation["operation_id"],
+            "payload_digest": operation["payload_digest"], "claim_id": operation["claim"]["claim_id"],
+            "executor_revision": operation["executor_revision"], "summary": "Synthetic operation completed.",
+            "simulation": True, "external_write_performed": False,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    monkeypatch.setattr(goal_channel_operation, "_execute_claimed_operation", execute)
+    handlers, entered = [], threading.Event()
+
+    def stream(**kwargs):
+        handlers.append(kwargs["review_callback_handler"])
+        entered.set()
+        assert kwargs["stop"].wait(10)
+        return {"ok": True}
+
+    monkeypatch.setattr(goal_topic_runtime, "stream_lark_goal_topic_profile", stream)
+    monkeypatch.setattr(goal_topic_runtime_service, "try_exclusive_file_lock",
+                        lambda path, **kwargs: try_exclusive_file_lock(tmp_path / "consumer-locks" / path.name, **kwargs))
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {"private_profiles": {
+            name: config for name, config in transport.profiles().items() if name == profile
+        }},
+        runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport,
+    )
+    try:
+        service.refresh()
+        assert entered.wait(3) and len(handlers) == 1
+        callback = handlers[0]
+        with pytest.raises(ActionConflictError):
+            callback({**operation_event, "chat_id": "oc_forwarded"})
+        assert not executed
+        first = callback(operation_event)
+        replay = callback(operation_event)
+        assert first["outcome"] == replay["outcome"] == "simulated_filled"
+        assert first["card_update_verified"] is True and replay["external_write_performed"] is False
+        assert executed == [proposal["proposal_id"]]
+        assert actions.load(proposal["proposal_id"])["operation"]["lifecycle_state"] == "outcome_observed"
+        assert transport.core.actions.store.load(proposal["proposal_id"]) is None
+        assert callback(click)["status"] == "triage_callback_queued"
+        assert transport.reconcile() == 1
+        assert callback(click)["status"] == "triage_callback_already_captured"
+        assert before == (capture.read_bytes(), store.messages(original["session_id"]))
+        snapshot = transport.bindings.read()
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=snapshot["revision"])
+        with pytest.raises(ValueError):
+            callback({**operation_event, "event_id": "after-revoke"})
+        assert executed == [proposal["proposal_id"]]
+    finally:
+        service.close()
 
 
 @pytest.mark.parametrize("authority_provider", ["file", "sqlite"])

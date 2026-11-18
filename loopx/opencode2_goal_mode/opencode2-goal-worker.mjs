@@ -169,7 +169,7 @@ export function createStateStore({ root = defaultStateRoot(), now = () => Date.n
 async function readLock(lockPath) {
   try {
     const payload = JSON.parse(await fs.readFile(lockPath, "utf8"))
-    if (!Number.isInteger(payload?.pid)) return null
+    if (!Number.isInteger(payload?.pid) || payload.pid <= 0) return null
     return payload
   } catch (error) {
     if (error?.code === "ENOENT") return null
@@ -184,6 +184,7 @@ async function readLock(lockPath) {
 
 
 export function pidIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
   try {
     process.kill(pid, 0)
     return true
@@ -226,13 +227,34 @@ export function shouldRunNow(decision) {
 
 
 export function waitPlan(decision, state) {
-  const local = decision?.scheduler_hint?.unchanged_poll?.local_scheduler
-  if (!local || local === "stop") return { stop: true }
-  const token = decision?.scheduler_hint?.reset_policy?.reset_token || ""
+  const hint = decision?.scheduler_hint || {}
+  const unchanged = hint?.unchanged_poll || {}
+  const legacyLocal =
+    typeof unchanged?.local_scheduler === "object" && unchanged.local_scheduler !== null
+      ? unchanged.local_scheduler
+      : null
+  const local = hint?.cold_path_detail?.local_scheduler || legacyLocal
+  if (
+    !local ||
+    unchanged?.local_scheduler === "stop" ||
+    unchanged?.local_scheduler === "stop_until_context_repaired"
+  ) {
+    return { stop: true }
+  }
+  const token = hint?.reset_policy?.reset_token || ""
   const sameIdentity = token && token === state.schedulerToken
   const unchangedPolls = sameIdentity ? Number(state.unchangedPolls || 0) : 0
-  const limit = Number.isInteger(local.unchanged_poll_limit) ? local.unchanged_poll_limit : null
-  if (limit !== null && unchangedPolls >= limit) return { stop: true }
+  const hasHintLimits = Number.isInteger(unchanged?.limits?.local_scheduler)
+  if (hasHintLimits) {
+    const limit = Number(unchanged.limits.local_scheduler)
+    const afterLimit = String(unchanged?.after_limits?.local_scheduler || "")
+    if (unchangedPolls + 1 >= limit && afterLimit === "stop_tick_loop") {
+      return { stop: true }
+    }
+  } else {
+    const limit = Number.isInteger(local.unchanged_poll_limit) ? local.unchanged_poll_limit : null
+    if (limit !== null && unchangedPolls >= limit) return { stop: true }
+  }
   const progression = Array.isArray(local.example_progression_minutes)
     ? local.example_progression_minutes.filter((value) => Number(value) > 0)
     : []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
@@ -611,23 +612,50 @@ def _recorded_pid_alive(value: object) -> bool | None:
         return None
 
 
-def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> None:
+def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> bool:
     """Let a dead directly spawned child fail the next non-signaling probe.
 
     A stopped child can remain a zombie until its Python parent reaps it;
-    ``kill(pid, 0)`` still reports that zombie as present. This helper does
-    nothing for a live child or a runtime owned by another process.
+    ``kill(pid, 0)`` still reports that zombie as present. Returns ``True``
+    only when POSIX ``waitpid`` confirms ``ECHILD`` (the target is not a child
+    of this process), and ``False`` otherwise.
     """
 
     if os.name == "nt" or not isinstance(info, Mapping):
-        return
+        return False
     pid = info.get("pid")
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
-        return
+        return False
     try:
         os.waitpid(pid, os.WNOHANG)
-    except (ChildProcessError, OSError):
-        pass
+    except ChildProcessError:
+        return True
+    except OSError as exc:
+        return exc.errno == errno.ECHILD
+    return False
+
+
+def _linux_thread_group_is_zombie(pid: int) -> bool:
+    """Return True only when every Linux thread in ``pid`` has exited to ``Z``.
+
+    Detached runtimes spawned by short-lived CLI subprocesses reparent to
+    container PID 1 or a subreaper that may not reap orphans while running.
+    A zombie thread-group leader with any live worker thread returns False.
+    """
+    if sys.platform != "linux":
+        return False
+    task_dir = Path("/proc") / str(pid) / "task"
+    try:
+        tids = os.listdir(task_dir)
+        if not tids:
+            return False
+        for tid in tids:
+            stat_text = (task_dir / tid / "stat").read_text(encoding="utf-8")
+            if stat_text.rsplit(")", 1)[1].split()[0] != "Z":
+                return False
+        return set(os.listdir(task_dir)) <= set(tids)
+    except (OSError, IndexError, ValueError):
+        return False
 
 
 def _start_lock_holder_pid(path: Path) -> int | None:
@@ -927,8 +955,10 @@ def _stop_effect_runtime(
         if wait_for_process_exit:
             if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
                 break
-            _reap_exited_runtime_child(info)
-            if not _pid_is_alive(pid):
+            not_caller_child = _reap_exited_runtime_child(info)
+            if not _pid_is_alive(pid) or (
+                not_caller_child and _linux_thread_group_is_zombie(pid)
+            ):
                 stopped = True
                 break
             # A zombie leader can still have threads writing into the namespace.

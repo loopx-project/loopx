@@ -228,9 +228,8 @@ def _git(repo: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
-def test_release_qualification_cli_matches_clean_git_source_and_is_read_only(
-    tmp_path: Path,
-) -> None:
+@pytest.fixture
+def release_source_repo(tmp_path: Path) -> Path:
     source_repo = tmp_path / "source"
     (source_repo / "loopx").mkdir(parents=True)
     _git(source_repo, "init")
@@ -247,6 +246,21 @@ def test_release_qualification_cli_matches_clean_git_source_and_is_read_only(
     )
     _git(source_repo, "add", "source.txt", "pyproject.toml", "loopx/__init__.py")
     _git(source_repo, "commit", "-m", "release source")
+    return source_repo
+
+
+@pytest.mark.parametrize("module", [
+    '__version__ = "9.8.7"\n',
+    '__version__: str = "9.8.7"\n',
+    '__version__ = "9.8.7"\nraise RuntimeError("candidate must not execute")\n',
+])
+def test_release_qualification_cli_matches_clean_git_source_and_is_read_only(
+    tmp_path: Path, release_source_repo: Path, module: str,
+) -> None:
+    source_repo = release_source_repo
+    (source_repo / "loopx/__init__.py").write_text(module, encoding="utf-8")
+    _git(source_repo, "add", "loopx/__init__.py")
+    _git(source_repo, "commit", "--allow-empty", "-m", "literal source identity")
     source = collect_release_source_identity(source_repo)
     manifest = _manifest(source=source)
     manifest_path = tmp_path / "qualification.json"
@@ -303,6 +317,44 @@ def test_release_qualification_cli_matches_clean_git_source_and_is_read_only(
     payload = json.loads(result.stdout)
     assert payload["decision"] == "hold_source_mismatch"
     assert payload["source_mismatches"] == ["observed_source:git_dirty"]
+
+
+@pytest.mark.parametrize("metadata", [
+    '[project]\nname = "loopx"\nversion = "9.8.6"\n',
+    '[project]\nname = "loopx"\n',
+    '[project]\nname = "loopx"\nversion = true\n',
+    '[project\n',
+])
+def test_release_qualification_refuses_invalid_build_version(
+    tmp_path: Path, release_source_repo: Path, metadata: str,
+) -> None:
+    """A clean commit and matching receipts cannot excuse invalid wheel metadata."""
+    repo = release_source_repo
+    (repo / "pyproject.toml").write_text(metadata, encoding="utf-8")
+    _git(repo, "add", "pyproject.toml")
+    _git(repo, "commit", "-m", "inconsistent build metadata")
+    source = {
+        **_source(commit=_git(repo, "rev-parse", "HEAD"), tree=_git(repo, "rev-parse", "HEAD^{tree}")),
+        "package_version": "9.8.7", "version_tag": "v9.8.7",
+    }
+    manifest = tmp_path / "qualification.json"
+    manifest.write_text(json.dumps(_manifest(source=source)), encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in (repo / "pyproject.toml", manifest)}
+    result = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--format", "json", "canary",
+        "release-qualification", "--manifest-json", str(manifest), "--repo-root", str(repo),
+    ], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 1, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["ready_for_release"] is False
+    assert payload["decision"] == "invalid_input"
+    assert payload["error"] == "release package version is unavailable from the checkout"
+    assert str(tmp_path) not in result.stdout
+    assert payload["read_boundary"]["model_api_invoked"] is False
+    assert payload["read_boundary"]["release_mutation_invoked"] is False
+    assert _git(repo, "status", "--porcelain") == ""
+    assert before == {path.name: path.read_bytes() for path in (repo / "pyproject.toml", manifest)}
 
 
 def test_release_qualification_cli_redacts_manifest_path_errors(tmp_path: Path) -> None:

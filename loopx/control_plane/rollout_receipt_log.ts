@@ -154,26 +154,6 @@ export function heartbeatReceiptsFromEvents(
   );
 }
 
-/**
- * Read the heartbeat receipts this goal persisted for one Agent.
- *
- * The read mirrors the established non-strict reader: a malformed or
- * differently versioned line is skipped rather than allowed to erase or
- * manufacture a receipt, and an absent log is `null` because "no receipts yet"
- * and "no log yet" are different facts for a caller that must report state.
- */
-export async function readGoalHeartbeatReceipts(
-  runtimeRoot: string,
-  goalId: string,
-  agentId?: string | null,
-): Promise<JsonObject[] | null> {
-  return goalHeartbeatReceiptsFromSnapshot(
-    await readGoalRolloutEventSnapshot(runtimeRoot, goalId),
-    goalId,
-    agentId,
-  );
-}
-
 /** A receipt without an exact Goal instance belongs to the legacy goal scope. */
 function receiptMatchesGoalRef(event: JsonObject, goalRef: JsonObject | null): boolean {
   if (goalRef === null) return !Object.hasOwn(event, "goal_ref");

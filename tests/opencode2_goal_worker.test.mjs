@@ -14,6 +14,7 @@ import {
   leaseIsLive,
   parseExecFailure,
   parseWorkerArgs,
+  pidIsAlive,
   retryPlan,
   runWorker,
   sanitizedStateName,
@@ -688,6 +689,7 @@ test("worker entry runs main() even when argv[1] goes through a symlinked path",
     path.join(import.meta.dirname, "..", "loopx", "opencode2_goal_mode", "opencode2-goal-worker.mjs"),
   )
   const linkDir = path.join(os.tmpdir(), `loopx-worker-entry-${process.pid}`)
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "loopx-worker-entry-state-"))
   await fs.rm(linkDir, { recursive: true, force: true })
   await fs.mkdir(path.dirname(workerFile), { recursive: true })
   await fs.symlink(path.dirname(workerFile), linkDir)
@@ -697,6 +699,7 @@ test("worker entry runs main() even when argv[1] goes through a symlinked path",
     let exitCode = 0
     try {
       const result = await execFile(process.execPath, [argvPath, "--goal-id", "x", "--directory", "/tmp"], {
+        env: { ...process.env, XDG_STATE_HOME: stateDir },
         timeout: 30_000,
         maxBuffer: 4 * 1024 * 1024,
       })
@@ -715,6 +718,7 @@ test("worker entry runs main() even when argv[1] goes through a symlinked path",
     )
   } finally {
     await fs.rm(linkDir, { recursive: true, force: true })
+    await fs.rm(stateDir, { recursive: true, force: true })
   }
 })
 
@@ -947,4 +951,50 @@ test("restart after denied initial dispatch preserves the original private task"
       quotaProbe: async () => ({ should_run: true, scheduler_hint: { action: "run_now" } }) })
     assert.deepEqual(transport.calls.prompts, ["Original task"])
   } finally { await fs.rm(root, { recursive: true, force: true }) }
+})
+
+
+test("waitPlan honors real scheduler_hint cold_path_detail and pid <= 0 lock rejection", async () => {
+  assert.equal(pidIsAlive(0), false)
+  assert.equal(pidIsAlive(-1), false)
+  const decision = {
+    should_run: false,
+    scheduler_hint: {
+      action: "backoff_waiting_for_user",
+      reset_policy: { reset_token: "hint-2" },
+      cold_path_detail: {
+        local_scheduler: {
+          recommended_interval_minutes: 3,
+          example_progression_minutes: [3, 6],
+        },
+      },
+      unchanged_poll: {
+        limits: { local_scheduler: 2 },
+        after_limits: { local_scheduler: "stop_tick_loop" },
+      },
+    },
+  }
+  const first = waitPlan(decision, { schedulerToken: "", unchangedPolls: 0 })
+  assert.deepEqual(first, {
+    stop: false,
+    minutes: 3,
+    schedulerToken: "hint-2",
+    unchangedPolls: 1,
+  })
+  assert.deepEqual(waitPlan(decision, first), { stop: true })
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-lock-pid-"))
+  try {
+    const store = createStateStore({ root })
+    await fs.writeFile(
+      store.lockPath("goal-zero"),
+      `${JSON.stringify({ pid: -1, heartbeatAt: new Date(0).toISOString() })}\n`,
+      "utf8",
+    )
+    const acquired = await store.acquireLock("goal-zero")
+    assert.equal(acquired.acquired, true)
+    await acquired.release()
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })

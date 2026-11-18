@@ -501,6 +501,20 @@ Core request 在 provider 投递前保存带时间的观测。重复事件保留
 Session、调用模型或创建 Goal。`/help` 按角色列出命令、既有设置 → Lark 的工作区、
 执行器与解绑入口，以及图片支持和暂不可用的媒体/原宿主边界。
 
+本人管家的 `/triage`、`/gates`、`/todos` 与 `/triage all` 复用既有授权查询和持久
+投递路径，不启动模型 Turn。同一 App 的回调消费者分发管家查询卡和 typed operation
+确认卡，不另建订阅。查询回调保留原 Chat binding、来源授权与 Session；操作回调
+沿用既有操作处理器和控制器的协调根，包括原提案、确认、claim 与原卡结果读回。
+Chat action store 不作为备用操作权威。App 不可用或身份变化时拒绝操作；未知回调
+形状忽略，各协议原有 owner 继续负责来源校验和重复处理。若已配置独立操作消费者，
+切换前须协调其归属；本片段不停止该消费者，也不迁移已配置的 managed wake 策略。
+未配置的 managed wake 仍无执行授权。
+
+混合协议回归使用一条实际回调流，以及 Chat/协调根分离的 fixture，运行真实 Core
+operation store，provider/执行器为合成实现。它验证错误会话拒绝、重放只执行一次、
+原卡结果读回、解绑撤权及查询不增加模型 Turn；File、SQLite 来源查询回归仍须通过。
+这属于源码和打包路径资格，正式服务切换与真实客户端点击仍待验收。
+
 回归使用生产原生文件 store、持久队列、bound request 与 provider 受理/投递路径，
 provider 和协议执行器为合成 fixture。它验证排队、停止、读回和重复投递，不证明
 本增量的真实 provider、手机或正式安装验收。注册 Agent 选择及更广协调仍开放。

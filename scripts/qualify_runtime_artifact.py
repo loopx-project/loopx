@@ -122,6 +122,7 @@ finally:
             env={**env, "PYTHONPATH": str(release)}, cwd=release,
             check=True, timeout=15, stdout=subprocess.DEVNULL)
         return {"ok": True, "source_revision": manifest["source_revision"], "bytes": manifest["size"],
+            "channel": manifest["channel"], "sha256": manifest["sha256"],
             "clean_install": results[0] == 0, "upgrade": results[1] == 0,
             "doctor": True, "skills": True, "frontend_bundle_contract": True, "frontend_http": True,
             "no_frontend_build_tools": True, "license_notices": True, "activation_failure_restored": True}

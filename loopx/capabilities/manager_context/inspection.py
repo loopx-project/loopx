@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from copy import deepcopy
@@ -15,6 +16,11 @@ from ...control_plane.effect_runtime import effect_runtime_result
 
 
 TOOL_NAME = "loopx_manager_read"
+_TODO_DETAIL_GUIDANCE = (
+    "For an oversized exact local Todo, follow its read_reference. Concatenate "
+    "detail_page.text from offset zero through EOF with the same source_revision, "
+    "then parse the complete JSON record before deciding; a fragment is not the full task. "
+)
 READ_TOOL = {
     "type": "function",
     "name": TOOL_NAME,
@@ -32,6 +38,9 @@ READ_TOOL = {
         "or a typed unavailable gap naming why it could not be derived. Use that to state where "
         "the Goal stands before listing detail. Use concrete evidence "
         "to answer progress and priority questions. Paginate with next_offset. "
+        "An oversized portfolio row is incomplete; resolve attention read_reference "
+        "to recover complete decision terms before deciding or acting. "
+        + _TODO_DETAIL_GUIDANCE +
         "Use view=report_source with a closed window_start/window_end for a frozen periodic-report "
         "source over all authorized local Goals including stopped ones, current tasks, window deliveries "
         "and their associated tasks, and handoff receipts. Copy source.source_revision when paging. "
@@ -51,7 +60,7 @@ READ_TOOL = {
             "include_outcome_gaps": {"type": "boolean", "description": "Local deliveries: include recorded outcome_gap counterevidence alongside progress. Default false for ordinary delivery queries; report_source always includes it. Observations and untyped host failures are not delivery outcomes."},
             "window_start": {"type": "string", "description": "Local deliveries/report_source: exact inclusive ISO-8601 timestamp with offset. Pair with window_end instead of days, e.g. a frozen report window."},
             "window_end": {"type": "string", "description": "Local deliveries/report_source: exact exclusive ISO-8601 timestamp with offset. Boundaries do not move while paging; report_source requires a closed window."},
-            "expected_source_revision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries/report_source: copy source.source_revision from the first page onto subsequent pages. A conflicting response requires restarting this read, not merging pages from different snapshots."},
+            "expected_source_revision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries/report_source: copy source.source_revision when paging. Exact local Todo: copy its read_reference; this revision selects bounded JSON detail pages, where offset counts Unicode characters. Follow detail_page.next_read. On conflict restart the exact read; never merge revisions."},
             "delivery_ref": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries only: use an observed row's source_ref to recover its full permitted recorded_details and evidence references within the same read window/revision. Does not read referenced artifacts or prove the recorded claims."},
             "goal_id": {"type": "string"},
             "agent_id": {"type": "string", "minLength": 1,
@@ -87,7 +96,8 @@ CONTEXT_READ_TOOL = {**deepcopy(READ_TOOL), "name": CONTEXT_TOOL_NAME,
     "The Goal row carries its lifecycle readback: reached milestones with evidence refs and the phase "
     "(starting/qualifying/waiting_owner/closing/closed), or a typed unavailable gap naming why. "
     "Use view=agents to find registered peers, then view=agent_route with exact goal_id and agent_id to observe an existing local host binding. A route is not execution readiness. "
-    "Paginate with next_offset. No cross-Goal access, shell, writes or execution authority."}
+    "Paginate with next_offset. " + _TODO_DETAIL_GUIDANCE +
+    "No cross-Goal access, shell, writes or execution authority."}
 
 
 # The published tool schema is the contract the caller sees, so the reader takes
@@ -184,7 +194,15 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
             rejected.append("include_outcome_gaps:must_be_a_boolean")
     if not isinstance(arguments.get("source_id", "local"), str):
         rejected.append("source_id:must_be_a_string")
-    exact_arguments = {"window_start", "window_end", "expected_source_revision", "delivery_ref"} & arguments.keys()
+    detail_read = view == "todos" and "expected_source_revision" in arguments
+    if detail_read:
+        if not arguments.get("goal_id") or not arguments.get("todo_id"):
+            rejected.append("expected_source_revision:requires_exact_todo")
+        if arguments.get("source_id", "local") != "local":
+            rejected.append("expected_source_revision:only_for_source_local")
+    exact_arguments = {"window_start", "window_end", "delivery_ref"} & arguments.keys()
+    if "expected_source_revision" in arguments and not detail_read:
+        exact_arguments.add("expected_source_revision")
     for name in sorted(exact_arguments):
         if view not in {"deliveries", "report_source"} or name == "delivery_ref" and view != "deliveries":
             rejected.append(f"{name}:only_for_view_deliveries" if name == "delivery_ref" else f"{name}:only_for_view_deliveries_or_report_source")
@@ -214,6 +232,41 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
         if not {"window_start", "window_end"} <= arguments.keys():
             rejected.append("report_source:requires_window_start_and_window_end")
     return rejected
+
+
+def _todo_detail_revision(row: dict[str, Any], source: dict[str, Any]) -> str:
+    # Bind both native source and permitted projection, so an old owner-only
+    # cursor cannot continue into a different redaction/presentation scope.
+    encoded = json.dumps([source["source_revision"], row], ensure_ascii=False, sort_keys=True)
+    return "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _todo_detail_page(row: dict[str, Any], arguments: dict[str, Any], revision: str) -> dict[str, Any]:
+    """Page transport encoding only; canonical selection and redaction stay in Core."""
+    text = json.dumps(row, ensure_ascii=False, sort_keys=True)
+    offset = arguments.get("offset", 0)
+    if offset >= len(text):
+        return {"ok": False, "error": "todo_detail_offset_out_of_range"}
+    reference = {**arguments, "source_id": "local"}
+
+    def page(end: int) -> dict[str, Any]:
+        return {"offset": offset, "next_offset": end if end < len(text) else None,
+                "total_characters": len(text), "source_revision": revision,
+                "text": text[offset:end], "eof": end == len(text),
+                "next_read": {**reference, "offset": end} if end < len(text) else None}
+
+    # The JSON string escapes quotes/control characters again. Budget the
+    # encoded page, not just the original text, without splitting Unicode.
+    low, high = offset, min(len(text), offset + 24000)
+    while low < high:
+        end = (low + high + 1) // 2
+        if len(json.dumps(page(end), ensure_ascii=False)) <= 24000:
+            low = end
+        else:
+            high = end - 1
+    if low == offset:
+        return {"ok": False, "error": "todo_detail_page_unavailable"}
+    return {"ok": True, "detail_page": page(low)}
 
 
 def agent_work_summary(agent: dict[str, Any]) -> dict[str, Any]:
@@ -381,6 +434,40 @@ def handoff_receipt_readbacks(root, registry, rows):
     return page
 
 
+def _oversized_portfolio_index(row: dict[str, Any], gap: dict[str, Any]) -> dict[str, Any]:
+    """Keep recoverable decision references without lifting the row budget.
+
+    These are already scoped, public-safe portfolio fields. The existing typed
+    attention owner makes directory excerpts; exact Todo reads retain the full
+    terms, current authority check and original source. Other views keep their
+    existing oversized-record response.
+    """
+    reference = {"view": "todos", "goal_id": row["goal_id"]}
+    preview = effect_runtime_result("presentation.goal_attention.bound", {
+        "goals": [{"goal_id": row["goal_id"], "attention": row.get("attention")}],
+        "preview": True,
+    })["goals"][0]
+    index = {
+        **gap,
+        **{key: row[key] for key in (
+            "goal_instance_id", "description", "activation_state", "quality",
+            "progress", "source", "warnings", "goal_lifecycle",
+        ) if key in row},
+        "attention": preview.get("attention"),
+        "details_omitted": True,
+        "read_reference": reference,
+    }
+    if len(json.dumps(index, ensure_ascii=False)) <= 24000:
+        return index
+    # Even metadata can exceed the budget. Keep an explicit unknown gap and
+    # the existing scoped read route, never malformed JSON or a partial term.
+    from ...goal_portfolio import lifecycle_readback_unavailable
+
+    return {**gap, "details_omitted": True, "read_reference": reference,
+            "goal_lifecycle": lifecycle_readback_unavailable(row["goal_id"], "omitted_due_to_size"),
+            "attention": {"status": "unavailable", "items": [], "reason": "omitted_due_to_size"}}
+
+
 class ManagerInspection:
     def __init__(
         self,
@@ -487,6 +574,7 @@ class ManagerInspection:
         from ...control_plane.goals.activation import goal_activation_state
         from ...chat_manager_context import manager_turn_context
         try:
+            inventory_bytes = self.registry_path.read_bytes()
             inventory = self._registered_goals()
             permitted = sorted({g["id"] for g in inventory if ids is None or g["id"] in ids})
             if goal_id is not None:
@@ -503,22 +591,51 @@ class ManagerInspection:
                         pass  # Unknown activation stays visible as a source gap.
                 permitted = [gid for gid in permitted if gid not in stopped]
             selected = permitted[offset:offset + limit]
-            context = manager_turn_context(
-                self.registry_path,
-                {"channel_id": self.channel_id or ("manager" if self.owner_scope else "manager.external.inspection")},
-                self.runtime_root, authorized_goal_ids=ids, requested_goal_ids=selected,
-                include_stopped=include_stopped or goal_id is not None, include_details=False,
-            ) if selected else {"goals": [], "coverage": {"complete": True}}
+            page, contexts, collected = [], [], []
+            for selected_id in selected:
+                context = manager_turn_context(
+                    self.registry_path,
+                    {"channel_id": self.channel_id or ("manager" if self.owner_scope else "manager.external.inspection")},
+                    self.runtime_root, authorized_goal_ids=ids, requested_goal_ids=[selected_id],
+                    include_stopped=include_stopped or goal_id is not None, include_details=False,
+                )
+                if not self.scope_valid():
+                    return {"ok": False, "error": "authorization_changed"}
+                rows = context.get("goals", [])
+                if len(rows) != 1 or rows[0].get("goal_id") != selected_id:
+                    raise ValueError("requested portfolio row is unavailable")
+                contexts.append(context)
+                collected.extend(rows)
+                bounded = effect_runtime_result("presentation.goal_attention.bound", {"goals": collected})["goals"]
+                # Apply the existing encoded-row budget while collecting. At
+                # most one lookahead row is read again on the next page; do not
+                # collect every later Goal only to discard it in read(). A lone
+                # oversized row keeps the existing explicit gap/continuation.
+                if len(json.dumps(bounded, ensure_ascii=False)) > 24000 and page:
+                    break
+                page = bounded
+                if len(json.dumps(page, ensure_ascii=False)) > 24000:
+                    break
+            if self.registry_path.read_bytes() != inventory_bytes:
+                raise ValueError("Goal inventory changed during collection")
+            coverages = [context.get("coverage", {}) for context in contexts]
+            coverage = {"complete": all(c.get("complete") is True for c in coverages)}
+            for key in set().union(*(c.keys() for c in coverages)) - {"complete"}:
+                values = [c.get(key, 0) for c in coverages]
+                coverage[key] = ((max(values) if key == "invalid_registry_entries" else sum(values))
+                                 if all(type(v) is int for v in values) else None)
+            snapshot_id = ("sha256:" + hashlib.sha256(json.dumps(
+                contexts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                if contexts else None)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             return {"ok": False, "view": "portfolio", "error": "goal_inventory_unavailable"}
-        page = context.get("goals", [])
-        end = offset + len(selected)
+        end = offset + len(page)
         return {"ok": True, "view": "portfolio", "goal_id": goal_id, "rows": page,
                 "offset": offset, "included": len(page), "matched": len(permitted),
                 "next_offset": end if end < len(permitted) else None,
-                "source": {"source": "goal_portfolio", "snapshot_id": context.get("snapshot_id"),
-                           "coverage": context.get("coverage")},
-                "unknown": bool(context.get("warnings")) or len(page) != len(selected),
+                "source": {"source": "goal_portfolio", "snapshot_id": snapshot_id,
+                           "coverage": coverage},
+                "unknown": any(context.get("warnings") for context in contexts),
                 "initial_snapshot_id": self.context.get("snapshot_id"),
                 "source_id": "local", "source_host": "local"}
 
@@ -642,7 +759,7 @@ class ManagerInspection:
                 goal_id,
                 owner_scope=self.owner_scope,
                 limit=limit,
-                offset=offset,
+                offset=0 if "expected_source_revision" in arguments else offset,
                 todo_id=arguments.get("todo_id"),
                 query=arguments.get("query", ""),
             )
@@ -682,6 +799,24 @@ class ManagerInspection:
             page = [{**r, "todo_title": titles.get(r.get("todo_id"))} for r in page]
         if not self.scope_valid():
             return {"ok": False, "error": "authorization_changed"}
+        if view == "todos" and "expected_source_revision" in arguments:
+            if source.get("status") != "read":
+                return {"ok": False, "error": "todo_detail_unavailable"}
+            if len(page) != 1:
+                return {"ok": False, "error": "todo_detail_unavailable"}
+            revision = _todo_detail_revision(page[0], source)
+            if revision != arguments["expected_source_revision"]:
+                return {"ok": False, "error": "todo_detail_revision_mismatch"}
+            result = _todo_detail_page(page[0], arguments, revision)
+            if not result["ok"]:
+                return result
+            if not self.scope_valid():
+                return {"ok": False, "error": "authorization_changed"}
+            result.update({"view": view, "goal_id": goal_id, "source": source,
+                           "rows": [], "matched": matched, "unknown": True, "source_id": "local",
+                           "source_host": "local", "note": _TODO_DETAIL_GUIDANCE})
+            self.record(result)
+            return result
         # Trim whole rows, never malformed JSON or undisclosed byte truncation.
         while len(page) > 1 and len(json.dumps(page, ensure_ascii=False)) > 24000:
             page.pop()
@@ -689,13 +824,25 @@ class ManagerInspection:
         for i, row in enumerate(page):
             if len(json.dumps(row, ensure_ascii=False)) > 24000:
                 oversized.append(offset + i)
-                page[i] = {
+                gap = {
                     "status": "oversized_record",
                     "row_index": offset + i,
                     "goal_id": row.get("goal_id"),
                     "todo_id": row.get("todo_id"),
                     "details": "omitted_due_to_size",
                 }
+                page[i] = _oversized_portfolio_index(row, gap) if view == "portfolio" else gap
+                if view == "todos" and arguments.get("todo_id") and source.get("source_revision"):
+                    page[i]["read_reference"] = {
+                        "view": "todos", "source_id": "local", "goal_id": goal_id,
+                        "todo_id": arguments["todo_id"], "offset": 0,
+                        "expected_source_revision": _todo_detail_revision(row, source),
+                    }
+                    page[i]["read_instruction"] = _TODO_DETAIL_GUIDANCE
+        # Building an oversized index crosses the typed presentation owner;
+        # a grant revoked during that read must suppress the entire response.
+        if view == "portfolio" and oversized and not self.scope_valid():
+            return {"ok": False, "error": "authorization_changed"}
         end = offset + len(page)
         result = {
             "ok": True,
@@ -709,12 +856,13 @@ class ManagerInspection:
             "next_offset": end
             if isinstance(matched, int) and page and end < matched
             else None,
-            "unknown": matched is None or portfolio_unknown
+            # An omitted record is incomplete evidence in every view, even
+            # when an exact Todo has no further row page to read.
+            "unknown": matched is None or portfolio_unknown or bool(oversized)
             or ("window_start" in arguments and (
                 source.get("window_complete") is False
                 or bool(source.get("coverage", {}).get("invalid_delivery_records"))
-                or bool(source.get("coverage", {}).get("invalid_index_records"))
-                or bool(oversized)))
+                or bool(source.get("coverage", {}).get("invalid_index_records"))))
             or (
                 view == "handoffs"
                 and (

@@ -92,7 +92,7 @@ def _semantic_version(path: Path) -> tuple[int, int, int] | None:
     match = _SEMVER_DIRECTORY.fullmatch(path.name)
     if not match:
         return None
-    return tuple(int(part) for part in match.groups())
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
 def _nvm_candidates(home: Path) -> list[Path]:

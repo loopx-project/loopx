@@ -10,7 +10,7 @@ import pytest
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _initialize_fixture_authority,
-    _run_cli, _run_generated_cli, _write_fixture,
+    _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
 )
 
 
@@ -111,16 +111,28 @@ def test_returned_writeback_can_record_progress_and_settle_once(
         registry_path=registry,
     )
     assert rc != 0, refused
-    spend = next(s["command_template"] for s in plan["ordered_steps"] if s["kind"] == "quota_spend")
-    rc, premature = _run_generated_cli(spend, registry_path=registry)
+    spend = next(s for s in plan["ordered_steps"] if s["kind"] == "quota_spend")
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert spend["owner"] == "runtime" and "command_template" not in spend
+    assert "--settle-turn" in shlex.split(command)
+    # Deliberately unprojected: accounting still rejects an early model debit.
+    rc, premature = _run_cli(registry, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "command-guidance",
+        "--source", "heartbeat", "--execute")
     assert rc != 0, premature
+    assert _spend_run_count(runtime) == 0
     rc, writeback = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, writeback
     assert writeback["progress_observation"]["result_class"] == "advanced"
-    rc, spent = _run_generated_cli(spend, registry_path=registry)
-    assert rc == 0, spent
-    rc, replay = _run_generated_cli(spend, registry_path=registry)
+    assert writeback["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    assert writeback["settlement_progress"]["state"] == "settled"
+    assert [row["step_kind"] for row in writeback["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    assert _spend_run_count(runtime) == 1
+    rc, replay = _run_generated_cli(command, registry_path=registry)
     assert rc == 0 and replay["idempotent_replay"] is True, replay
+    assert _spend_run_count(runtime) == 1
     rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
                         "--todo-id", TODO_ID)
     assert rc == 0 and todo["todo"]["status"] == "open", todo

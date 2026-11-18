@@ -43,7 +43,7 @@ archaeology in
 [Git history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy),
 outside the working tree.
 New benchmark work should start from the
-[`benchmark/`](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md) research workspace and keep runner and
+[`benchmark/`](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md) research workspace and keep runner and
 verifier semantics benchmark-native.
 
 ## Validation

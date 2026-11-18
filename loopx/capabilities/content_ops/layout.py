@@ -417,35 +417,45 @@ def check_layout_packet(
 
 def render_layout_packet_markdown(packet: Mapping[str, object]) -> str:
     if not packet.get("ok") and "error" in packet:
-        return f"# Content-Ops Layout\n\nError: {packet['error']}\n"
+        return f"# Content-Ops Layout\n\nError: {packet.get('error', 'unknown error')}\n"
     if packet.get("schema_version") == "content_ops_layout_template_catalog_packet_v0":
         lines = ["# Content-Ops Layout Templates", ""]
-        for template in packet["templates"]:  # type: ignore[union-attr]
-            lines.append(f"- `{template['template_id']}` — {template['title']}")
+        templates = packet.get("templates")
+        if isinstance(templates, list):
+            for template in templates:
+                if isinstance(template, Mapping):
+                    lines.append(f"- `{template.get('template_id')}` — {template.get('title')}")
         return "\n".join(lines) + "\n"
     if packet.get("schema_version") == "content_ops_layout_template_packet_v0":
-        template = packet["template"]  # type: ignore[assignment]
-        return (
-            "# Content-Ops Layout Template\n\n"
-            f"- id: `{template['template_id']}`\n"
-            f"- title: {template['title']}\n"
-            f"- intent: {template['intent']}\n"
-        )
+        template = packet.get("template")
+        if isinstance(template, Mapping):
+            return (
+                "# Content-Ops Layout Template\n\n"
+                f"- id: `{template.get('template_id')}`\n"
+                f"- title: {template.get('title')}\n"
+                f"- intent: {template.get('intent')}\n"
+            )
     if packet.get("schema_version") == "content_ops_layout_plan_packet_v0":
-        plan = packet["plan"]  # type: ignore[assignment]
-        return (
-            "# Content-Ops Layout Plan\n\n"
-            f"- plan: `{plan['plan_id']}`\n"
-            f"- template: `{plan['template_id']}`\n"
-            f"- pages: {len(plan['pages'])}\n"
-            f"- closing role: `{plan['closing_role']}`\n"
-        )
+        plan = packet.get("plan")
+        if isinstance(plan, Mapping):
+            pages = plan.get("pages")
+            page_count = len(pages) if isinstance(pages, list) else 0
+            return (
+                "# Content-Ops Layout Plan\n\n"
+                f"- plan: `{plan.get('plan_id')}`\n"
+                f"- template: `{plan.get('template_id')}`\n"
+                f"- pages: {page_count}\n"
+                f"- closing role: `{plan.get('closing_role')}`\n"
+            )
     lines = [
         "# Content-Ops Layout Check",
         "",
         f"- status: `{packet.get('status')}`",
         f"- next action: `{packet.get('next_action')}`",
     ]
-    for failure in packet.get("failures", []):  # type: ignore[union-attr]
-        lines.append(f"- `{failure['code']}`: {failure['message']}")
+    failures = packet.get("failures")
+    if isinstance(failures, list):
+        for failure in failures:
+            if isinstance(failure, Mapping):
+                lines.append(f"- `{failure.get('code')}`: {failure.get('message')}")
     return "\n".join(lines) + "\n"

@@ -79,21 +79,23 @@ def test_admitted_memory_does_not_resurrect_invalidated_runtime_binding(invalida
     valid_binding = False  # Changed registered sources invalidate the entire optional contribution.
     assert ("reward_memory_recall" in request) is valid_binding
     assert ("reward_memory_reflection_json" in codex_cli_result_schema(request)["properties"]) is False
-    assert ("When reward_memory_recall contains guidance" in _prompt(request)) is False
+    assert ("private, non-authoritative" in _prompt(request)) is False
 
 
 @pytest.mark.parametrize(("recall", "ingest"), [(True, False), (False, True), (True, True)])
 def test_recall_and_reflection_are_independently_opted_in(recall: bool, ingest: bool) -> None:
     request = build_loopx_turn_host_request(_plan(recall=recall, ingest=ingest))
     prompt = _prompt(request)
-    assert ("When reward_memory_recall contains guidance" in prompt) is recall
-    assert ("Set reward_memory_reflection_json" in prompt) is ingest
+    assert ("private, non-authoritative" in prompt) is recall
+    assert ("reward_memory_reflection_json" in prompt) is ingest
+    # This proves instruction delivery, not model compliance or deduplication.
+    assert ("compare independent task evidence" in prompt) is (recall and ingest)
     assert ("reward_memory_reflection_json" in codex_cli_result_schema(request)["properties"]) is ingest
     assert bool(request["reward_memory_recall"].get("context")) is recall
     if ingest:
-        assert "attests the exact reflection digest and evidence" in prompt
+        assert "exact reflection digest" in prompt
     if recall:
-        assert "never treat it as new action authority" in prompt
+        assert "new action authority" in prompt
 
 
 def test_unavailable_provider_does_not_instruct_use_of_missing_recall_context() -> None:
@@ -102,7 +104,7 @@ def test_unavailable_provider_does_not_instruct_use_of_missing_recall_context() 
     from tests.control_plane.reward_memory_host_fixture import register_plan_memory
     register_plan_memory(plan)
     request = build_loopx_turn_host_request(plan)
-    assert "When reward_memory_recall contains guidance" not in _prompt(request)
+    assert "private, non-authoritative" not in _prompt(request)
     # Recall failure does not silently disable independently configured outcome ingest.
     assert "reward_memory_reflection_json" in codex_cli_result_schema(request)["properties"]
 
@@ -246,8 +248,8 @@ def test_legacy_cached_reflection_is_bounded_and_cannot_activate_a_host(reflecti
     request = build_loopx_turn_host_request(plan)
     assert "reward_memory_recall" not in request
     assert "reward_memory_reflection_json" not in codex_cli_result_schema(request)["properties"]
-    assert "Set reward_memory_reflection_json" not in _prompt(request)
-    assert "When reward_memory_recall contains guidance" not in _prompt(request)
+    assert "reward_memory_reflection_json" not in _prompt(request)
+    assert "private, non-authoritative" not in _prompt(request)
     result = {
         "schema_version": "loopx_turn_result_v0", "turn_key": plan["transaction"]["turn_key"],
         "result_kind": kind, "completed_phases": ["host_execute", "typed_result"],
@@ -290,8 +292,8 @@ def test_shared_host_memory_keeps_binding_context_and_validation(recall, ingest,
     authority = extract_turn_authority(request)
     prompt = render_prompt(authority)
     active = invalidated is None
-    assert ("When reward_memory_recall contains guidance" in prompt) is (active and recall)
-    assert ("Set reward_memory_reflection_json" in prompt) is (active and ingest)
+    assert ("private, non-authoritative" in prompt) is (active and recall)
+    assert ("reward_memory_reflection_json" in prompt) is (active and ingest)
     if active and recall:
         assert authority["reward_memory_recall"]["context"] == plan["turn_context_contributions"][0]["context_fields"]["reward_memory_recall"]["context"]
     elif "reward_memory_recall" in authority:
@@ -434,8 +436,8 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
     if host_kind == "codex-cli":
         assert ("reward_memory_reflection_json" in observed["schema"]["properties"]) is ingest
     if host_kind != "generic-cli":
-        assert ("Set reward_memory_reflection_json" in observed["prompt"]) is ingest
-        assert ("When reward_memory_recall contains guidance" in observed["prompt"]) is (mode == "recall_context")
+        assert ("reward_memory_reflection_json" in observed["prompt"]) is ingest
+        assert ("private, non-authoritative" in observed["prompt"]) is (mode == "recall_context")
     if mode in {"recall_context", "oversized_recall"}:
         memory = observed["request"]["reward_memory_recall"]
         assert memory["status"] == "applied"
@@ -447,11 +449,9 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
         request = observed["request"]
         assert "reward_memory_recall" not in request
         assert "reward_memory_reflection_json" not in request.get("capability_result_fields", {})
-        assert not any("reward_memory" in instruction
-                       for instruction in request.get("capability_instructions", []))
-        if host_kind != "generic-cli" and "work_contract" not in request:
-            assert "reward_memory" not in observed["prompt"]
-        # A complete captured source retains inactive configuration/diagnostics.
+        assert request.get("capability_instructions", []) == []
+        # Complete captured sources retain inactive configuration/diagnostics,
+        # including when they are delivered without a work_contract field.
         # Those facts must not activate recall instructions or reflection output;
         # deleting them merely to pass a substring check would lose source facts.
     assert result["effects"]["quota_spent"] is True

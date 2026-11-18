@@ -244,7 +244,7 @@ export function userTodoScopeConflict(taskClass: string | null, scope: Scope,
 }
 
 function validateScope(role: string, taskClass: string | null, scope: Scope, agentCount: number): void {
-  const { bound_agent: bound, goal_bound: goal, blocks_agent: blocks, global_gate: global } = scope;
+  const { bound_agent: bound, goal_bound: goal } = scope;
   if (role !== "user") {
     if (bound || goal) fail("bound_agent and goal_bound are only valid for user todos");
     return;

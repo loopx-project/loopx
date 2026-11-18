@@ -29,7 +29,7 @@ foreach ($argValue in $args) {
         $skipNextArg = $false
         continue
     }
-    if ($argValue -in @("--format", "--registry", "--runtime-root")) {
+    if ($argValue -in @("--format", "--registry", "--runtime-root", "--cli-bin")) {
         $skipNextArg = $true
         continue
     }
@@ -57,7 +57,8 @@ $hasNativeSchedulerTurn = @(
 $needsCodexHostRead = (
     $loopxSubcommand -eq "scheduler-ack-current" -and
     $args -contains "--host-match-observed" -and
-    $args -notcontains "--trae_app"
+    $args -notcontains "--trae_app" -and
+    $args -notcontains "--antigravity_app"
 )
 $isNativeSchedulerFollowup = (
     $loopxCommand -eq "quota" -and

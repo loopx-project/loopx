@@ -29,20 +29,6 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"agent-onboard",
 		"connect",
 		"codex-cli-bootstrap-message",
-		"codex-cli-bounded-visible-pilot-adapter",
-		"codex-cli-exec-handoff",
-		"codex-cli-visible-first-response-capture-plan",
-		"codex-cli-local-driver-plan",
-		"codex-cli-local-scheduler-exec",
-		"codex-cli-local-scheduler-tick",
-		"codex-cli-one-message-loop-pilot",
-		"codex-cli-runtime-idle-detector",
-		"codex-cli-session-probe",
-		"codex-cli-visible-attach-acceptance",
-		"codex-cli-visible-local-driver-pilot",
-		"codex-cli-visible-driver-run",
-		"codex-cli-visible-driver-plan",
-		"codex-cli-visible-session-proof",
 		"commands",
 		"demo",
 		"doctor",
@@ -112,6 +98,20 @@ class _SelectedArgumentParser(LoopXArgumentParser):
 		raise _SelectedParseRejected(message)
 
 
+def report_json_text(payload: object) -> str:
+	r"""Encode one machine report as strictly UTF-8 decodable JSON.
+
+	Ordinary text keeps its literal spelling. A report can still carry a code
+	point no UTF-8 stream can encode - the lone surrogate that spells one
+	undecodable path byte inside a structured identity. Those become ``\uXXXX``
+	escapes, which JSON reads back as the same value, so identity round trips
+	and the report stays parseable byte for byte.
+	"""
+
+	text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+	return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
 def print_payload(
 	payload: dict[str, object],
 	fmt: str,
@@ -122,7 +122,7 @@ def print_payload(
 	if fmt == "json":
 		# JSON is the machine contract; retain every value and remove only
 		# presentation whitespace. Human-readable output remains Markdown.
-		print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+		print(report_json_text(payload))
 	else:
 		print(markdown_renderer(payload))
 

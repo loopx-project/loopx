@@ -184,7 +184,7 @@ def observe_epoch(
         accept_weight = 1.0
         accepted_count = probe.get("accepted_count")
         attempt_count = probe.get("attempt_count")
-        if accepted_count is not None or attempt_count is not None:
+        if accepted_count is not None and attempt_count is not None:
             try:
                 accepted_total = float(accepted_count)
                 attempt_total = float(attempt_count)

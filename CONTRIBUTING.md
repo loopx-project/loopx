@@ -127,7 +127,8 @@ LoopX needs two runtimes:
 
 - **Python 3.11+.** `uv` installs a compatible one for you.
 - **Node.js 22.22.3 or newer**, with Node.js 24 LTS recommended. `pyproject.toml`
-  declares no Python dependencies, but the TypeScript control plane runs on the
+  declares no cross-platform Python dependencies (only `tzdata; sys_platform == 'win32'`),
+  but the TypeScript control plane runs on the
   system Node.js, both for `loopx` itself and for the test suite. `pip` and `uv`
   cannot install Node.js for you.
 
@@ -193,7 +194,7 @@ touch, mention it in the PR instead of fixing it there.
 | `ci-maintenance.yml` | opened, reopened, edited, updated or closed PR (`pull_request_target`, trusted base code only) | no | inspects potential stale PR comparisons without mutating the head or target; cancels obsolete Python qualification runs after rechecking the PR and source branch |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
 | `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
-| `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
+| `package-smoke.yml` | `loopx-core` and extension package paths | no | `loopx-core` and extension packages install, entrypoints, and example schemas |
 | `release-artifacts.yml` | `loopx/`, packaging, and lockfile paths | no | release identity and a release build from this source |
 | `runtime-snapshots.yml` | runtime artifact, installer, and updater paths | no | qualified, revision-addressed runtime archives and the main channel pointer |
 | `ark-turn.yml` | Turn driver and collaboration paths | no | optional Ark Turn package, stdio MCP, and DSH parity |
@@ -203,7 +204,7 @@ touch, mention it in the PR instead of fixing it there.
 | `frontstage-pages.yml` | README, dashboard, and chat bundle paths | no | public Pages build |
 | `desktop-release-artifacts.yml` | desktop app and dashboard paths | no | macOS and Windows desktop builds |
 | `desktop-updater.yml` | desktop app paths | no | desktop app build and updater feed |
-| `full-public-smokes.yml` | no (push to `main`, schedule) | no | every public smoke, in shards |
+| `full-public-smokes.yml` | no (manual, schedule) | no | every public smoke, in shards |
 | `sonarcloud.yml` | no (called by Python Tests) | no | SonarCloud analysis of that run's coverage |
 | `stale.yml` | no (schedule) | no | stale-issue reminders (never closes issues) |
 | `update-notes.yml` | no (schedule) | no | biweekly update notes |

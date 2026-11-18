@@ -226,7 +226,7 @@ run(process.execPath, [resolve(repoRoot, "examples/export-frontstage-share-bundl
 if (await readFile(resolve(siteDir, "index.html"), "utf8") !== originalHomepage) throw new Error("case restore replaced the homepage");
 assertExists(resolve(siteDir, "docs/showcases/showcase-catalog.json"));
 const restoredCase = await readFile(resolve(siteDir, "docs/showcases/cases/0619-loopx-self-iteration.en.html"), "utf8");
-if (!restoredCase.includes("https://github.com/huangruiteng/loopx/blob/main/docs/showcases/cases/0619-loopx-self-iteration.md")) {
+if (!restoredCase.includes("https://github.com/loopx-project/loopx/blob/main/docs/showcases/cases/0619-loopx-self-iteration.md")) {
   throw new Error("case narrative source must not point to an unshipped Markdown URL");
 }
 

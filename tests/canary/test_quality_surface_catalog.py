@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,21 @@ from loopx.canary.quality_surface_catalog import (
     QUALITY_SURFACE_CATALOG,
     build_quality_surface_catalog_audit,
 )
+
+
+def test_canary_python_script_checks_exist() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    profiles = canary_planner.build_catalog_canary_profiles()
+    assert profiles["ok"] is True
+    checks = [check for profile in profiles["profiles"] for check in profile["candidate_checks"]]
+    checks.extend(check for profile in profiles["domain_profiles"] for check in profile["checks"])
+    missing = []
+    for check in checks:
+        args = shlex.split(check["command"])
+        if len(args) > 1 and args[0] in {"python", "python3"} and args[1].endswith(".py"):
+            if not (repo_root / args[1]).is_file():
+                missing.append(check["command"])
+    assert not missing, f"Canary scripts missing: {missing}"
 
 
 def test_current_high_risk_surfaces_have_no_catalog_drift() -> None:

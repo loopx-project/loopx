@@ -5,18 +5,17 @@ import argparse
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from ..control_plane.effect_runtime import EffectRuntimeRejected
-from ..control_plane.quota.turn_envelope import build_turn_envelope, project_captured_replan_cli_view
+from ..control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
 from ..control_plane.scheduler.execution_context import SchedulerExecutionContextResolution
 
 
-def _compose_explicit_turn_context(payload: dict[str, object], args: argparse.Namespace, *,
+def compose_quota_work_contract(payload: dict[str, object], args: argparse.Namespace, *,
                                    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
                                    capture_directory: Path | None,
                                    native_context: bool,
                                    record_capture: Callable[[dict[str, object], str], None] | None = None) -> dict[str, object]:
-    """Select the existing complete source before capture, preserving a failed guard."""
-    if not getattr(args, "complete_turn", False) or not isinstance(payload.get("interaction_contract"), Mapping):
+    """Compose every decided should-run source once before capture and display."""
+    if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
         return payload
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError
@@ -111,17 +110,15 @@ def _quota_renderer(
         render_quota_markdown,
         render_quota_scheduler_ack_markdown,
         render_quota_scheduler_failure_markdown,
-        render_quota_should_run_markdown,
     )
     from ..presentation.renderers.turn_envelope_markdown import (
-        render_turn_envelope_markdown,
+        render_turn_context_markdown,
     )
 
     command = args.quota_command
-    if not failure and bool(getattr(args, "turn_envelope", False)):
-        return render_turn_envelope_markdown
+    if command == "should-run":
+        return render_turn_context_markdown
     return {
-        "should-run": render_quota_should_run_markdown,
         "monitor-poll": render_quota_monitor_poll_markdown,
         "scheduler-ack": render_quota_scheduler_ack_markdown,
         "scheduler-ack-current": render_quota_scheduler_ack_markdown,
@@ -148,15 +145,13 @@ def _project_quota_cli_payload(
     from ..control_plane.quota.cli_projection import (
         compact_quota_monitor_poll_cli_payload,
         compact_quota_plan_cli_payload,
-        compact_quota_should_run_cli_payload,
     )
 
     reject_retired_quota_format(payload)
-    if getattr(args, "complete_turn", False) and payload.get("schema_version") == "loopx_turn_envelope_v1":
+    if payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
         return payload
     if payload.get("ok") is False and not isinstance(payload.get("interaction_contract"), Mapping):
-        if (not bool(getattr(args, "turn_envelope", False))
-                and getattr(args, "quota_command", None) == "monitor-poll"
+        if (getattr(args, "quota_command", None) == "monitor-poll"
                 and isinstance(payload.get("before"), Mapping)):
             # A refused poll still has its decided before snapshot. Its
             # existing compaction is pure and does not reenter the runtime.
@@ -166,34 +161,11 @@ def _project_quota_cli_payload(
         # A collection failure has no decided contract and must not reenter
         # its unavailable runtime. Decided refusals still need signed views.
         # Keep the decided diagnostic, including its original recovery/receipt.
-        if bool(getattr(args, "turn_envelope", False)):
-            return {**payload, "turn_envelope_skipped": "quota request failed; original diagnostic retained"}
         return payload
-    if not bool(getattr(args, "turn_envelope", False)):
-        if args.quota_command in {"status", "plan"}:
-            return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
-        if args.quota_command == "should-run":
-            if captured_decision_path and "vision" not in detail_sections:
-                payload = project_captured_replan_cli_view(payload)
-            return compact_quota_should_run_cli_payload(
-                payload,
-                include_todo_summary_detail="agent-todos" in detail_sections,
-                include_user_todo_summary_detail="user-todos" in detail_sections,
-                include_goal_boundary_detail="goal-boundary" in detail_sections,
-                include_vision_detail="vision" in detail_sections,
-            )
-        if args.quota_command == "monitor-poll":
-            return compact_quota_monitor_poll_cli_payload(
-                payload, include_decision_detail="decisions" in detail_sections,
-            )
-        return payload
-    try:
-        return build_turn_envelope(
-            payload,
-            scheduler_execution_context=scheduler_context,
-            captured_decision_path=captured_decision_path,
+    if args.quota_command in {"status", "plan"}:
+        return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
+    if args.quota_command == "monitor-poll":
+        return compact_quota_monitor_poll_cli_payload(
+            payload, include_decision_detail="decisions" in detail_sections,
         )
-    except EffectRuntimeRejected as envelope_error:
-        degraded = dict(payload)
-        degraded["turn_envelope_skipped"] = str(envelope_error)[:200]
-        return degraded
+    return payload
