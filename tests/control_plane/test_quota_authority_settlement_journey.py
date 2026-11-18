@@ -4,6 +4,7 @@ from __future__ import annotations
 from canonical_authority_fixture import assert_todo_read_unchanged
 
 import json
+import os
 import shlex
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -355,7 +356,13 @@ def _workspace_repair_source(tmp_path, provider, goal_scopes=None, todo_scopes=N
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, provider):
+@pytest.mark.parametrize("native", [
+    pytest.param(False, id="stateless"),
+    pytest.param(True, id="native", marks=pytest.mark.skipif(
+        os.name != "posix", reason="Native session continuity uses a private POSIX journal",
+    )),
+])
+def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, monkeypatch, provider, native):
     goal_path = "/goal_boundary/write_scope"
     todo_path = "/selected_todo/required_write_scopes"
     goal_scopes = ["src/**"] + [f"docs/area-{i:03d}/reference/specifications/**" for i in range(300)]
@@ -371,13 +378,26 @@ def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, pro
     repair_action = plain["interaction_contract"]["agent_channel"]["primary_action"]
     captures = tmp_path / "captures"
     captures.mkdir(mode=0o700)
+    context_args = ["--codex-context-root", str(captures)]
+    if native:
+        from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+        journal = tmp_path / "native"
+        journal.mkdir(mode=0o700)
+        session_id = "workspace-repair-native"
+        monkeypatch.setenv("CODEX_THREAD_ID", session_id)
+        assert codex_context_hook(str(journal), {"session_id": session_id, "cwd": str(project),
+            "hook_event_name": "SessionStart", "source": "startup"}) == {}
+        context_args = ["--codex-context-dir", str(journal)]
     code, view = cli._run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
-        "--turn-instance-id", turn, "--context-delivery", "on", "--delta-delivery", "off",
-        "--decision-output-root", str(captures), "--codex-context-root", str(captures), cwd=project,
+        "--turn-instance-id", turn, "--context-delivery", "on", "--delta-delivery", "auto" if native else "off",
+        "--decision-output-root", str(captures), *context_args, cwd=project,
     )
     assert code == 0 and view["ok"], view
+    if native:
+        assert json.loads((journal / "session.json").read_bytes())["recovery"]
 
     def selection(command):
         parts = bytearray()
@@ -409,11 +429,16 @@ def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, pro
     assert goal_path not in initial and todo_path not in initial
     assert initial["/goal_boundary/write_scope_pointer"] == goal_path
     detail = initial["/context_details/unread_context_index/source"]
-    _, exact = selection(
-        "quota context-read "
-        f"--capture-file {shlex.quote(detail['path'])} --capture-sha256 {detail['sha256']} "
-        f"--select {goal_path} --select {todo_path}"
-    )
+    template = shlex.split(initial["/context_details/command_template"])
+    delivered_reader = shlex.split(view["recovery"]["command"])
+    assert template[-2:] == ["--select", "<pointer>"]
+    assert template[:template.index("--format")] == delivered_reader[:delivered_reader.index("--format")]
+    assert template[template.index("--capture-file") + 1] == detail["path"]
+    assert template[template.index("--capture-sha256") + 1] == detail["sha256"]
+    code, rejected = cli._run_cli(registry, runtime, *delivered_reader[delivered_reader.index("quota"):],
+        "--select", goal_path, cwd=project)
+    assert code != 0 and rejected["diagnostic_code"] == "context_selection_missing_pointer"
+    _, exact = selection(shlex.join([*template[:-1], goal_path, "--select", todo_path]))
     assert exact[goal_path] == goal_scopes and exact[todo_path] == todo_scopes
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
 
