@@ -2,6 +2,7 @@
 
 Run after npm ci in apps/workbench: npm run test:loopx -w @calli/e2e.
 """
+import importlib
 import json
 from pathlib import Path
 import subprocess
@@ -9,12 +10,15 @@ import sys
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[5]
-sys.path.insert(0, str(ROOT / "tests/control_plane"))
-from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.control_plane.projects.registry_codec import (
     CURRENT_WRITER_PROTOCOL, _ProjectRegistryFormat, _encode_document,
 )
+
+ROOT = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(ROOT / "tests/control_plane"))
+_authority_fixture = importlib.import_module("canonical_authority_fixture")
+isolate_sqlite_runtime = _authority_fixture.isolate_sqlite_runtime
+promoted_create_fixture = _authority_fixture.promoted_create_fixture
 
 
 @pytest.fixture(params=["file", "sqlite"], scope="module")

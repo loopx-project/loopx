@@ -1,5 +1,6 @@
 """Real Core CLI/server + packaged Workbench + a replaceable model backend."""
 import hashlib
+import importlib
 import json
 from pathlib import Path
 import select
@@ -8,10 +9,11 @@ import subprocess
 import sys
 import time
 
+from loopx.control_plane.effect_runtime import restart_effect_runtime
+
 ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(ROOT / "tests/control_plane"))
-from canonical_authority_fixture import isolate_sqlite_runtime
-from loopx.control_plane.effect_runtime import restart_effect_runtime
+isolate_sqlite_runtime = importlib.import_module("canonical_authority_fixture").isolate_sqlite_runtime
 
 
 def test_packaged_goal_creation_interruption_and_readback(tmp_path, monkeypatch):
