@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -401,6 +403,111 @@ def test_same_second_candidate_keeps_the_todo_bound_writeback_order() -> None:
         runs=[sparse_run],
     )
     assert "writeback_recorded_at" not in blank
+
+
+def test_exact_goal_instance_same_second_ack_uses_its_own_writeback(tmp_path: Path) -> None:
+    """Two instances can mint one obligation id and reuse the ACK Turn.
+
+    The exact owner records its same-second ACK only from its own refresh.
+    A retired instance's earlier refresh, and an alias row with no GoalRef,
+    stay out of that order.
+    """
+    from loopx.control_plane.work_items.autonomous_replan_ack import (
+        load_receipt_replan_ack_candidates,
+    )
+    from loopx.control_plane.work_items.autonomous_replan_obligation import (
+        ensure_replan_novelty_policy,
+    )
+    from loopx.control_plane.work_items.replan_semantics_codec import (
+        project_replan_semantics,
+    )
+    from loopx.rollout_event_log import build_rollout_event
+
+    obligation_source = {
+        "schema_version": "autonomous_replan_obligation_v0",
+        "agent_id": AGENT_ID,
+        "frontier_identity": "shared-frontier",
+        "triggers": [{"kind": "long_todo_chain", "frontier_revision": LONG_CHAIN_REVISION}],
+    }
+    obligation = ensure_replan_novelty_policy(dict(obligation_source))["obligation_id"]
+    assert obligation == ensure_replan_novelty_policy({
+        **obligation_source, "goal_instance_id": "ginst_" + "b" * 32,
+    })["obligation_id"]
+    current = {"goal_id": GOAL_ID, "goal_instance_id": "ginst_" + "b" * 32}
+    retired = {"goal_id": GOAL_ID, "goal_instance_id": "ginst_" + "a" * 32}
+    guard_turn = "guided-start:original"
+    ack_turn = "guided-start:later"
+    admitted_at = "2026-08-01T00:00:01.500000Z"
+    runtime = tmp_path
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index_path.parent.mkdir(parents=True)
+
+    def ack_run(goal_ref: dict[str, str], generated_at: str, outcome: str) -> dict[str, Any]:
+        return {
+            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "turn_instance_id": ack_turn,
+            "generated_at": generated_at, "goal_ref": goal_ref,
+            "autonomous_replan_ack": {
+                "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+                "source": "refresh_state",
+                "semantic_delta": {
+                    "schema_version": "replan_semantic_delta_v0", "accepted": True,
+                    "obligation_id": obligation, "outcomes": [outcome],
+                    "satisfying_outcomes": [outcome],
+                },
+            },
+        }
+
+    index_path.write_text("".join(json.dumps(row) + "\n" for row in (
+        ack_run(current, "2026-08-01T00:00:01Z", FRESH_VISION_PATH_OUTCOME),
+        ack_run(retired, "2026-08-01T00:00:03Z", "new_surface"),
+    )), encoding="utf-8")
+    refresh = {
+        "autonomous_replan_recorded": True, "replan_obligation_id": obligation,
+    }
+    events = [
+        build_rollout_event(
+            goal_id=GOAL_ID, event_kind="refresh_state", agent_id=AGENT_ID,
+            run_id=ack_turn, recorded_at="2026-08-01T00:00:00.100000Z", details=refresh,
+        ),
+        build_rollout_event(
+            goal_id=GOAL_ID, event_kind="refresh_state", goal_ref=retired,
+            agent_id=AGENT_ID, run_id=ack_turn, recorded_at="2026-08-01T00:00:00.200000Z",
+            details=refresh,
+        ),
+        build_rollout_event(
+            goal_id=GOAL_ID, event_kind="quota_should_run", goal_ref=current,
+            agent_id=AGENT_ID, run_id=guard_turn, recorded_at=admitted_at,
+        ),
+        build_rollout_event(
+            goal_id=GOAL_ID, event_kind="refresh_state", goal_ref=current,
+            agent_id=AGENT_ID, run_id=ack_turn, recorded_at="2026-08-01T00:00:01.900000Z",
+            details=refresh,
+        ),
+    ]
+    log_path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+    def decision_for(goal_ref: dict[str, str] | None) -> dict[str, Any]:
+        candidates = load_receipt_replan_ack_candidates(
+            runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, obligation_id=obligation,
+            guard_recorded_at=admitted_at, guard_turn_instance_id=guard_turn,
+            goal_ref=goal_ref,
+        )
+        return project_replan_semantics({
+            "operation": "receipt_bound_obligation", "guard_scoped": True,
+            "replay_phase": "open", "selected_obligation_id": obligation,
+            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "guard_recorded_at": admitted_at,
+            "guard_turn_instance_id": guard_turn, "current_obligation": None,
+            "transition_candidates": [
+                {"historical_ack": candidate} for candidate in candidates
+            ],
+        })
+
+    packet = decision_for(current)["obligation"]["settlement_action_packet"]
+    assert packet["decision"] == "historical_ack_recorded"
+    assert packet["semantic_delta"]["outcomes"] == [FRESH_VISION_PATH_OUTCOME]
+    with pytest.raises(Exception, match="conflicts with the current autonomous replan"):
+        decision_for(None)
 
 
 def test_same_turn_receipt_upgrade_keeps_writeback_after_original_admission() -> None:

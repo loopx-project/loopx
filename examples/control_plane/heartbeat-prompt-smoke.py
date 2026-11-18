@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -46,10 +47,13 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
     if mode == "compact":
         policy_start = body.index("Output policy:") + len("Output policy:")
         policy_end = body.index("If `should_run=false`:", policy_start)
-        policy = {}
-        for item in body[policy_start:policy_end].strip(" .").split(";"):
-            key, value = item.strip().split("=", maxsplit=1)
-            policy[key] = value.strip("`")
+        segment = body[policy_start:policy_end]
+        assert (
+            "DONT_NOTIFY: no chat text. "
+            "Return any required host quiet result in full."
+        ) in segment, body
+        policy = dict(re.findall(r"(\w+)=`([^`]*)`", segment))
+        policy.setdefault("quiet", "DONT_NOTIFY")
         return policy
     if mode == "full":
         assert "`interaction_contract.user_channel.notify` controls output" in body
@@ -66,7 +70,7 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
         )
     else:
         assert "`user_channel.notify` controls OUTPUT only" in body
-        assert "NOTIFY=show; DONT_NOTIFY=no output" in body
+        assert "NOTIFY=show; DONT_NOTIFY: no chat text. Return any required host quiet result in full" in body
         assert "Due/peer work is not a user prompt" in body
         assert "Missing NOTIFY action:" in body
         assert "user Todo unprojected" in body
@@ -102,7 +106,8 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     if mode == "compact":
         assert (
             "Only under `NOTIFY`, `state=operator_gate`/"
-            "`notify_user_on_open_todo=true` permit concrete blocker-push; else quiet."
+            "`notify_user_on_open_todo=true` permit concrete blocker-push. "
+            "Honor repeat/cooldown."
         ) in body, body
         assert "Follow the output policy above." in body
         return
@@ -114,7 +119,7 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     assert mode == "thin", mode
     assert (
         "`user_channel.notify` controls OUTPUT only: NOTIFY=show; "
-        "DONT_NOTIFY=no output."
+        "DONT_NOTIFY: no chat text. Return any required host quiet result in full."
     ) in body
 
 
@@ -459,8 +464,8 @@ def main() -> int:
     assert "`state=operator_gate` / `notify_user_on_open_todo=true` /" not in compact_task
     assert (
         "Only under `NOTIFY`, `state=operator_gate`/"
-        "`notify_user_on_open_todo=true` permit concrete blocker-push; "
-        "else quiet."
+        "`notify_user_on_open_todo=true` permit concrete blocker-push. "
+        "Honor repeat/cooldown."
     ) in compact_task
     for phrase in (
         "Detail:",
@@ -468,9 +473,9 @@ def main() -> int:
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "state=operator_gate",
         "notify_user_on_open_todo=true",
-        "external=`NOTIFY`; quiet=`DONT_NOTIFY`",
+        "external=`NOTIFY`; quiet_missing_action=`internal_repair`",
         "concrete blocker-push",
-        "else quiet",
+        "Honor repeat/cooldown",
         "safe_bypass_allowed=true",
         "safe_bypass_kind=outcome_floor_recovery",
         "receipts do not self-stop",
@@ -588,7 +593,7 @@ def main() -> int:
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run '
         "--goal-id loopx-meta --agent-id codex-product-capability --available-capability network "
         "--available-capability external_evidence_poll",
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY: no chat text. Return any required host quiet result in full",
         "Due/peer work is not a user prompt",
         "Missing NOTIFY action:",
         "user Todo unprojected",
@@ -645,7 +650,7 @@ def main() -> int:
         "loopx heartbeat-prompt --compact --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
         "Run assignment and guard as separate statements in one shell",
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY: no chat text. Return any required host quiet result in full",
         "Due/peer work is not a user prompt",
         "Todo done≠Turn settled",
         "Missing NOTIFY action:",
@@ -692,7 +697,7 @@ def main() -> int:
         "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
         "use selection_command when required",
         "quota should-run",
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY: no chat text. Return any required host quiet result in full",
         "Due/peer work is not a user prompt",
         "Missing NOTIFY action:",
         "user Todo unprojected",

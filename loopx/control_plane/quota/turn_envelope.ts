@@ -2343,12 +2343,14 @@ function admittedTurnRoute(
 const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
   "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
   "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
-  "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+  "execution_obligation", "workspace_guard", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
 
 /** The read-only plan needs the current decision and executable authoring
  * guidance. Evidence and diagnostics remain in its exact source capture. */
 function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" | "replan_required"): string[][] {
-  const paths = INITIAL_CONTEXT_DECISION_FIELDS.filter(field => field !== "schema_version").map(field => [field]);
+  const paths = INITIAL_CONTEXT_DECISION_FIELDS
+    .filter(field => field !== "schema_version" && (field !== "workspace_guard" || Object.hasOwn(decision, "workspace_guard")))
+    .map(field => [field]);
   for (const field of ["agent_identity", "decision", "recommended_action", "execution_preparation", "requires_user_action",
     "action_portfolio", "delivery_workspace_isolation", "replan_action_packet"])
     paths.push([field]);

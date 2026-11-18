@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction
+from ..agents.workspace_guard import workspace_guard_missing_task_repository
 from ..quota.effective_action import EffectiveAction
 
 
@@ -19,6 +21,7 @@ def build_execution_obligation(
     user_gate_owns_frontier: bool = False,
     successor_replan_mode: str = SUCCESSOR_REPLAN_REQUIRED_MODE,
     blocked_retry_wait: dict[str, Any] | None = None,
+    workspace_guard: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Separate the worker execution contract from user-facing notification."""
 
@@ -30,6 +33,17 @@ def build_execution_obligation(
         else {}
     )
     if should_run and recommended_mode == "repair_agent_workspace":
+        contract_obligation = (
+            str(workspace_guard["required_action"])
+            if workspace_guard_missing_task_repository(workspace_guard)
+            and isinstance(workspace_guard, Mapping)
+            and isinstance(workspace_guard.get("required_action"), str)
+            else (
+                "do not edit repository files from a shared checkout; "
+                "create or switch to an independent worktree/branch, then rerun "
+                "quota should-run with the same agent id"
+            )
+        )
         return {
             "must_attempt_work": True,
             "kind": "agent_workspace_repair",
@@ -37,11 +51,7 @@ def build_execution_obligation(
             "delivery_allowed": False,
             "notify_is_execution_gate": False,
             "contract": "agent_workspace_guard",
-            "contract_obligation": (
-                "do not edit repository files from a shared checkout; "
-                "create or switch to an independent worktree/branch, then rerun "
-                "quota should-run with the same agent id"
-            ),
+            "contract_obligation": contract_obligation,
             "spend_policy": heartbeat_recommendation.get("spend_policy"),
             "reason": (
                 "peer delivery includes repository writes while the current workspace "

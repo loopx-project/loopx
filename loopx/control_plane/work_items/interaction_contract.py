@@ -17,7 +17,10 @@ from ...install_contract import render_host_cli_command
 
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction, agent_scope_frontier_action as _agent_scope_frontier_action
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
-from ..agents.workspace_guard import delivery_workspace_refresh_hint
+from ..agents.workspace_guard import (
+    delivery_workspace_refresh_hint,
+    workspace_guard_missing_task_repository,
+)
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
@@ -1006,6 +1009,30 @@ def _admitted_interaction_next_cli_actions(
             ),
         ]
     if mode == "agent_workspace_repair":
+        guard = payload.get("workspace_guard")
+        if workspace_guard_missing_task_repository(
+            guard if isinstance(guard, Mapping) else None
+        ):
+            selected_todo = payload.get("selected_todo")
+            selected_todo_id = (
+                normalize_todo_id(selected_todo.get("todo_id"))
+                if isinstance(selected_todo, Mapping)
+                else None
+            )
+            todo_arg = (
+                f" --todo-id {shlex.quote(selected_todo_id)}"
+                if selected_todo_id
+                else ""
+            )
+            return [
+                (
+                    f"if this Todo targets the current repository: {command_prefix} todo update "
+                    f"--goal-id {goal_id}{todo_arg}{lifecycle_actor_args} "
+                    "--task-repository <credential-free-git-identity>; otherwise create or switch "
+                    "to an independent worktree of the Goal repository"
+                ),
+                typed_quota_guard,
+            ]
         return [
             "create or switch to an independent git worktree/branch",
             typed_quota_guard,

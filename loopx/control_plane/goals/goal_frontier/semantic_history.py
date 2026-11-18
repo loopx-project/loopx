@@ -232,6 +232,38 @@ def latest_autonomous_replan_ack_from_status_payload(
     )
 
 
+def receipt_bound_replan_ack_history(
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    neutral_classifications: set[str],
+    receipt_bound_replan_obligation_id: str | None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+    """Choose the ACK history a receipt-bound review may use.
+
+    A supplied candidate list is the whole owned history, including when it
+    is empty. Without that list, the status snapshot's newest ACK remains
+    the existing fallback.
+    """
+
+    latest = latest_autonomous_replan_ack_from_status_payload(
+        status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        neutral_classifications=neutral_classifications,
+    )
+    supplied = (
+        status_payload.get("receipt_bound_replan_ack_candidates")
+        if receipt_bound_replan_obligation_id
+        else None
+    )
+    if not isinstance(supplied, list):
+        return latest, None
+    owned = [candidate for candidate in supplied if isinstance(candidate, dict)]
+    return (owned[0] if owned else None), owned
+
+
 def latest_replan_ack_feedback_from_status_payload(
     status_payload: dict[str, Any],
     *,

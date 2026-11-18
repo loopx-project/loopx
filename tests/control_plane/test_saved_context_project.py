@@ -708,7 +708,13 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             assert list(source.parent.parent.glob("*/decision.json")) == [source]
         if placement == "explicit-before-session":
             assert bound["mode"] == "full", bound
-            assert machine_reference_oracle(cold)["recovery"]["sha256"] == hashlib.sha256(raw).hexdigest()
+            cold_source_digest = machine_reference_oracle(cold["navigation"])["capture_sha256"]
+            assert cold_source_digest == hashlib.sha256(raw).hexdigest()
+            rc, original = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(source),
+                "--capture-sha256", cold_source_digest, "--select", "/contract_binding", cwd=project)
+            assert rc == 0 and original["eof"], original
+            [binding] = json.loads(original["content"])["selections"]
+            assert binding["value"] == json.loads(raw)["contract_binding"] == presented["contract_binding"]
             for key in ("first_read_command", "command"):
                 rc, first_page = _run_cli(registry, runtime, *shlex.split(bound[key])[1:], cwd=project)
                 assert rc == 0 and first_page["ok"], first_page
