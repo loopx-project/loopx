@@ -285,15 +285,18 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 不能因为 packet 更小，就认为 executor 已掌握前文。连续性未知时走所属契约的恢复路径。
 Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导。
 
-Standard 有两个可从源码构建的能力 wheel 候选，即
-`loopx-capability-agent-turn-recall` 和 `loopx-capability-pull-request-review`。
-两个能力可分别装入同版本的 Core 环境。Core 与各可选包各自拥有互不重叠的文件，沿用
-既有能力 ID、配置和运行时 owner。独立 provider 包仍按上文公共能力边界接入。
+Standard CLI 装配有三个可从源码构建的能力 wheel 候选，即
+`loopx-capability-agent-turn-recall`、`loopx-capability-pull-request-review`
+和 `loopx-capability-issue-fix`。三个能力可分别装入同版本的 Core 环境。Core 与各可选包
+各自拥有互不重叠的文件，沿用既有能力 ID、配置和运行时 owner。独立 provider 包仍按
+上文公共能力边界接入。
 
-能力发现只读取元数据。Core 可报告召回实现缺失并继续普通任务。安装召回包后按既有
-Goal/Agent 设置显式启用，结果入库继续沿用自身的恢复路径。Core 保留 PR 评审目录与配置。
-显式调用 `pr-review` 时加载匹配的可选包，复用精确 head 队列、操作边界和 checkpoint。
-卸载后，既有设置与 checkpoint 留待日后安装续用。Issue 修复和完整 Standard 预设仍需安装态验收。
+能力发现只读取元数据。安装召回包后按既有 Goal/Agent 设置显式启用，结果入库沿用
+自身的恢复路径。显式调用 `pr-review` 时复用精确 head 队列与 checkpoint。在 Core 装配
+中显式选择 Issue 修复后，才加载相应 workflow 并提供原有候选准入。普通 Core 目标预览
+省去这组专用命令。通用 PR 等待观察和已确认评审的核对留在 Core，只有实际观察或核对时
+才加载公开 PR 生命周期代码。卸载可选包保留既有工作和 checkpoint。完整 Standard
+工作区和拆包发布仍需验收。
 
 可选 observer 消费已提交事件或有界投影。除非现有契约明确要求它的 receipt，
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟

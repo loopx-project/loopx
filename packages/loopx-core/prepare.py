@@ -18,10 +18,19 @@ EXCLUDED_MODULES = {"loopx/cli.py", "loopx/chat.py"}
 SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
 RECALL_DISTRIBUTION = "loopx-capability-agent-turn-recall"
 PR_REVIEW_DISTRIBUTION = "loopx-capability-pull-request-review"
+ISSUE_FIX_DISTRIBUTION = "loopx-capability-issue-fix"
 PR_REVIEW_DIRECTORY = Path("loopx/capabilities/pr_review_queue")
 PR_REVIEW_CORE_FILES = {
     "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
     "order.py", "scheduling.py", "README.md",
+}
+ISSUE_FIX_DIRECTORY = Path("loopx/capabilities/issue_fix")
+# Generic PR dependencies and existing acknowledgements retain their readback
+# and continuation even when the authoring workflow is absent.
+ISSUE_FIX_CORE_FILES = {
+    "__init__.py", "catalog_entry.py", "command_templates.py", "README.md", "README.zh-CN.md",
+    "github_public.py", "metadata_preview.py", "pr_gate_reconcile.py", "pr_lifecycle.py",
+    "pr_lifecycle_rollout.py", "pr_review_ack.py", "pr_wait_hook.py", "pr_wait_reconcile.py",
 }
 CAPABILITY_ENTRY_MODULES = {
     RECALL_DISTRIBUTION: {
@@ -34,20 +43,30 @@ CAPABILITY_ENTRY_MODULES = {
         Path("loopx/pr_review_merge_readiness.py"),
         PR_REVIEW_DIRECTORY / "core.py",
     },
+    ISSUE_FIX_DISTRIBUTION: {
+        ISSUE_FIX_DIRECTORY / name for name in ("cli.py", "candidate_preflight.py", "workflow_plan.py", "acceptance_loop.py")
+    },
 }
+
+
+def _implementation_paths(sources: list[Path], directory: Path, core_files: set[str]) -> set[Path]:
+    return {
+        path for path in sources
+        if path.is_relative_to(directory)
+        and path.relative_to(directory).as_posix() not in core_files
+        and path.suffix in SOURCE_SUFFIXES
+    }
 
 
 def _optional_capability_sources(sources: list[Path]) -> dict[str, set[Path]]:
     tracked = set(sources)
-    review_sources = {
-        path for path in sources
-        if path.is_relative_to(PR_REVIEW_DIRECTORY)
-        and path.relative_to(PR_REVIEW_DIRECTORY).as_posix() not in PR_REVIEW_CORE_FILES
-        and path.suffix in SOURCE_SUFFIXES
-    }
     return {
         RECALL_DISTRIBUTION: tracked & CAPABILITY_ENTRY_MODULES[RECALL_DISTRIBUTION],
-        PR_REVIEW_DISTRIBUTION: review_sources | (tracked & CAPABILITY_ENTRY_MODULES[PR_REVIEW_DISTRIBUTION]),
+        PR_REVIEW_DISTRIBUTION: (
+            _implementation_paths(sources, PR_REVIEW_DIRECTORY, PR_REVIEW_CORE_FILES)
+            | (tracked & CAPABILITY_ENTRY_MODULES[PR_REVIEW_DISTRIBUTION])
+        ),
+        ISSUE_FIX_DISTRIBUTION: _implementation_paths(sources, ISSUE_FIX_DIRECTORY, ISSUE_FIX_CORE_FILES),
     }
 
 

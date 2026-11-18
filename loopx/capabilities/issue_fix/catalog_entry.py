@@ -2,8 +2,45 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...python_install_owner import builtin_capability_installed
 from .command_templates import build_issue_fix_pr_lifecycle_command
 
+
+ISSUE_FIX_DISTRIBUTION = "loopx-capability-issue-fix"
+ISSUE_FIX_INSTALL_HINT = f"Install the matching {ISSUE_FIX_DISTRIBUTION} wheel in this Core environment."
+
+
+def issue_fix_workflow_installed(*, builtin_cli_present: bool | None = None) -> bool:
+    return builtin_capability_installed(
+        ISSUE_FIX_DISTRIBUTION,
+        tuple(f"{__package__}.{name}" for name in ("cli", "candidate_preflight", "workflow_plan", "acceptance_loop")),
+        builtin_cli_present=builtin_cli_present,
+    )
+
+
+# The ordinary CLI continues to expose these compatibility command groups.
+_COMPATIBILITY_COMMANDS = [
+    {
+        "command": "loopx content-ops issue-fix-metadata-preview --url <github-issue-url> --fetch-metadata --format json",
+        "purpose": "Fetch body-free public GitHub issue/PR metadata.",
+        "write_boundary": "read-only external metadata; no issue comment, PR, or todo write",
+    },
+    {
+        "command": "loopx value-connectors github-public-probe --url <github-issue-or-pr-url> --fetch-metadata --format json",
+        "purpose": "Use the compatibility CLI to fetch the issue-fix-owned public GitHub probe packet.",
+        "write_boundary": "public metadata read only; no issue bodies, comments, PRs, account changes, or writes",
+    },
+    {
+        "command": "loopx value-connectors github-reply-monitor --issue-url <github-issue-or-pr-url> --after-comment-url <github-issue-comment-url> --fetch-metadata --format json",
+        "purpose": "Use the compatibility CLI to detect public maintainer replies through the issue-fix provider.",
+        "write_boundary": "public comment metadata read only; no comment bodies, thread bump, or external write",
+    },
+    {
+        "command": "loopx content-ops issue-fix-intake --format json",
+        "purpose": "Project public issue metadata into an issue-fix intake packet.",
+        "write_boundary": "fixture-only; no external read or write",
+    },
+]
 
 ISSUE_FIX_CATALOG_ENTRY: dict[str, Any] = {
     "id": "issue-fix",
@@ -25,26 +62,7 @@ ISSUE_FIX_CATALOG_ENTRY: dict[str, Any] = {
     ),
     "entry_command": "loopx issue-fix workflow-plan --url <github-issue-url> --format json",
     "commands": [
-        {
-            "command": "loopx content-ops issue-fix-metadata-preview --url <github-issue-url> --fetch-metadata --format json",
-            "purpose": "Fetch body-free public GitHub issue/PR metadata.",
-            "write_boundary": "read-only external metadata; no issue comment, PR, or todo write",
-        },
-        {
-            "command": "loopx value-connectors github-public-probe --url <github-issue-or-pr-url> --fetch-metadata --format json",
-            "purpose": "Use the compatibility CLI to fetch the issue-fix-owned public GitHub probe packet.",
-            "write_boundary": "public metadata read only; no issue bodies, comments, PRs, account changes, or writes",
-        },
-        {
-            "command": "loopx value-connectors github-reply-monitor --issue-url <github-issue-or-pr-url> --after-comment-url <github-issue-comment-url> --fetch-metadata --format json",
-            "purpose": "Use the compatibility CLI to detect public maintainer replies through the issue-fix provider.",
-            "write_boundary": "public comment metadata read only; no comment bodies, thread bump, or external write",
-        },
-        {
-            "command": "loopx content-ops issue-fix-intake --format json",
-            "purpose": "Project public issue metadata into an issue-fix intake packet.",
-            "write_boundary": "fixture-only; no external read or write",
-        },
+        *_COMPATIBILITY_COMMANDS,
         {
             "command": "loopx issue-fix workflow-plan --url <github-issue-url> --repo-path <repo> --repository-context-json <context.json> --format json",
             "purpose": "Compose metadata, repository context, intake, feasibility, validation labels, and PR review readiness blockers.",
@@ -270,4 +288,9 @@ ISSUE_FIX_CATALOG_ENTRY: dict[str, Any] = {
         "Exercise route selection and continuation on a public issue-fix pilot, "
         "while keeping external PR/comment actions explicit."
     ),
+}
+
+
+ISSUE_FIX_CORE_CATALOG_ENTRY = ISSUE_FIX_CATALOG_ENTRY | {
+    "commands": ISSUE_FIX_CATALOG_ENTRY["commands"][len(_COMPATIBILITY_COMMANDS):],
 }

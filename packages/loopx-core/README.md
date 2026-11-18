@@ -48,9 +48,11 @@ The installed-only qualification in
 exercises setup, independent result validation, process loss, replay and refusal.
 No model service, credentials or paid task execution is supplied by this wheel.
 
-Goal-start help and preview use issue-fix command metadata without importing
-its execution providers. An explicit `--capability-route issue-fix` retains
-the existing candidate-preflight contract. The installed context qualification
+Ordinary Core goal previews omit Issue Fix command templates. Install the
+[matching workflow wheel](../loopx-capability-issue-fix/README.md) to select
+`--capability-route issue-fix` or run `loopx issue-fix`. Core retains existing
+PR-wait observations, confirmed review reconciliation, and their state.
+The installed context qualification
 in [`test_installed_core_context.py`](../../tests/control_plane/test_installed_core_context.py)
 executes the existing `quota context-project`, `context-read` and `context-hook`
 commands: incomplete delivery cannot establish a baseline, revisions preserve
@@ -69,6 +71,22 @@ Outcome ingest uses its own configuration and recovery path.
 wheel](../loopx-capability-pull-request-review/README.md) is installed. Core
 retains its catalog and settings. The add-on provides the existing `pr-review`
 command on explicit use. Removing it preserves review settings and checkpoints.
+
+### Standard CLI composition
+
+Build the three optional wheels from the same checkout as Core. Set
+`LOOPX_CORE_PYTHON` to the interpreter of that Core environment and install the
+chosen capabilities there. This example installs all three.
+
+```sh
+for capability in agent-turn-recall pull-request-review issue-fix; do
+  distribution="loopx-capability-$capability"
+  python packages/loopx-core/prepare.py --distribution "$distribution" --output "/tmp/$distribution-source"
+  uv build --wheel "/tmp/$distribution-source" --out-dir /tmp/loopx-standard-wheels
+done
+uv pip install --no-index --python "$LOOPX_CORE_PYTHON" /tmp/loopx-standard-wheels/loopx_capability_*.whl
+loopx capability list --format json
+```
 
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary
