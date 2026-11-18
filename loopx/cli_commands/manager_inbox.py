@@ -237,7 +237,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--request-id", help="For read: inspect this exact current or concluded request instead of the pending inbox.")
     parser.add_argument("--attention-only", action="store_true",
-                        help="For read: page through incoming briefs and summaries of delivered partial conclusions.")
+                        help="For read: page through incoming briefs, summaries of partial conclusions and open sent requests.")
     parser.add_argument(
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )

@@ -361,3 +361,58 @@ test("attention pagination retains a delivered remainder outside the compact age
   const exact = (await f.call("receiver_read", {request_id: row.request_id})).result as JsonObject;
   assert.equal((exact.items as JsonObject[])[0].message, row.message);
 });
+
+test("the attention cursor reaches all open sent requests without redelivering a peer result", async t => {
+  const f = fixture(t), operations = join(f.base, "peer-operations", targets.exact);
+  const receiver = join(f.base, "entries", "5ab0deb53efce4b1d0cf830afb67ce662e0e9aff3127e2424a4ce768212b5586");
+  for (const folder of [operations, receiver, join(f.base, "decisions"), join(f.base, "roundtrips")]) {
+    mkdirSync(folder, {recursive: true});
+  }
+  for (let n = 1; n <= 20; n++) f.publish(n);
+  const sent = Array.from({length: 22}, (_, n) => f.row(101 + n, {
+    agent_id: "reviewer", source_kind: "peer", source_agent_id: "worker",
+    brief: {schema_version: "collaboration_brief_v0", purpose: "Independent review",
+      context: "PRIVATE_LONG_SOURCE", constraints: [], inputs: [], acceptance: ["Return findings"], return_requirement: "Reply"},
+  }));
+  for (const row of sent) {
+    writeFileSync(join(receiver, row.request_id + ".json"), JSON.stringify(row));
+    writeFileSync(join(operations, row.request_id + ".json"), JSON.stringify(row));
+  }
+  const {request_id, goal_id, agent_id, source_id} = sent[0];
+  const identity = {request_id, goal_id, agent_id, source_id, goal_ref: ref};
+  writeFileSync(join(f.base, "roundtrips", request_id + ".json"), JSON.stringify(identity));
+  writeFileSync(join(f.base, "decisions", request_id + ".json"), JSON.stringify({...identity, decision: "adopt"}));
+  const replies = join(f.base, "replies", request_id);
+  mkdirSync(replies, {recursive: true});
+  writeFileSync(join(replies, "conclusion.json"), JSON.stringify({...identity, phase: "conclusion",
+    decision: "adopt", text: "Checked result", created_at: "2026-10-19T00:00:00Z"}));
+
+  const open = (await f.call("receiver_read", {attention_only: true, turn_instance_id: "turn-original"})).result as JsonObject;
+  assert.equal((open.items as JsonObject[]).length, 20);
+  assert.deepEqual(open.open_request_summaries, []);
+  assert.ok(open.peer_returns);
+  const originalReceipt = sourceBytes(replies);
+  await assert.rejects(f.call("pending", {cursor: open.next_cursor}), /pending request cursor scope mismatch/);
+  await assert.rejects(f.call("pending", {attention_only: true, cursor: open.next_cursor, agent_id: "other"}),
+    /pending request cursor scope mismatch/);
+
+  const next = await f.call("receiver_read", {attention_only: true, cursor: open.next_cursor, turn_instance_id: "turn-other"});
+  assert.equal(next.outgoing_continuation, true);
+  const second = next.result as JsonObject;
+  assert.equal(second.unavailable_count, 0);
+  assert.equal((second.open_request_summaries as JsonObject[]).length, 20);
+  assert.equal((second.open_request_summaries as JsonObject[])[0].step, "consume_peer_result");
+  assert.deepEqual(second.items, []);
+  assert.equal(second.peer_returns, undefined);
+  writeFileSync(join(operations, "f".repeat(64) + ".json"), "{malformed");
+  const last = (await f.call("receiver_read", {attention_only: true, cursor: second.next_cursor})).result as JsonObject;
+  assert.equal(last.has_more, false);
+  assert.equal(last.next_cursor, null);
+  assert.equal(last.unavailable_count, 1);
+  assert.equal(last.peer_returns, undefined);
+  const summaries = [...second.open_request_summaries as JsonObject[], ...last.open_request_summaries as JsonObject[]];
+  assert.deepEqual(summaries.map(row => row.request_id), sent.map(row => row.request_id));
+  assert.ok(summaries.every(row => row.direction === "outgoing" && row.request_revision === 1));
+  assert.doesNotMatch(JSON.stringify(summaries), /PRIVATE_LONG_SOURCE|Checked result/);
+  assert.deepEqual(sourceBytes(replies), originalReceipt);
+});

@@ -691,6 +691,7 @@ def read_inbox(
         observed_goal_ref = dict(goal_scope.caller_goal_ref or {}) if goal_scope.exact else None
 
     native_continuation = snapshot.get("native_child_continuation") is True
+    outgoing_continuation = snapshot.get("outgoing_continuation") is True
     for child_result in result.get("native_child_results", {}).get("items", []):
         command = [*loopx_cli_argv(), "--registry", str(registry), "--runtime-root", str(root),
                    "--format", "json", "native-child", "acknowledge-result",
@@ -745,7 +746,7 @@ def read_inbox(
             if peer_result.get("result_key"):
                 command.extend(["--result-key", peer_result["result_key"]])
             peer_result["acknowledge_command"] = render_host_cli_command(command)
-    if request_id is None and not native_continuation:
+    if request_id is None and not native_continuation and not outgoing_continuation:
         result["unfinished_delegations"] = final["context"]["unfinished_delegations"]
     result["followthrough"] = (
         "Use each request's receiver_followthrough to reconcile it with actual Core work. "
