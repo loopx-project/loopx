@@ -125,6 +125,34 @@ def test_setup_accepts_the_official_lark_authorization_host() -> None:
     )
 
 
+def test_setup_accepts_the_international_lark_authorization_host() -> None:
+    verification_url = (
+        "https://open.larksuite.com/page/cli?user_code=public-code"
+        "&lpv=1.0.99&ocv=1.0.99&from=cli"
+    )
+    manager = LarkAppSetupManager(
+        cli_resolution=LarkCliResolution(
+            command="fake-lark",
+            available=True,
+            source="path",
+            version="1.0.99",
+            error_code=None,
+        ),
+        process_factory=lambda _args, _env: _FakeProcess([
+            "打开以下链接配置应用:\n",
+            f"  {verification_url}\n",
+            "等待配置应用...\n",
+        ]),
+        profile_verifier=lambda app_ref: app_ref == "loopx-lark-bot",
+    )
+
+    started = manager.start(app_ref="loopx-lark-bot", brand="lark")
+    completed = _wait_for_terminal(manager, started["setup_id"])
+
+    assert completed["status"] == "ready"
+    assert completed["verification_url"] == verification_url
+
+
 def test_cancel_stops_the_registration_process_without_exposing_logs() -> None:
     process = _BlockingProcess()
     manager = LarkAppSetupManager(
