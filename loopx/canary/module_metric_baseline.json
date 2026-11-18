@@ -64,6 +64,11 @@
       "dict_any_count": 0,
       "lines": 2058
     },
+    "loopx/control_plane/agents/agent_lane_recommendation.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 662
+    },
     "loopx/control_plane/agents/agent_scope.py": {
       "any_count": 107,
       "dict_any_count": 0
