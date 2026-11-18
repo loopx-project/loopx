@@ -48,7 +48,11 @@ from ..control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     scheduler_execution_context_for_turn,
 )
-from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
+from ..status import (
+    AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
+    collect_status,
+    external_progress_review_context,
+)
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.work_items.autonomous_replan_obligation import replan_obligation_id_from_packet
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
@@ -192,6 +196,7 @@ def _build_turn_decision(
             # Preserve ordinary Todo decision/context behavior. Only an
             # already bound empty-frontier replan needs this scoped reentry.
             receipt_bound_replan_obligation_id=bound_replan,
+            external_progress_review_loader=external_progress_review_context,
             turn_instance_id=turn_instance_id if bound_replan else None,
             turn_start_hook_dispatch=dict(turn_start_hook_dispatch or {}),
             turn_context_projector=turn_context_projector,
@@ -387,6 +392,7 @@ def current_turn_host_launch_decision(
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
         receipt_bound_todo_id=identity.todo_id or None,
         receipt_bound_replan_obligation_id=identity.replan_obligation_id,
+        external_progress_review_loader=external_progress_review_context,
         turn_instance_id=identity.turn_instance_id,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         workspace_path=Path(args.project).expanduser().resolve(), goal_ref=goal_ref,
@@ -484,6 +490,7 @@ def current_heartbeat_host_launch_decision(
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
         receipt_bound_todo_id=selection.receipt_bound_todo_id,
         receipt_bound_replan_obligation_id=selection.receipt_bound_replan_obligation_id,
+        external_progress_review_loader=external_progress_review_context,
         retained_action_selection_todo_id=selection.retained_todo_id_for_decision,
         turn_instance_id=original_turn, workspace_path=project, goal_ref=goal_ref,
         interaction_projection_hooks=(periodic_report_pending_intent_interaction_hook(

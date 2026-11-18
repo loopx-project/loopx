@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -367,7 +368,11 @@ def execute_quota_should_run(
         todo_id=args.todo_id,
     )
     complete_context = not getattr(args, "scheduler_observation", False)
-    payload = export("build_live_quota_should_run_decision")(
+    decision_builder = partial(
+        export("build_live_quota_should_run_decision"),
+        external_progress_review_loader=export("external_progress_review_context"),
+    )
+    payload = decision_builder(
         status_payload,
         goal_id=args.goal_id,
         agent_id=args.agent_id,
@@ -482,7 +487,7 @@ def execute_quota_should_run(
                 find_monitor_poll_turn=export("find_quota_monitor_poll_turn"),
                 monitor_poll_recorder=export("record_quota_monitor_poll"),
                 status_collector=export("collect_status"),
-                decision_builder=export("build_live_quota_should_run_decision"),
+                decision_builder=decision_builder,
                 host_observation_resolver=export("resolve_codex_app_automation_rrule"),
             )
             execution.heartbeat_receipt_ready = True

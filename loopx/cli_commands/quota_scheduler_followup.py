@@ -26,6 +26,7 @@ from ..control_plane.scheduler.execution_context import (
     resolve_scheduler_execution_context,
 )
 from ..quota import record_quota_scheduler_ack
+from ..status import external_progress_review_context
 from ..upgrade import resolve_codex_app_automation_rrule
 
 
@@ -71,6 +72,7 @@ def _build_scheduler_followup_decision(
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
         receipt_bound_todo_id=receipt_todo_id,
         receipt_bound_replan_obligation_id=receipt_replan_id,
+        external_progress_review_loader=external_progress_review_context,
         turn_instance_id=turn_instance_id,
         interaction_projection_hooks=(
             repository_delivery_interaction_hook(repo_path=Path.cwd()),

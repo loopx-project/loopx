@@ -64,7 +64,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
             "spend_quota_slot",
             "void_quota_slot",
         ),
-        "loopx.status": ("collect_status",),
+        "loopx.status": ("collect_status", "external_progress_review_context"),
         "loopx.upgrade": ("resolve_codex_app_automation_rrule",),
         "loopx.cli_commands.lark_inbox": (
             "build_lark_operator_inbox_urgency_projector",

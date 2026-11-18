@@ -53,6 +53,7 @@ from .unsettled_host_turn import (
 
 HostObservationResolver = Callable[..., Mapping[str, Any]]
 BoundedResearchFrontierProjector = Callable[..., Mapping[str, Any] | None]
+ExternalProgressReviewLoader = Callable[[dict[str, Any], Path], dict[str, Any] | None]
 
 
 def _receipt_bound_guard_fields(
@@ -676,12 +677,10 @@ def _restore_replan_obligation_without_foreign_acks(
     registry_goal: Mapping[str, Any] | None,
     registry_path: Path,
     runtime_root: Path,
+    external_progress_review_loader: ExternalProgressReviewLoader | None,
 ) -> None:
     """Recompute the open review after removing another instance's ACK rows."""
-    from ...status import (
-        autonomous_replan_obligation_from_runs,
-        external_progress_review_context,
-    )
+    from ..status.autonomous_replan_projection import autonomous_replan_obligation_from_runs
     from ..work_items.autonomous_replan_ack import drop_unowned_recorded_replan_acks
     from ..work_items.project_asset import attach_active_state_project_asset_fields
     from ..work_items.replan_history_codec import effective_turn_cadence_context
@@ -739,7 +738,10 @@ def _restore_replan_obligation_without_foreign_acks(
         target.pop("autonomous_replan_ack", None)
     source_goal = dict(registry_goal) if isinstance(registry_goal, Mapping) else {"id": goal_id}
     source_goal.setdefault("id", goal_id)
-    review = external_progress_review_context(source_goal, runtime_root)
+    review = (
+        external_progress_review_loader(source_goal, runtime_root)
+        if external_progress_review_loader is not None else None
+    )
     cadence_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
     attach_active_state_project_asset_fields(
         item, latest_runs=filtered,
@@ -773,6 +775,7 @@ def build_live_quota_should_run_decision(
     | None = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     bounded_research_frontier_projector: BoundedResearchFrontierProjector | None = None,
+    external_progress_review_loader: ExternalProgressReviewLoader | None = None,
     receipt_bound_todo_id: str | None = None,
     requested_action_todo_id: str | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
@@ -894,6 +897,7 @@ def build_live_quota_should_run_decision(
         _restore_replan_obligation_without_foreign_acks(
             decision_status_payload, goal_id=goal_id, agent_id=agent_id, goal_ref=goal_ref,
             registry_goal=registered_goal, registry_path=registry_path, runtime_root=runtime_root,
+            external_progress_review_loader=external_progress_review_loader,
         )
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
