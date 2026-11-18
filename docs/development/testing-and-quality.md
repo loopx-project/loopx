@@ -2301,8 +2301,9 @@ explicit release qualification. It defaults to no calls; missing credentials
 report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
 Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
 quiet-wait, required-vision-replan and typed external-wait fallback cases in
-each mode. The fallback case uses the real compact quota projection: its wait
-transition already exists, so the host must advance the selected independent
+each mode. The fallback case composes the complete quota source through the
+shared TypeScript owner and reuses that checked instance in both modes. Its
+wait transition already exists, so the host must advance the selected independent
 successor and notify rather than authoring another transition. Expected
 decisions remain outside model input. All attempts must pass; no answer
 correction or retry-until-pass is used. Ordinary pytest only checks the probe
@@ -2313,8 +2314,9 @@ as separate evidence. Only hashes and pass/fail receipts are emitted, not raw
 prompts/responses. Model transport failures fail qualification rather than
 becoming environment skips.
 
-仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
-vision replan 未关闭时不能提前结束 Goal；
+回退场景使用完整 C1 来源，thin 与 brief 每批共享同一份已检查契约；原四个小型
+决策对照仍为合成输入。仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
+vision replan 未关闭时不能提前结束 Goal；这不是完整 Claude/Codex 行为验收的替代。
 
 ```bash
 # No provider call by default. Explicit release opt-in uses ARK_API_KEY from the environment.
