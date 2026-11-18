@@ -108,6 +108,11 @@
       "any_count": 11,
       "dict_any_count": 0
     },
+    "loopx/state_projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 795
+    },
     "loopx/state_refresh.py": {
       "any_count": 30,
       "dict_any_count": 0
