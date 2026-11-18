@@ -4,22 +4,27 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from ...capabilities.manager_context import authority
 from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
+from ...chat_store import _atomic_write_json
 from ...file_lock import exclusive_file_lock
 from .conversation_identity import identity_ref
 from .event_inbox import _load_processed, load_lark_event_inbox_config
 from .goal_channel_contracts import bindings_for_goal
 from .goal_channel_targets import goal_channel_target_for_name
+from .goal_channel_transport import json_payload
 from .goal_topic_runtime import _inbox_config
+from .identity_shapes import LARK_MESSAGE_ID_PATTERN
 from .inbox_reply import (
-    CommandRunner, _bot_identity_verified, _default_runner, _verified_reply_result,
+    CommandRunner, _bot_identity_verified, _call, _default_runner, _message, _verified_reply_result,
     reply_lark_event_inbox, verify_lark_inbox_reply,
 )
 from .manager_routing import authorized_manager_goal_ids
 from .outbound import present_lark_conversation_text
+from .post_delivery import attachment_reply
 from .return_files import uploaded_result_files, verify_result_files
 
 if TYPE_CHECKING:
@@ -136,6 +141,72 @@ def _private_return_authority(
     return private_transport
 
 
+def _private_message_link(link: object, chat_id: str) -> bool:
+    return isinstance(link, str) and re.fullmatch(
+        r"https://applink\.(?:feishu\.cn|larksuite\.com)/client/chat/open"
+        r"\?openChatId=" + re.escape(chat_id) + r"&position=[0-9]+", link,
+    ) is not None
+
+
+def _app_mirror_text(message: PayloadView, phase: PayloadView, chat_id: str) -> str:
+    user_input = message["role"] == "user"
+    speaker = "你" if user_input else "LoopX"
+    text = _str_field(message, "text")
+    link = phase.get("question_link")
+    if link is not None:
+        if user_input or not _private_message_link(link, chat_id):
+            raise ValueError("App mirror question link changed")
+        text = f"[查看对应提问]({link})\n\n{text}"
+    return f"**{speaker}（App）**\n\n{text}"
+
+
+def prepare_app_mirror_text(
+    transport: _PrivateTransport, path: Path, row: Payload, messages: Sequence[PayloadView], message: PayloadView,
+) -> str:
+    """Attach a provider-supplied link before the first answer attempt."""
+    deliveries = cast(dict[str, Payload], row["deliveries"])
+    key = "web." + _str_field(message, "message_id")
+    phase = deliveries.get(key, {})
+    chat = _str_field(_mapping(row["event"]), "chat_id")
+    if message["role"] != "user" and not {"question_link", "text", "started", "attempt"}.intersection(phase):
+        inputs = [item for item in messages if item["role"] == "user" and item["turn_id"] == message["turn_id"]]
+        if len(inputs) == 1:
+            original = deliveries.get("web." + _str_field(inputs[0], "message_id"), {})
+            link = _app_input_link(transport, row, original, chat)
+            if link is not None:
+                # Retain the chosen link before provider preflight. Recovery
+                # reproduces the same text even if the link later disappears.
+                phase["question_link"] = link
+                deliveries[key] = phase
+                _atomic_write_json(path, row)
+    return _app_mirror_text(message, phase, chat)
+
+
+def _app_input_link(transport: _PrivateTransport, row: Payload, original: PayloadView, chat: str) -> str | None:
+    if original.get("verified") is not True or not isinstance(original.get("attempt"), Mapping):
+        return None
+    try:
+        _, attempt = cast(Callable[..., tuple[str, object]], attachment_reply)(
+            project=transport.runtime_root, config_path=transport._inbox(row),
+            text=_str_field(original, "text"), attempt=original["attempt"])
+        if not isinstance(attempt, Mapping):
+            return None
+        ref = _str_field(attempt, "message_ref")
+    except (LookupError, OSError, TypeError, ValueError):
+        return None
+    if not LARK_MESSAGE_ID_PATTERN.fullmatch(ref):
+        return None
+    result = _call(transport._reply_runner, ["lark-cli", "--profile", _str_field(row, "profile"),
+        "im", "+messages-mget", "--message-ids", ref, "--as", "bot", "--format", "json", "--no-reactions"])
+    payload = json_payload(result)
+    observed = _message(payload, ref) if result.get("returncode") == 0 and payload.get("ok") is True else None
+    if (observed is None or observed.get("chat_id") != chat or observed.get("deleted") is True
+            or _mapping(observed.get("sender")).get("sender_type") != "app"):
+        return None
+    link = observed.get("message_app_link")
+    return link if isinstance(link, str) and _private_message_link(link, chat) else None
+
+
 def _verify_web_mirror(
     route: PayloadView, session: PayloadView, turn: PayloadView, text: str,
     private_transport: _PrivateTransport, attempt: AttemptRecord | None, record_attempt: AttemptRecorder | None,
@@ -170,7 +241,8 @@ def _verify_web_mirror(
         mirrored = phase.get("attempt")
         if phase.get("verified") is not True or not isinstance(mirrored, dict):
             raise _blocked("initial_delivery_receipt_unavailable", "App mirror remains unverified")
-        expected, phase_text = f"**LoopX（App）**\n\n{_str_field(message, 'text')}", phase.get("text")
+        expected = _app_mirror_text(message, phase, _str_field(_mapping(row["event"]), "chat_id"))
+        phase_text = phase.get("text")
         if (not isinstance(phase_text, str) or phase_text not in (expected, present_lark_conversation_text(expected))
                 or (attempt is not None and dict(attempt) != mirrored)):
             raise ValueError("App mirror intent changed")
