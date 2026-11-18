@@ -991,9 +991,13 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const deferredReentry = hasBoundDatedTodoReentry(context, interaction, plan);
   const turnBindingRequired = cli?.turn_binding_required === true;
   const admissionFields = ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"];
-  if (turnBindingRequired)
+  if (turnBindingRequired) {
     for (const field of ["turn_binding_required", ...admissionFields])
       include("interaction_contract", "cli_channel", field);
+  } else if (context.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    for (const field of admissionFields)
+      include("interaction_contract", "cli_channel", field);
+  }
   const channel = object(interaction.agent_channel);
   // The matching inbox read is already required during explicit Todo selection.
   const selectingBeforeWork = context.ok === true && context.should_run === true &&
