@@ -290,6 +290,8 @@ function receiptRowWithDetails(
   turnId: string,
   agentId = scope.agent_id,
   duplicateAgentIds: readonly string[] = [],
+  eventKind = "quota_should_run",
+  duplicateEventKinds: readonly string[] = [],
 ): string {
   const row = JSON.stringify({
     agent_id: agentId,
@@ -301,7 +303,7 @@ function receiptRowWithDetails(
       turn_instance_id: turnId,
     },
     event_id: `event-${turnId}`,
-    event_kind: "quota_should_run",
+    event_kind: eventKind,
     goal_id: scope.goal_id,
     recorded_at: "2026-08-27T06:30:00Z",
     run_id: turnId,
@@ -309,10 +311,15 @@ function receiptRowWithDetails(
     status: "normal_run",
     summary: `receipt ${turnId}`,
   });
-  if (duplicateAgentIds.length === 0) return row;
+  if (duplicateAgentIds.length === 0 && duplicateEventKinds.length === 0) {
+    return row;
+  }
   const close = row.lastIndexOf("}");
   return row.slice(0, close) +
     duplicateAgentIds.map((value) => `,"agent_id":${JSON.stringify(value)}`).join("") +
+    duplicateEventKinds.map(
+      (value) => `,"event_kind":${JSON.stringify(value)}`,
+    ).join("") +
     row.slice(close);
 }
 
@@ -330,6 +337,8 @@ test("a damaged quote inside details cannot hide a committed successor", async (
     name: string;
     agentId?: string;
     duplicateAgentIds?: readonly string[];
+    eventKind?: string;
+    duplicateEventKinds?: readonly string[];
     stale: boolean;
     at: (line: string) => number;
   }[] = [
@@ -402,15 +411,46 @@ test("a damaged quote inside details cannot hide a committed successor", async (
       stale: true,
       at: (line) => line.lastIndexOf(JSON.stringify("other-agent")) + 1,
     },
+    {
+      // A conclusively foreign Agent settles the row even when another member
+      // carries an unreadable duplicate; uncertainty stays local to its field.
+      name: "foreign agent identity beside unreadable event-kind duplicate",
+      agentId: "other-agent",
+      eventKind: "validation",
+      duplicateEventKinds: ["quota_should_run"],
+      stale: false,
+      at: (line) => line.lastIndexOf('"event_kind":"quota_should_run"') +
+        '"event_kind":"'.length + 1,
+    },
+    {
+      // The same damaged event-kind duplicate beside this scope's readable
+      // Agent could still be a successor, so the old Turn is retired.
+      name: "local agent identity beside unreadable event-kind duplicate",
+      eventKind: "validation",
+      duplicateEventKinds: ["quota_should_run"],
+      stale: true,
+      at: (line) => line.lastIndexOf('"event_kind":"quota_should_run"') +
+        '"event_kind":"'.length + 1,
+    },
+    {
+      // A row whose event kind survives only as damage still keeps the old
+      // Turn retired, but a foreign Agent identity finishes the scope check.
+      name: "foreign agent identity beside unreadable event kind",
+      agentId: "other-agent",
+      stale: false,
+      at: (line) => line.indexOf('"event_kind":"') + '"event_kind":"'.length + 1,
+    },
   ];
   for (const operation of OPERATIONS) {
     await t.test(operation, { timeout: 30_000 }, async (t) => {
-      for (const { name, agentId, duplicateAgentIds, stale, at } of cases) {
+      for (const { name, agentId, duplicateAgentIds, eventKind,
+        duplicateEventKinds, stale, at } of cases) {
         const runtimeRoot = await tempRuntime(t);
         await appendReceipt(runtimeRoot, "turn-followup-1");
         const path = receiptLogPath(runtimeRoot);
         const line = receiptRowWithDetails(
-          "turn-followup-2", agentId, duplicateAgentIds,
+          "turn-followup-2", agentId, duplicateAgentIds, eventKind,
+          duplicateEventKinds,
         );
         const index = at(line);
         assert.ok(index > 0, `${name}: fixture lost its damage point`);

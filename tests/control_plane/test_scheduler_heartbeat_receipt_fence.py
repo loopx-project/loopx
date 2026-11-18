@@ -840,6 +840,82 @@ def test_foreign_duplicate_identity_with_damaged_summary_is_tolerated(
 @pytest.mark.parametrize(
     "command", ["scheduler-ack-current", "scheduler-fail-current"],
 )
+def test_foreign_audit_row_with_damaged_event_kind_is_tolerated(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-foreign-event-kind",
+        scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    code, guard = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--app-automation-current-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--turn-instance-id",
+        "turn-1",
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    foreign = build_rollout_event(
+        goal_id=goal_id,
+        event_kind="validation",
+        agent_id="another-agent",
+        run_id="turn-other",
+        summary="validation audit left by another Agent",
+        details={"quota_command": "should-run"},
+    )
+    # The row keeps a readable foreign event kind while a stray duplicate of
+    # the same member carries an unreadable value; its Agent identity is
+    # complete and clearly outside this scope.
+    line = json.dumps(foreign, sort_keys=True, ensure_ascii=False).encode()
+    close = line.rfind(b"}")
+    line = line[:close] + b',"event_kind": "quota_should_run"' + line[close:]
+    at = line.rfind(b'"quota_should_run"') + 1
+    line = line[:at] + b"\xff" + line[at + 1:]
+    with log_path.open("ab") as handle:
+        handle.write(line + b"\n")
+    before = log_path.read_bytes()
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        "turn-1",
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # A conclusively foreign Agent settles the row even when another member
+    # carries an unreadable duplicate, so the current return must complete.
+    assert code == 0, result
+    assert result["ok"] is True
+    assert result["scheduler_state_mutated"] is True
+    assert log_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
 @pytest.mark.parametrize("damage", ["open", "close", "inside"])
 def test_damaged_detail_quote_still_retires_the_older_turn(
     tmp_path: Path, provider: str, command: str, damage: str
