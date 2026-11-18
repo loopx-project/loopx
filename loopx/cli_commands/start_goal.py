@@ -9,6 +9,7 @@ from pathlib import Path
 from ..bootstrap_command_pack import (
     START_GOAL_CAPABILITY_ROUTES,
     START_GOAL_HOST_SURFACES,
+    GoalCapabilityUnavailable,
     build_start_goal_guided_packet,
     build_start_goal_host_surface_selection_packet,
     render_start_goal_guided_markdown,
@@ -396,8 +397,8 @@ def handle_start_goal_command(
         print_payload(host_surface_mismatch, args.format, _render_start_goal_markdown)
         return 2
     display_name = args.display_name
-    if not args.host_surface:
-        try:
+    try:
+        if not args.host_surface:
             payload = build_start_goal_host_surface_selection_packet(
                 project=Path(args.project),
                 goal_id=args.goal_id,
@@ -413,29 +414,31 @@ def handle_start_goal_command(
                 display_name=display_name,
                 runtime_root_arg=runtime_root_arg,
             )
-        except EffectRuntimeStartupError as exc:
-            payload = _effect_runtime_startup_failure_payload(exc)
-            print_payload(payload, args.format, _render_start_goal_markdown)
-            return 1
+        else:
+            payload = build_start_goal_guided_packet(
+                project=Path(args.project),
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                thread_id=current_host_thread_id(args),
+                new_peer=new_peer,
+                cli_bin=args.cli_bin,
+                host_surface=args.host_surface,
+                goal_text=goal_text,
+                available_capabilities=args.available_capabilities,
+                capability_route=capability_route,
+                fine_grained=fine_grained,
+                include_command_pack_detail=bool(args.include_command_pack_detail),
+                runtime_root_arg=runtime_root_arg,
+                display_name=display_name,
+            )
+    except GoalCapabilityUnavailable as exc:
+        payload = {
+            "ok": False,
+            "schema_version": "loopx_start_goal_guided_v0",
+            "error": str(exc),
+        }
         print_payload(payload, args.format, _render_start_goal_markdown)
-        return 0
-    try:
-        payload = build_start_goal_guided_packet(
-            project=Path(args.project),
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            thread_id=current_host_thread_id(args),
-            new_peer=new_peer,
-            cli_bin=args.cli_bin,
-            host_surface=args.host_surface,
-            goal_text=goal_text,
-            available_capabilities=args.available_capabilities,
-            capability_route=capability_route,
-            fine_grained=fine_grained,
-            include_command_pack_detail=bool(args.include_command_pack_detail),
-            runtime_root_arg=runtime_root_arg,
-            display_name=display_name,
-        )
+        return 2
     except EffectRuntimeStartupError as exc:
         payload = _effect_runtime_startup_failure_payload(exc)
         print_payload(payload, args.format, _render_start_goal_markdown)

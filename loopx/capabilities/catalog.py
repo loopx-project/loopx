@@ -15,7 +15,10 @@ from .change_quality.catalog_entry import CHANGE_QUALITY_CATALOG_ENTRY
 from .pr_review_queue.catalog_entry import (
     PR_REVIEW_CATALOG_ENTRY, PR_REVIEW_INSTALL_HINT, pull_request_review_installed,
 )
-from .issue_fix.catalog_entry import ISSUE_FIX_CATALOG_ENTRY
+from .issue_fix.catalog_entry import (
+    ISSUE_FIX_CATALOG_ENTRY, ISSUE_FIX_CORE_CATALOG_ENTRY, ISSUE_FIX_INSTALL_HINT,
+    issue_fix_workflow_installed,
+)
 from .decision_context.catalog_entry import DECISION_CONTEXT_CATALOG_ENTRY
 from .project_skill_delivery.catalog_entry import PROJECT_SKILL_DELIVERY_CATALOG_ENTRY
 from .material_lifecycle.catalog_entry import MATERIAL_LIFECYCLE_CATALOG_ENTRY
@@ -156,6 +159,11 @@ def _record_for_installed_capability(
     elif record is PR_REVIEW_CATALOG_ENTRY:
         installed = pull_request_review_installed(builtin_cli_present=builtin_cli_present)
         hint = PR_REVIEW_INSTALL_HINT
+    elif record is ISSUE_FIX_CATALOG_ENTRY:
+        installed = issue_fix_workflow_installed(builtin_cli_present=builtin_cli_present)
+        hint = ISSUE_FIX_INSTALL_HINT
+        if not builtin_cli_present:
+            record = ISSUE_FIX_CORE_CATALOG_ENTRY
     else:
         return record
     if installed:

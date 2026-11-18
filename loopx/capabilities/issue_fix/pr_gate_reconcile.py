@@ -12,10 +12,6 @@ from ...control_plane.todos.contract import (
 from ...control_plane.todos.todo_semantics import todo_item_task_class
 from ...control_plane.todos.mutation_api import complete_goal_todo
 from ...control_plane.todos.list_readback import list_goal_todos
-from .pr_lifecycle import (
-    TERMINAL_PR_STATES,
-    build_issue_fix_pr_lifecycle_monitor_packet,
-)
 from .pr_lifecycle_rollout import append_pr_merge_rollout_event
 from .pr_review_ack import (
     load_issue_fix_pr_review_ack_receipts,
@@ -79,6 +75,8 @@ def reconcile_issue_fix_pr_gate(
     execute: bool = False,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
+    from .pr_lifecycle import TERMINAL_PR_STATES, build_issue_fix_pr_lifecycle_monitor_packet
+
     lifecycle = build_issue_fix_pr_lifecycle_monitor_packet(
         url=url,
         provider_payload=provider_payload,
@@ -237,6 +235,8 @@ def reconcile_issue_fix_pr_review(
             "raw_provider_payload_recorded": False,
             "skip_reason": context_status,
         }
+
+    from .pr_lifecycle import TERMINAL_PR_STATES, build_issue_fix_pr_lifecycle_monitor_packet
 
     lifecycle = build_issue_fix_pr_lifecycle_monitor_packet(
         url=url,

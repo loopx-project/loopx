@@ -21,7 +21,6 @@ from ...rollout_event_log import (
     append_rollout_event, build_rollout_event, rollout_event_log_path,
 )
 from ...control_plane.todos.list_readback import list_goal_todos
-from . import pr_lifecycle
 from .pr_lifecycle_rollout import append_pr_merge_rollout_event
 
 
@@ -83,6 +82,8 @@ def _reconcile_locked(
     })
     results: list[dict[str, Any]] = []
     for target in plan["targets"]:
+        from . import pr_lifecycle
+
         reference = {"repo": target["repo"], "number": target["number"]}
         result = {"pr_ref": target["pr_ref"], "todo_ids": target["todo_ids"],
                   "state": "FAILED", "merge_event_recorded": False}

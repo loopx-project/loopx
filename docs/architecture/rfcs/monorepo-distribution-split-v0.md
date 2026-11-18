@@ -450,20 +450,23 @@ packet cannot be treated as proof the executor has the prior context. Recover
 through the owning contract when continuity is unknown. Capability instructions
 are supplied when applicable; authority is never inferred from prompt text.
 
-Standard has two source-built capability wheel candidates,
-`loopx-capability-agent-turn-recall` and `loopx-capability-pull-request-review`.
+The Standard CLI composition has three source-built capability wheel
+candidates, `loopx-capability-agent-turn-recall`,
+`loopx-capability-pull-request-review`, and `loopx-capability-issue-fix`.
 Install each alongside the matching Core release. Core and each add-on own
-disjoint files and keep the existing capability IDs, configuration and runtime
+disjoint files and keep existing capability IDs, configuration and runtime
 owners. Independent provider packages use the public capability boundary above.
 
-Discovery reads metadata without loading either implementation. Core can report
-unavailable recall and continue ordinary work. The existing Goal/Agent opt-in
-loads recall when installed, and outcome ingest retains its own recovery path.
-Core keeps PR review catalog and settings. An explicit `pr-review` invocation
-loads the matching wheel and uses the existing exact-head queue, action boundary
-and checkpoint. Removing the wheel leaves saved settings and checkpoints
-available to a later installation. Issue-fix and the full Standard preset still
-need installation qualification.
+Discovery reads metadata on its own. The existing Goal/Agent opt-in loads
+recall when installed, and outcome ingest retains its own recovery path.
+The `pr-review` command uses its existing exact-head queue and checkpoint.
+An explicit Issue Fix selection in a Core environment loads the matching
+workflow and presents its existing candidate admission. Ordinary Core goal
+previews stay free of its command templates. Generic PR-wait observation and
+previously acknowledged review reconciliation remain in Core, with public PR
+lifecycle code loaded for the selected observation or reconciliation. Existing
+work and checkpoints survive add-on removal. The full Standard workspace and
+published split release still need qualification.
 
 Optional observers consume committed events or bounded projections. Their
 latency must not enter admission/settlement transactions unless the existing

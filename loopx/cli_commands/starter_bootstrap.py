@@ -9,6 +9,8 @@ from ..agent_onboarding import (
     render_agent_onboarding_markdown,
 )
 from ..bootstrap_command_pack import (
+    SCHEMA_VERSION as BOOTSTRAP_COMMAND_PACK_SCHEMA_VERSION,
+    GoalCapabilityUnavailable,
     build_loopx_bootstrap_command_pack,
     render_loopx_bootstrap_command_pack_markdown,
 )
@@ -98,21 +100,33 @@ def handle_loopx_bootstrap_command_pack_command(
     runtime_root_arg: str | None = None,
     explicit_project_registry: Path | None = None,
 ) -> int:
-    payload = build_loopx_bootstrap_command_pack(
-        project=Path(args.project),
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        thread_id=current_host_thread_id(args),
-        new_peer=bool(getattr(args, "new_peer", False)),
-        cli_bin=args.cli_bin,
-        host_surface=args.host_surface,
-        goal_text=args.goal_text,
-        available_capabilities=args.available_capabilities,
-        capability_route=args.capability_route,
-        fine_grained=bool(args.fine_grained),
-        runtime_root_arg=runtime_root_arg,
-        explicit_project_registry=explicit_project_registry,
-    )
+    try:
+        payload = build_loopx_bootstrap_command_pack(
+            project=Path(args.project),
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            thread_id=current_host_thread_id(args),
+            new_peer=bool(getattr(args, "new_peer", False)),
+            cli_bin=args.cli_bin,
+            host_surface=args.host_surface,
+            goal_text=args.goal_text,
+            available_capabilities=args.available_capabilities,
+            capability_route=args.capability_route,
+            fine_grained=bool(args.fine_grained),
+            runtime_root_arg=runtime_root_arg,
+            explicit_project_registry=explicit_project_registry,
+        )
+    except GoalCapabilityUnavailable as exc:
+        payload = {
+            "ok": False,
+            "schema_version": BOOTSTRAP_COMMAND_PACK_SCHEMA_VERSION,
+            "error": str(exc),
+        }
+        if bool(getattr(args, "message_only", False)):
+            print(str(exc))
+        else:
+            print_payload(payload, args.format, lambda value: str(value["error"]))
+        return 2
     if bool(getattr(args, "message_only", False)):
         print(str(payload.get("message") or ""))
         return 0

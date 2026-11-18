@@ -993,6 +993,17 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 		result = handle_agent_turn_recall_command(
 			args, registry_path=registry_path, output_format=output_format, print_payload=print_payload,
 		)
+	elif args.command == "issue-fix":
+		from .capabilities.issue_fix.cli import handle_issue_fix_command
+		from .cli_commands.lark_inbox import build_lark_issue_fix_reviewer_provider_hooks
+
+		result = handle_issue_fix_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			reviewer_provider_hooks_factory=lambda: build_lark_issue_fix_reviewer_provider_hooks(
+				runtime_root_arg=args.runtime_root,
+			),
+			output_format=output_format, print_payload=print_payload,
+		)
 	elif args.command == "pr-review":
 		from .cli_commands.pr_review import handle_pr_review_command
 		from .paths import effective_runtime_root
@@ -1086,7 +1097,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
-	if command in {"agent-turn-recall", "pr-review"} and _standalone_core():
+	if command in {"agent-turn-recall", "pr-review", "issue-fix"} and _standalone_core():
 		parser, subparsers = build_cli_parser()
 		if command == "agent-turn-recall":
 			from .capabilities.agent_turn_recall.catalog_entry import RECALL_INSTALL_HINT, agent_turn_recall_installed
@@ -1094,12 +1105,18 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 			if not agent_turn_recall_installed(builtin_cli_present=False):
 				parser.error(f"agent-turn-recall is unavailable in the standalone core. {RECALL_INSTALL_HINT}")
 			from .capabilities.agent_turn_recall.cli import register_agent_turn_recall_commands as register
-		else:
+		elif command == "pr-review":
 			from .capabilities.pr_review_queue.catalog_entry import PR_REVIEW_INSTALL_HINT, pull_request_review_installed
 
 			if not pull_request_review_installed(builtin_cli_present=False):
 				parser.error(f"pr-review is unavailable in the standalone core. {PR_REVIEW_INSTALL_HINT}")
 			from .cli_commands.pr_review import register_pr_review_command as register
+		else:
+			from .capabilities.issue_fix.catalog_entry import ISSUE_FIX_INSTALL_HINT, issue_fix_workflow_installed
+
+			if not issue_fix_workflow_installed(builtin_cli_present=False):
+				parser.error(f"issue-fix is unavailable in the standalone core. {ISSUE_FIX_INSTALL_HINT}")
+			from .capabilities.issue_fix.cli import register_issue_fix_commands as register
 
 		register(subparsers, add_subcommand_format)
 		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)

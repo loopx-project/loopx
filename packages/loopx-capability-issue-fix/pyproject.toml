@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-capability-issue-fix"
+dynamic = ["version", "dependencies"]
+description = "Built-in issue-fix workflow for a matching LoopX Core installation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+dependencies = {file = "requires-core.txt"}
+
+[tool.setuptools.packages.find]
+include = ["loopx.capabilities.issue_fix"]
+
+[tool.setuptools.package-data]
+"loopx.capabilities.issue_fix" = ["docs/*.md", "docs/protocols/*.md"]
