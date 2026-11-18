@@ -17,7 +17,7 @@ from ..control_plane.coordination.local_authority import (
 )
 from ..control_plane.todos.provider_projection import projection_delivery_requires_ack
 from ..control_plane.work_items.task_lease import lease_is_active
-from .todo_source import ChatTodoSource, ChatTodoSourceChanged, resolve_chat_todo_source
+from .todo_source import ChatTodoSource, ChatTodoSourceChanged, resolve_chat_todo_source, task_start_claim_operation_id
 
 
 def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
@@ -124,6 +124,30 @@ class ChatTodoActionMixin:
             raise ValueError("The original Task Session is ambiguous")
         return (sessions[0] if sessions else None), None
 
+    def _read_confirmed_task(
+        self, proposal_id: str, parameters: dict[str, Any], todo_id: str, steps: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        controller = self.runtime_controller
+        chat = getattr(controller, "store", None) or self.chat_store
+        if chat is None:
+            raise ValueError("Chat Runtime Controller is unavailable")
+        execution = steps.get("execution_started")
+        session, turn = self._read_task_start(
+            chat, goal_id=str(parameters["goal_id"]),
+            agent_id=str(parameters.get("endpoint_id") or parameters["agent_id"]), channel_id=f"task.{todo_id}",
+            client_turn_id=f"task-start-{proposal_id}",
+            checkpoint=execution if execution is not None else steps.get("task_session_opened"),
+        )
+        if execution is not None and (turn is None or turn["turn_id"] != execution.get("turn_id")):
+            raise ValueError("The original Task Turn is unavailable")
+        if turn is not None and turn.get("message") != str(parameters["text"]):
+            raise ValueError("The original Task Turn request changed")
+        return session, turn
+
+    @staticmethod
+    def _task_turn_dispatched(turn: dict[str, Any]) -> bool:
+        return turn.get("status") in TERMINAL_TURN_STATES or bool(turn.get("started_at") or turn.get("upstream_turn_id"))
+
     def _start_confirmed_task(
         self, proposal_id: str, parameters: dict[str, Any], todo_id: str, steps: dict[str, Any],
         *, source: ChatTodoSource, binding: dict[str, Any],
@@ -131,9 +155,6 @@ class ChatTodoActionMixin:
         from ..chat_actions import _opaque
 
         controller = self.runtime_controller
-        chat = getattr(controller, "store", None) or self.chat_store
-        if chat is None:
-            raise ValueError("Chat Runtime Controller is unavailable")
         goal_id = str(parameters["goal_id"])
         owner = str(parameters["agent_id"])
         endpoint = str(parameters.get("endpoint_id") or owner)
@@ -142,22 +163,11 @@ class ChatTodoActionMixin:
         client_turn_id = f"task-start-{proposal_id}"
         opened = steps.get("task_session_opened")
         execution = steps.get("execution_started")
-        session, turn = self._read_task_start(
-            chat, goal_id=goal_id, agent_id=endpoint, channel_id=channel_id,
-            client_turn_id=client_turn_id, checkpoint=execution if execution is not None else opened,
-        )
-        if execution is not None and (turn is None or turn["turn_id"] != execution.get("turn_id")):
-            raise ValueError("The original Task Turn is unavailable")
-        if turn is not None and turn.get("message") != message:
-            raise ValueError("The original Task Turn request changed")
-
+        session, turn = self._read_confirmed_task(proposal_id, parameters, todo_id, steps)
         # An already dispatched or terminal Turn is readback. Only work that
         # still needs dispatch passes through the current Goal and claim gates.
         created = False
-        if turn is None or (
-            turn.get("status") not in TERMINAL_TURN_STATES
-            and not (turn.get("started_at") or turn.get("upstream_turn_id"))
-        ):
+        if turn is None or not self._task_turn_dispatched(turn):
             if controller is None:
                 raise ValueError("Chat Runtime Controller is unavailable")
             if session is not None and session.get("status") == "closed":
@@ -179,7 +189,7 @@ class ChatTodoActionMixin:
             def apply_claim(current_source: ChatTodoSource, revision: str) -> dict[str, Any]:
                 return update_goal_todo(
                     **current_source.writer_scope(), **claim_args,
-                    claim_operation_id=f"chat-task-start:{proposal_id}", dry_run=False,
+                    claim_operation_id=task_start_claim_operation_id(proposal_id), dry_run=False,
                     claim_expected_provider_revision=revision,
                     claim_expected_registry_sha256=binding["registry_sha256"],
                     routing_registry_witness=current_source.routing_registry_witness,

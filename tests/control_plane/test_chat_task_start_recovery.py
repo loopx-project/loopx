@@ -13,10 +13,11 @@ from loopx.capabilities.machine_configuration.builtins import build_builtin_mach
 from loopx.capabilities.machine_configuration.store import configure_machine_configuration
 from loopx.capabilities.native_chat.machine_defaults import CODEX_CHAT_DEFAULTS_SCHEMA_VERSION
 from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+from loopx.chat import apply_todo_review_preview, build_todo_review_preview
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
-from loopx.control_plane.todos.mutation_api import add_goal_todo
+from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 from test_goal_create_completion import preview_goal
 from test_new_goal_storage_defaults import app, environment  # noqa: F401
 
@@ -331,4 +332,84 @@ def test_task_retry_respects_original_turn_and_current_authority(task_start, mon
     calls = [json.loads(line)["method"] for line in capture.read_text().splitlines()]
     assert calls.count("thread/start") == 1
     assert calls.count("turn/start") == (0 if interruption == "accepted-then-stopped" else 1)
+    assert _snapshot(runtime) == before
+
+
+@pytest.mark.parametrize(("task_start", "interruption"), [
+    pytest.param((provider, "soft_claim" if stage == "turn-completed-v23" else "hard_lease"), stage,
+        id=f"{provider}-{stage}")
+    for provider in ("file", "sqlite") for stage in (
+        "claim-committed", "turn-completed", "turn-completed-v23", "claim-missing", "edited-before-claim",
+    )
+], indirect=["task_start"])
+def test_legacy_task_confirmation_recovers_the_original_execution(task_start, environment, interruption):  # noqa: F811
+    actions, post, _, controller, reopen, runtime, capture, example_id = task_start
+    params = actions.load(example_id)["normalized_parameters"]
+    intent = dict(registry_path=controller.registry_path, goal_id=params["goal_id"], text=params["text"])
+    preview = build_todo_review_preview(**intent)
+    proposal = actions.create_preview(
+        action_kind="todo.create", summary=params["text"], normalized_parameters=params,
+        context={"kind": "goal", "goal_id": params["goal_id"]}, expected_state_fingerprint=preview["preview_id"],
+        permission_classification="durable_write", validation_evidence=[], available_transitions=["apply", "cancel"],
+        idempotency_key="legacy-start-appendix",
+    )
+    proposal_id = proposal["proposal_id"]
+    actions.start_apply(proposal_id)
+    receipt = apply_todo_review_preview(**intent, preview_id=preview["preview_id"])["receipt"]
+    todo_id = receipt["todo_id"]
+    actions.save_checkpoint(proposal_id, step="todo_created", receipt={"todo_id": todo_id, "canonical_receipt": receipt})
+    owner = params["agent_id"]
+    completed = interruption.startswith("turn-completed")
+    if interruption == "turn-completed-v23":
+        # 2.3.0 assigned the Todo without a managed claim before submitting its Turn.
+        update_goal_todo(registry_path=controller.registry_path, goal_id=params["goal_id"], todo_id=todo_id,
+            claimed_by=owner, agent_id=owner, authority_reason="owner-confirmed typed Chat action", dry_run=False)
+    elif interruption in {"claim-committed", "turn-completed"}:
+        # The old native claim request had the same operation ID without a reviewed revision.
+        claim = update_goal_todo(registry_path=controller.registry_path, goal_id=params["goal_id"],
+            todo_id=todo_id, agent_id=owner, claimed_by=owner, claim_only=True, manage_execution=True,
+            claim_operation_id=f"chat-task-start:{proposal_id}", dry_run=False)
+        assert claim["status"] == "applied"
+    if completed or interruption == "claim-missing":
+        actions.save_checkpoint(proposal_id, step="todo_assigned", receipt={"todo_id": todo_id, "agent_id": owner})
+    if interruption == "edited-before-claim":
+        update_goal_todo(registry_path=controller.registry_path, goal_id=params["goal_id"],
+            todo_id=todo_id, text="Review a different appendix", agent_id=owner, dry_run=False)
+    if completed:
+        _, _, _, project, _ = environment
+        session, _ = controller.open_session(goal_id=params["goal_id"], agent_id=owner, work_dir=project,
+            objective=params["text"], mode="resume_latest", channel_id=f"task.{todo_id}", agent_goal_id=params["goal_id"])
+        sid = session["session_id"]
+        if interruption != "turn-completed-v23":
+            actions.save_checkpoint(proposal_id, step="task_session_opened", receipt={"session_id": sid})
+        turn, _ = controller.submit_turn(session_id=sid, client_turn_id=f"task-start-{proposal_id}",
+            message=params["text"], work_dir=project, objective=params["text"])
+        identity = {"session_id": sid, "turn_id": turn["turn_id"]}
+        assert controller.wait_for_turn(**identity, timeout_sec=10)["status"] == "completed"
+        actions.save_checkpoint(proposal_id, step="execution_started", receipt=identity)
+        _stop_goal(post)
+    actions.mark_failed(proposal_id, error_code="canonical_action_failed", message="Interrupted before confirmation")
+    before = _snapshot(runtime)
+    chat, controller = reopen()
+    path = f"/api/actions/{proposal_id}/apply"
+
+    code, result = post(path, {})
+    if interruption in {"claim-missing", "edited-before-claim"}:
+        assert code == 409, result
+        assert not capture.exists()
+    else:
+        assert code == 202, result
+        applied = result["proposal"]["receipt"]
+        ids = applied["resource_ids"]
+        assert applied["canonical_receipt"] == receipt and ids["todo_id"] == todo_id
+        resumed = {"session_id": ids["session_id"], "turn_id": ids["turn_id"]}
+        if completed:
+            assert resumed == identity and result["turn"]["created"] is False
+        assert controller.wait_for_turn(**resumed, timeout_sec=10)["status"] == "completed"
+        assert post(path, {})[1]["proposal"]["receipt"] == applied
+        assert [row["session_id"] for row in chat.session_candidates(
+            goal_id=params["goal_id"], agent_id=owner, channel_id=f"task.{todo_id}",
+        )] == [ids["session_id"]]
+        methods = [json.loads(line)["method"] for line in capture.read_text().splitlines()]
+        assert methods.count("thread/start") == methods.count("turn/start") == 1
     assert _snapshot(runtime) == before

@@ -190,12 +190,25 @@ class ChatTodoCreationMixin:
                     assignment = steps.get("todo_assigned")
                     assignment_completed = isinstance(assignment, dict)
                     if isinstance(assignment, dict):
-                        if (start_execution or not agent_id or assignment.get("todo_id") != todo_id
+                        if (not agent_id or assignment.get("todo_id") != todo_id
                                 or assignment.get("agent_id") != str(agent_id)):
                             raise ChatTodoSourceChanged("The saved assignment does not identify this Task and Agent.")
-                    elif agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
-                        raise ChatTodoSourceChanged("The selected Agent is no longer registered for the Goal")
                     authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
+                    if start_execution and agent_id and authority:
+                        # The claim may have landed before its Chat checkpoint. Its
+                        # receipt explains the newer snapshot without authorizing dispatch.
+                        claim_completed = source.has_managed_task_claim(
+                            proposal_id, todo_id, str(agent_id), authority["source_authority"],
+                        )
+                        if assignment_completed and not claim_completed:
+                            # Older releases submitted a Turn after a plain assignment.
+                            # The persisted Turn can establish readback, never a new dispatch.
+                            _, turn = self._read_confirmed_task(proposal_id, parameters, todo_id, steps)
+                            if turn is None or not self._task_turn_dispatched(turn):
+                                raise ChatTodoSourceChanged("The saved Task start claim is unavailable.")
+                        assignment_completed = assignment_completed or claim_completed
+                    if not assignment_completed and agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
+                        raise ChatTodoSourceChanged("The selected Agent is no longer registered for the Goal")
                     binding = source.recover_legacy_creation(
                         todo_id=todo_id, preview_id=current_fingerprint, receipt=canonical_receipt,
                         authority=authority, assignment_completed=assignment_completed,

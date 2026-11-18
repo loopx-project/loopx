@@ -17,6 +17,10 @@ class ChatTodoSourceChanged(ValueError):
     """The current route cannot recover a reviewed operation's historical receipt."""
 
 
+def task_start_claim_operation_id(proposal_id: str) -> str:
+    return f"chat-task-start:{proposal_id}"
+
+
 @dataclass(frozen=True)
 class ChatTodoSource:
     registry_path: Path
@@ -45,25 +49,45 @@ class ChatTodoSource:
                 or binding.get("store_identity") != authority["store_identity"]):
             raise ChatTodoSourceChanged("The created Task's Todo store changed. Restore its original store before retrying.")
 
-    def _created_todo_operation(self, operation_id: str, todo_id: str, source_authority: str) -> dict[str, Any]:
-        goal_id = str(self.goal["id"])
+    def _operation_receipt(self, operation_id: str, source_authority: str) -> dict[str, Any]:
         result = effect_runtime_result("coordination.local_authority.operation_receipt", {
             "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
             "runtime_root": str(self.runtime_root),
-            "goal_id": goal_id,
+            "goal_id": str(self.goal["id"]),
             "operation_id": operation_id,
         }, timeout=15.0)
-        receipts = result.get("receipts", []) if isinstance(result, dict) and result.get("status") == "found" else []
+        if (not isinstance(result, dict) or result.get("source_authority") != source_authority
+                or result.get("status") not in {"found", "missing"}):
+            raise ChatTodoSourceChanged("The original Task operation receipt could not be read from its source.")
+        return result
+
+    def _created_todo_operation(self, operation_id: str, todo_id: str, source_authority: str) -> dict[str, Any]:
+        result = self._operation_receipt(operation_id, source_authority)
+        receipts = result.get("receipts", []) if result["status"] == "found" else []
         if (not isinstance(receipts, list) or len(receipts) != 1 or not isinstance(receipts[0], dict)
-                or result.get("source_authority") != source_authority
                 or not isinstance(result.get("provider_revision"), str)):
             raise ChatTodoSourceChanged("The original Task creation receipt is unavailable. Inspect the original source before retrying.")
         created = receipts[0]
         if (created.get("schema_version") != "loopx_coordination_todo_create_receipt_v0"
-                or created.get("goal_id") != goal_id or created.get("todo_id") != todo_id
+                or created.get("goal_id") != str(self.goal["id"]) or created.get("todo_id") != todo_id
                 or created.get("operation_id") != operation_id or not isinstance(created.get("todo"), dict)):
             raise ChatTodoSourceChanged("The original Task creation receipt does not identify this Todo.")
         return result
+
+    def has_managed_task_claim(self, proposal_id: str, todo_id: str, owner: str, source_authority: str) -> bool:
+        operation_id = task_start_claim_operation_id(proposal_id)
+        result = self._operation_receipt(operation_id, source_authority)
+        if result["status"] == "missing":
+            return False
+        receipts = result.get("receipts")
+        original = receipts[0] if isinstance(receipts, list) and len(receipts) == 1 else None
+        if (not isinstance(original, dict) or original.get("schema_version") != "loopx_coordination_todo_claim_receipt_v0"
+                or original.get("operation_id") != operation_id or original.get("goal_id") != str(self.goal["id"])
+                or not isinstance(claim := original.get("result"), dict)
+                or claim.get("todo_id") != todo_id or claim.get("claimed_by") != owner
+                or claim.get("execution_managed") is not True or claim.get("claim_operation_id") != operation_id):
+            raise ChatTodoSourceChanged("The original claim receipt does not identify this Task and Agent.")
+        return True
 
     def recover_legacy_creation(
         self, *, todo_id: str, preview_id: str, receipt: dict[str, Any], authority: dict[str, Any],

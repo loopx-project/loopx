@@ -100,9 +100,17 @@ that never started can still be regenerated. An uncommitted create requires
 the reviewed source and provider revision. Older control planes reject the
 source-bound v3 request before writing.
 
+After an upgrade, a retained Chat confirmation can read back its original
+assignment or completed Turn. A pending dispatch with a retained managed claim
+also checks the current Goal, claimant and lease. When no claim has committed,
+the original Todo and current write authority must still agree before launch.
+
 确认 Chat 的 Todo 或 Monitor 提案时，先记录源注册表摘要、权威存储身份和修订号，再执行写入。
 重试沿用原操作 ID 和 Monitor 的首次到期时间。已提交的操作返回原回执，未提交的操作仍校验
 确认时的来源和修订号。刷新后仍可用原确认卡重试。已准备的确认不能重新生成；尚未执行的过期预览仍可重新生成。来源绑定请求采用 v3 协议，旧版控制面会在写入前拒绝。
+
+升级后可从保留的 Chat 确认读回原指派或已完成的 Turn。执行认领已提交、仍待启动时，
+须检查当前 Goal、认领者和租约。认领尚未提交时，须确认原 Todo 和当前写入权限后才能启动。
 
 For a caller-owned runtime that already registered its Goal/Agent, generate the
 model planning checkpoint before writing executable task Todos:
