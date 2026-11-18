@@ -441,13 +441,6 @@ export function readGoalAcceptance(head: JsonObject, goalId: string): Acceptance
   return authority.owner_matches ? authority.state : null;
 }
 
-/** Private same-snapshot host inputs for read-only freshness observation.
- * They contain only already pinned files and oracle refs, never commands or
- * a new result. Public summaries keep using the acceptance projection. */
-export function goalAcceptanceOracleObservationBasis(head: JsonObject, goalId: string): JsonObject | null {
-  return new GoalAcceptanceRead(head, goalId).oracleBasis();
-}
-
 export function bindGoalAcceptanceStateOwner(
   state: AcceptanceState,
   ownerGoalRef: WireExactGoalRef,

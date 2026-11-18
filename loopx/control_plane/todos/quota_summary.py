@@ -626,18 +626,6 @@ def select_quota_todo_source_items(
     return todo_summary_source_items(selected[1]) if selected is not None else []
 
 
-def select_quota_todo_display_views(
-    canonical_value: Any,
-    project_asset_value: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    """Select the source once for the quota caller's three consumed displays."""
-    from .summary_item import todo_source_display_views
-
-    selected = _select_todo_source(canonical_value, project_asset_value)
-    return (todo_source_display_views(selected[1]) if selected is not None
-            else {"summary": [], "planning": [], "terminal": []})
-
-
 def select_planning_inventory_source_items(
     canonical_value: Any,
     project_asset_value: Any,
