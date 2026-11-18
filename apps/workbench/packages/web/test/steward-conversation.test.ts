@@ -65,3 +65,72 @@ for (const concurrent of [false, true]) for (const failed of [false, true]) {
     }
   });
 }
+
+test('a pending turn submission holds synchronous ownership and late acceptance cannot overwrite a newer turn', async () => {
+  const originalFetch = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  let renderer: ReactTestRenderer | undefined;
+  let sends = 0;
+  let sessions = 0;
+  let resolveFirstTurnPost!: (value: Response) => void;
+  const firstTurnPost = new Promise<Response>(resolve => { resolveFirstTurnPost = resolve; });
+  const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+  const event = (turnId: string, kind: string, payload = {}) =>
+    streams.get(turnId)!.enqueue(new TextEncoder().encode(`event: ${kind}\ndata: ${JSON.stringify(payload)}\n\n`));
+  globalThis.fetch = async input => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    if (path.endsWith('/sessions')) {
+      sessions++;
+      return json({ session_id: `session-${sessions}` });
+    }
+    if (path.endsWith('/turns')) {
+      sends++;
+      if (sends === 1) return firstTurnPost;
+      return json({ turn_id: `t${sends}`, events_url: `/api/chat/sessions/session-${sessions}/turns/t${sends}/events` });
+    }
+    if (path.endsWith('/events')) {
+      const turnId = /\/turns\/([^/]+)\/events$/.exec(path)![1];
+      return new Response(new ReadableStream({ start(controller) { streams.set(turnId, controller); } }));
+    }
+    if (/\/sessions\/session-\d+$/.test(path)) return json({ messages: [] });
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    await act(async () => {
+      renderer = create(createElement(StewardConversation, { token: 'token-1', failure: null }), { createNodeMock: () => ({ scrollIntoView() {} }) });
+      await tick();
+    });
+    // Submit T1 while POST /turns stays unresolved: input must lock immediately and reject duplicate submit.
+    await act(async () => { renderer!.root.findByType('textarea').props.onChange({ target: { value: 'First question' } }); });
+    await act(async () => { renderer!.root.findByType('form').props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(renderer!.root.findByType('textarea').props.disabled, true, 'input stays disabled while POST acceptance is pending');
+    await act(async () => { renderer!.root.findByType('textarea').props.onChange({ target: { value: 'Duplicate while pending' } }); });
+    await act(async () => { renderer!.root.findByType('form').props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(sends, 1, 'synchronous sending owner prevents concurrent second submit');
+
+    // Reopen session under a new token and start T2, then release delayed T1 202 response.
+    await act(async () => {
+      renderer!.update(createElement(StewardConversation, { token: 'token-2', failure: null }));
+      await tick();
+    });
+    assert.equal(renderer!.root.findByType('textarea').props.disabled, false);
+    await act(async () => { renderer!.root.findByType('textarea').props.onChange({ target: { value: 'Second question' } }); });
+    await act(async () => { renderer!.root.findByType('form').props.onSubmit({ preventDefault() {} }); await tick(); });
+    await act(async () => { event('t2', 'answer.delta', { text: 'Active T2 answer' }); await tick(); });
+    assert.equal(renderer!.root.findAllByProps({ className: 'send-btn stop' }).length, 1);
+
+    await act(async () => {
+      resolveFirstTurnPost(json({ turn_id: 't1', events_url: '/api/chat/sessions/session-1/turns/t1/events' }));
+      await tick();
+    });
+    assert.match(JSON.stringify(renderer!.toJSON()), /Active T2 answer/, 'late T1 202 response must not replace T2 answer');
+    assert.equal(renderer!.root.findAllByProps({ className: 'send-btn stop' }).length, 1, 'T2 stop button remains intact');
+    assert.equal(streams.has('t1'), false, 'late T1 response never opens an obsolete stream');
+  } finally {
+    await act(async () => renderer?.unmount());
+    globalThis.fetch = originalFetch;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});

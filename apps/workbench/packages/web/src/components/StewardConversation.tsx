@@ -32,14 +32,17 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   const [draft, setDraft] = useState('');
   const sessionRef = useRef<string | null>(null);
   const turnRef = useRef<ManagerTurn | null>(null);
+  const attemptRef = useRef(0);
   const cursorRef = useRef<string>('');
+  const sendAbort = useRef<AbortController | null>(null);
   const streamAbort = useRef<AbortController | null>(null);
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
 
   turnRef.current = turn;
   /** Sets the live turn and its ref together, so code that runs before the next render sees it. */
   const showTurn = (next: ManagerTurn | null) => { turnRef.current = next; setTurn(next); };
-  const running = turn?.state === 'streaming' || turn?.state === 'stopping';
+  const busy = turn?.state === 'sending' || turn?.state === 'streaming' || turn?.state === 'stopping';
+  const stoppable = turn?.state === 'streaming' || turn?.state === 'stopping';
 
   const openedFor = useRef<string | undefined | null>(null);
   const coreDown = failure !== null;
@@ -47,6 +50,13 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     // Opened once per token. A core that was down when the page opened is retried once it is back;
     // a later status refresh does not open another session over the one already open.
     if (coreDown || (sessionRef.current && openedFor.current === token)) return;
+    if (openedFor.current !== null && openedFor.current !== token) {
+      attemptRef.current++;
+      sendAbort.current?.abort();
+      streamAbort.current?.abort();
+      sessionRef.current = null;
+      showTurn(null);
+    }
     let alive = true;
     const controller = new AbortController();
     setError(null);
@@ -71,13 +81,16 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     scrollAnchor.current?.scrollIntoView({ block: 'end' });
   }, [messages?.length, turn?.steps.length, turn?.answer]);
 
-  useEffect(() => () => streamAbort.current?.abort(), []);
+  useEffect(() => () => {
+    attemptRef.current++;
+    sendAbort.current?.abort();
+    streamAbort.current?.abort();
+  }, []);
 
-  const finishTurn = (ended: ManagerTurn | null) => {
-    if (!sessionRef.current || !ended) return;
+  const finishTurn = (ended: ManagerTurn | null, id: string, attempt: number) => {
+    if (!ended || attemptRef.current !== attempt || sessionRef.current !== id) return;
     // The stored history is the truth; the live turn is only its preview. Read it back once.
-    const id = sessionRef.current;
-    const stillCurrent = () => sessionRef.current === id && turnRef.current?.turnId === ended.turnId;
+    const stillCurrent = () => attemptRef.current === attempt && sessionRef.current === id && turnRef.current?.turnId === ended.turnId;
     readManagerHistory(token, id)
       .then(history => { if (stillCurrent()) { setMessages(history); showTurn(null); } })
       .catch(() => {
@@ -87,9 +100,12 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       });
   };
 
-  const runStream = async (id: string, turnId: string, eventsPath: string, after = '') => {
+  const runStream = async (id: string, turnId: string, eventsPath: string, attempt: number, after = '') => {
+    const ownsTurn = () => attemptRef.current === attempt && sessionRef.current === id && turnRef.current?.turnId === turnId;
+    if (!ownsTurn()) return;
     cursorRef.current = after;
-    for (let attempt = 0; ; attempt++) {
+    for (let retry = 0; ; retry++) {
+      if (!ownsTurn()) return;
       const controller = new AbortController();
       streamAbort.current = controller;
       try {
@@ -97,63 +113,78 @@ export function StewardConversation({ token, failure }: { token: string | undefi
           signal: controller.signal,
           after: cursorRef.current || undefined,
           onEvent: (event: ManagerEvent) => {
+            if (!ownsTurn()) return;
             if (event.id) cursorRef.current = event.id;
             // Folded here, not in a state updater (React may defer those to the next render): when the
             // stream closes, finishTurn reads the ref before any render.
-            if (turnRef.current) showTurn(applyManagerEvent(turnRef.current, event));
+            showTurn(applyManagerEvent(turnRef.current!, event));
           },
         });
+        if (!ownsTurn()) return;
         // The stream closed: the turn ended (interrupted turns close without a terminal event).
-        finishTurn(turnRef.current);
+        finishTurn(turnRef.current, id, attempt);
         return;
       } catch (cause) {
-        if (controller.signal.aborted) return;
-        if (attempt >= 2 || cause instanceof ManagerError) {
-          setTurn(current => (current ? { ...current, state: 'idle', error: managerErrorText(cause) } : current));
+        if (controller.signal.aborted || !ownsTurn()) return;
+        if (retry >= 2 || cause instanceof ManagerError) {
+          showTurn({ ...turnRef.current!, state: 'idle', error: managerErrorText(cause) });
           return;
         }
-        await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+        await new Promise(resolve => setTimeout(resolve, 700 * (retry + 1)));
       } finally {
-        streamAbort.current = null;
+        if (streamAbort.current === controller) streamAbort.current = null;
       }
     }
   };
 
   const send = async (text: string) => {
     const body = text.trim();
-    // Only a turn still streaming holds the conversation. One that ended without its history coming
-    // back (a dropped stream, a failed read) stays on screen but does not block the next message.
-    if (!body || running || !sessionId || failure) return;
-    const left = turnRef.current;
-    if (left) {
-      if (left.answer) setMessages(current => [...(current ?? []), { id: `turn-${left.turnId}`, role: 'agent', text: left.answer, createdAt: null, turnId: left.turnId }]);
-      showTurn(null);
+    const active = turnRef.current;
+    const activeBusy = active !== null && active.state !== 'idle';
+    const id = sessionRef.current ?? sessionId;
+    // Only a turn still sending or streaming holds the conversation. One that ended without its history
+    // coming back (a dropped stream, a failed read) stays on screen but does not block the next message.
+    if (!body || activeBusy || !id || failure) return;
+    const attempt = ++attemptRef.current;
+    sendAbort.current?.abort();
+    streamAbort.current?.abort();
+    const ownsAttempt = () => attemptRef.current === attempt && (sessionRef.current ?? sessionId) === id;
+    if (active) {
+      if (active.answer) setMessages(current => [...(current ?? []), { id: `turn-${active.turnId}`, role: 'agent', text: active.answer, createdAt: null, turnId: active.turnId }]);
     }
     setError(null);
-    const localId = `local-${Date.now()}`;
+    const localId = `local-${Date.now()}-${attempt}`;
+    const clientTurnId = (crypto.randomUUID?.() ?? `${Date.now()}-${attempt}`);
+    showTurn({ turnId: clientTurnId, eventsPath: '', state: 'sending', steps: [], answer: '', error: null });
     setDraft('');
     setMessages(current => [...(current ?? []), { id: localId, role: 'user', text: body, createdAt: null, turnId: null }]);
-    const clientTurnId = (crypto.randomUUID?.() ?? String(Date.now()));
+    const postController = new AbortController();
+    sendAbort.current = postController;
     try {
-      const { turnId, eventsPath } = await sendManagerTurn(token, sessionId, body, clientTurnId);
+      const { turnId, eventsPath } = await sendManagerTurn(token, id, body, clientTurnId, postController.signal);
+      if (!ownsAttempt()) return;
       showTurn({ turnId, eventsPath, state: 'streaming', steps: [], answer: '', error: null });
-      await runStream(sessionId, turnId, eventsPath);
+      await runStream(id, turnId, eventsPath, attempt);
     } catch (cause) {
+      if (postController.signal.aborted || !ownsAttempt()) return;
       if (cause instanceof ManagerError && cause.status === 409 && typeof cause.body.active_turn_id === 'string') {
         // A turn is already running (this page or the dashboard opened it); show it instead of failing.
         // This message was not sent: it goes back to the draft for after that turn.
         setMessages(current => (current ?? []).filter(m => m.id !== localId));
         setDraft(body);
         const turnId = cause.body.active_turn_id;
-        const eventsPath = `/api/loopx/api/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`;
+        const eventsPath = `/api/loopx/api/chat/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}/events`;
         showTurn({ turnId, eventsPath, state: 'streaming', steps: [], answer: '', error: null });
-        await runStream(sessionId, turnId, eventsPath);
+        await runStream(id, turnId, eventsPath, attempt);
         return;
       }
+      showTurn(null);
       const message = managerErrorText(cause);
       setError(message);
       setMessages(current => (current ?? []).filter(m => m.id !== localId));
       setDraft(body);
+    } finally {
+      if (sendAbort.current === postController) sendAbort.current = null;
     }
   };
 
@@ -192,7 +223,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       <h2>{t('loopx.stewardHelloTitle')}</h2>
       <div className="steward-greeting-asks" aria-label={t('loopx.stewardAskLabel')}>
         {GREETING_ASKS().map(ask => (
-          <button key={ask} type="button" className="steward-ask" disabled={running} onClick={() => void send(ask)}>{ask}</button>
+          <button key={ask} type="button" className="steward-ask" disabled={busy} onClick={() => void send(ask)}>{ask}</button>
         ))}
       </div>
     </div> : null}
@@ -221,7 +252,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
             rows={1}
             value={draft}
             placeholder={t('loopx.stewardAskInput')}
-            disabled={running || messages === null}
+            disabled={busy || messages === null}
             aria-label={t('composer.message')}
             onChange={event => setDraft(event.target.value)}
             onKeyDown={event => {
@@ -230,8 +261,8 @@ export function StewardConversation({ token, failure }: { token: string | undefi
           />
           <div className="composer-bar">
             <div className="spacer" />
-            {running ? <button type="button" className="send-btn stop" onClick={stop} disabled={turn?.state === 'stopping'} aria-label={t('composer.stop')} title={t('composer.stopTurn')}><IconStop size={16} /></button> : null}
-            {!running ? <button type="submit" className="send-btn" disabled={!draft.trim() || messages === null} aria-label={t('common.send')}><IconSend size={16} /></button> : null}
+            {stoppable ? <button type="button" className="send-btn stop" onClick={stop} disabled={turn?.state === 'stopping'} aria-label={t('composer.stop')} title={t('composer.stopTurn')}><IconStop size={16} /></button> : null}
+            {!stoppable ? <button type="submit" className="send-btn" disabled={busy || !draft.trim() || messages === null} aria-label={t('common.send')}><IconSend size={16} /></button> : null}
           </div>
         </div>
       </div>
