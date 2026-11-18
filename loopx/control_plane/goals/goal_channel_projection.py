@@ -385,6 +385,8 @@ def build_goal_channel_projection(
         "mode": "read_only",
         "generated_at": _text(generated_at, limit=80),
         "display_name": _first_text(
+            # History carries the current registry name, including after a rename.
+            run_history_goal_dict.get("display_name"),
             project_asset.get("display_name"),
             status_item_dict.get("display_name"),
             status_item_dict.get("domain"),

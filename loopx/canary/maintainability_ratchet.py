@@ -867,6 +867,33 @@ def build_control_plane_maintainability_report(
     }
 
 
+def completed_maintainability_failure_paths(report: Mapping[str, Any]) -> list[str]:
+    """Return attributable failed findings from a completed structured report."""
+
+    if report.get("schema_version") != MAINTAINABILITY_REPORT_SCHEMA_VERSION or report.get("ok") is not False:
+        return []
+    # Invalid or stale policy entries do not supply attributable finding paths.
+    if report.get("invalid_exceptions") != [] or report.get("stale_exceptions") != []:
+        return []
+
+    paths: set[str] = set()
+    for field, count_field in (
+        ("unreviewed_findings", "unreviewed_count"),
+        ("magnitude_regressions", "magnitude_regression_count"),
+    ):
+        findings = report.get(field)
+        if not isinstance(findings, list) or len(findings) != report.get(count_field):
+            return []
+        for finding in findings:
+            path = finding.get("path") if isinstance(finding, dict) else None
+            if not isinstance(path, str) or not path.strip():
+                return []
+            paths.add(path)
+            if finding.get("category") == "module_metric_budget":
+                paths.add(f"loopx/canary/{MODULE_METRIC_BASELINE_PATH.name}")
+    return sorted(paths)
+
+
 def render_control_plane_maintainability_report(payload: Mapping[str, Any]) -> str:
     status = "ok" if payload.get("ok") else "failed"
     category_counts = payload.get("category_counts") or {}

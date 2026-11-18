@@ -85,6 +85,7 @@ RUN_BASE_COMPACT_FIELDS = (
     "turn_instance_id",
     "replan_obligation_id",
     "goal_id",
+    "goal_ref",
     "parent_run_id",
     "spawned_by_goal_id",
     "agent_role",

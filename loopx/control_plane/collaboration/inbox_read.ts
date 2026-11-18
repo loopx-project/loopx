@@ -25,6 +25,7 @@ const TRIAGE = "Read the supplied requests and their source-specific instruction
 const DELIVERY_STATUSES: ReadonlySet<string> = new Set(deliveryContract.delivery_statuses);
 const DELIVERY_ERRORS: ReadonlySet<string> = new Set(deliveryContract.delivery_errors);
 const RESULT_KEY = /^(?:decision|conclusion)(?:-[0-9]{8})?$/;
+const TURN_INSTANCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 type InboxSource = Readonly<{root: string; goal: string; agent: string; scope: JsonObject; exact: boolean; recipient?: JsonObject}>;
 type ReturnDelivery = Readonly<{key: string; request: JsonObject; reply: JsonObject}>;
 
@@ -259,6 +260,11 @@ function returnConsumed(root: string, key: string, row: JsonObject, reply: JsonO
       agent_id: agent, ...(Object.hasOwn(row, "goal_ref") ? {goal_ref: row.goal_ref} : {})}),
     ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {})};
   if (Object.entries(expected).some(([field, value]) => !equal(saved[field], value))) fail("peer consumption receipt scope mismatch");
+  const turnBound = Object.hasOwn(saved, "turn_instance_id") || Object.hasOwn(saved, "disposition");
+  if (turnBound && (typeof saved.turn_instance_id !== "string" || !TURN_INSTANCE_ID.test(saved.turn_instance_id)
+      || saved.disposition !== "accepted" && saved.disposition !== "rejected")) {
+    fail("peer consumption receipt acknowledgement is invalid");
+  }
   return true;
 }
 function outgoingEntry(source: InboxSource, operation: JsonObject): JsonObject {
@@ -404,6 +410,9 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
 }
 async function recordReads(source: InboxSource, params: JsonObject): Promise<JsonObject> {
   const nativeResultIds = params.native_child_result_ids ?? [];
+  const turn = params.turn_instance_id == null ? null
+    : requireNonEmptyString(params.turn_instance_id, "work Turn identity");
+  if (turn !== null && !TURN_INSTANCE_ID.test(turn)) fail("work Turn identity is invalid");
   if (!Array.isArray(params.items) || params.items.length > 20
       || !Array.isArray(params.deliveries) || params.deliveries.length > 20
       || !Array.isArray(nativeResultIds) || nativeResultIds.length > 20) {
@@ -450,10 +459,21 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
         : entry(source, String(row.request_id), requireNonEmptyString(row.agent_id, "peer Agent"));
       if (stored.source_agent_id !== source.agent) fail("peer return scope mismatch");
       if (!conversation) lifecycle(source, "read_record", stored);
-      if (!present(path)) await atomicWriteJson(path, {status: "delivered",
-        ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}), delivered_at: params.observed_at,
-        kind: "requester_cli_read", ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
-          : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})});
+      const prior = present(path) ? readRecord(path) : null;
+      const identity = {status: "delivered",
+        ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
+        ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
+          : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})};
+      if (prior && Object.entries(identity).some(([field, value]) => !equal(prior[field], value))) {
+        fail("peer return delivery receipt scope mismatch");
+      }
+      const priorTurn = jsonObject(prior?.model_turn);
+      if (!prior || turn !== null && priorTurn?.turn_instance_id !== turn) {
+        await atomicWriteJson(path, {...identity,
+          delivered_at: prior?.delivered_at ?? params.observed_at, kind: "requester_cli_read",
+          ...(turn !== null ? {model_turn: {turn_instance_id: turn, supplied_at: params.observed_at}}
+            : priorTurn ? {model_turn: priorTurn} : {})});
+      }
     });
   }
   if (nativeResultIds.length) {

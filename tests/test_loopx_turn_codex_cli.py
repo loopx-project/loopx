@@ -1124,18 +1124,21 @@ def test_codex_source_session_rejects_alias_only_descriptor(
     assert descriptor_path.read_bytes() == descriptor_before
 
 
+@pytest.mark.parametrize("server_name", ["loopx_delegation", "fixture_tools"])
 def test_codex_cli_host_materializes_bound_mcp_tools_for_fresh_and_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    server_name: str,
 ) -> None:
     executable, log_path = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    monkeypatch.setenv("LOOPX_TURN_KEY", "stale-turn")
     runtime_root = tmp_path / "runtime"
     project = tmp_path / "project"
     project.mkdir()
     server = {
         "schema_version": CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION,
-        "name": "loopx_delegation",
+        "name": server_name,
         "command": [
             sys.executable,
             "-m",
@@ -1165,29 +1168,48 @@ def test_codex_cli_host_materializes_bound_mcp_tools_for_fresh_and_resume(
         timeout_seconds=5,
     )
 
-    for argv in map(json.loads, log_path.read_text(encoding="utf-8").splitlines()):
+    invocations = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(invocations) == 2
+    for turn_character, argv_json in zip("ab", invocations, strict=True):
+        argv = json.loads(argv_json)
         config_values = [
             argv[index + 1]
             for index, value in enumerate(argv)
             if value == "-c"
         ]
         assert (
-            f'mcp_servers.loopx_delegation.command={json.dumps(sys.executable)}'
+            f'mcp_servers.{server_name}.command={json.dumps(sys.executable)}'
             in config_values
         )
         assert (
-            "mcp_servers.loopx_delegation.args="
+            f"mcp_servers.{server_name}.args="
             + json.dumps(server["command"][1:])
             in config_values
         )
-        assert "mcp_servers.loopx_delegation.enabled=true" in config_values
-        assert "mcp_servers.loopx_delegation.required=true" in config_values
+        assert f"mcp_servers.{server_name}.enabled=true" in config_values
+        assert f"mcp_servers.{server_name}.required=true" in config_values
         assert (
-            'mcp_servers.loopx_delegation.default_tools_approval_mode="approve"'
+            f'mcp_servers.{server_name}.default_tools_approval_mode="approve"'
             in config_values
         )
-        assert "mcp_servers.loopx_delegation.startup_timeout_sec=30" in config_values
-        assert "mcp_servers.loopx_delegation.tool_timeout_sec=60" in config_values
+        assert f"mcp_servers.{server_name}.startup_timeout_sec=30" in config_values
+        assert f"mcp_servers.{server_name}.tool_timeout_sec=60" in config_values
+
+        turn_environment = {
+            key.rsplit(".", 1)[-1]: json.loads(value)
+            for entry in config_values
+            for key, value in [entry.split("=", 1)]
+            if key.startswith(f"mcp_servers.{server_name}.env.")
+        }
+        if server_name == "loopx_delegation":
+            assert turn_environment == {
+                "LOOPX_TURN_KEY": "sha256:" + turn_character * 64,
+                "LOOPX_TURN_GOAL_ID": "fixture-goal",
+                "LOOPX_TURN_AGENT_ID": "codex-fixture",
+                "LOOPX_TURN_WORKSPACE": str(project.resolve()),
+            }
+        else:
+            assert turn_environment == {}
 
 
 def test_codex_cli_host_rejects_invalid_mcp_binding_before_launch(
