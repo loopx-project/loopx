@@ -109,6 +109,24 @@ export async function readGoalRolloutEventSnapshot(
   };
 }
 
+/**
+ * Rows whose writer reached the committing newline.
+ *
+ * The append owner drops an unterminated final row before writing its next
+ * record.  Any read that decides whether work already happened must use this
+ * view; otherwise an interrupted write can look committed until the next
+ * unrelated append removes it.
+ */
+export function committedGoalRolloutEvents(
+  snapshot: GoalRolloutEventSnapshot | null,
+): readonly JsonObject[] {
+  if (snapshot === null) return [];
+  if (snapshot.unterminatedRecordLine === null) return snapshot.events;
+  return snapshot.events.filter((_, index) =>
+    snapshot.eventLines[index] !== snapshot.unterminatedRecordLine
+  );
+}
+
 /** Return strict settlement input, or fail on the first malformed line. */
 export function strictGoalRolloutEvents(
   snapshot: GoalRolloutEventSnapshot | null,
@@ -119,7 +137,19 @@ export function strictGoalRolloutEvents(
       "malformed_settlement_state",
     );
   }
-  return snapshot?.events ?? [];
+  return committedGoalRolloutEvents(snapshot);
+}
+
+function assertGoalSnapshotScope(
+  snapshot: GoalRolloutEventSnapshot,
+  goalId: string,
+): void {
+  if (snapshot.goalId !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not belong to the requested goal",
+      "rollout_event_snapshot_scope_mismatch",
+    );
+  }
 }
 
 /** Qualify heartbeat receipts without discarding diagnostic quota audit rows. */
@@ -129,13 +159,19 @@ export function goalHeartbeatReceiptsFromSnapshot(
   agentId?: string | null,
 ): JsonObject[] | null {
   if (snapshot === null) return null;
-  if (snapshot.goalId !== goalId) {
-    throw new EffectRuntimeRequestError(
-      "rollout event snapshot does not belong to the requested goal",
-      "rollout_event_snapshot_scope_mismatch",
-    );
-  }
+  assertGoalSnapshotScope(snapshot, goalId);
   return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId);
+}
+
+/** Heartbeat receipts whose row reached its committing newline. */
+export function committedGoalHeartbeatReceiptsFromSnapshot(
+  snapshot: GoalRolloutEventSnapshot | null,
+  goalId: string,
+  agentId?: string | null,
+): JsonObject[] | null {
+  if (snapshot === null) return null;
+  assertGoalSnapshotScope(snapshot, goalId);
+  return heartbeatReceiptsFromEvents(committedGoalRolloutEvents(snapshot), goalId, agentId);
 }
 
 /** The heartbeat receipt filter over events a caller already read. */

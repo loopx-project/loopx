@@ -1516,6 +1516,35 @@ test("keeps the same-turn rebind when no earlier Turn owes a closeout", async t 
   }
 });
 
+test("an unterminated prior guard is not an owed closeout before or after repair", async () => {
+  const root = await fixture({turnId: priorTurnId});
+  try {
+    const eventsPath = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const original = JSON.parse((await readFile(eventsPath, "utf8")).trim());
+    original.details.closeout_required = true;
+    // The guard writer stopped short of its committing newline.
+    await writeFile(eventsPath, JSON.stringify(original));
+    const preflightRequest = {
+      schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+      runtime_root: root, goal_id: goalId, agent_id: agentId,
+      exclude_turn_instance_id: turnId,
+    };
+    const before = await preflightPriorHostTurnCloseout(preflightRequest);
+    assert.equal(before.status, "none");
+    // The next writer drops that tail before appending an unrelated row.
+    let later = {...original, event_id: "event-later", run_id: "later-turn",
+      details: {}} as Record<string, unknown>;
+    await writeFile(eventsPath, `${JSON.stringify(later)}\n`);
+    const after = await preflightPriorHostTurnCloseout(preflightRequest);
+    assert.equal(after.status, "none");
+    // A row that reached its newline is still a real owed closeout.
+    await appendFile(eventsPath, `${JSON.stringify(original)}\n`);
+    const committed = await preflightPriorHostTurnCloseout(preflightRequest);
+    assert.equal(committed.status, "candidate");
+    assert.equal((committed.candidate as Record<string, unknown>).prior_turn_instance_id, priorTurnId);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("an unbound earlier Turn never reports a later Turn as its owed predecessor", async () => {
   const root = await fixture({guardUnbound: true});
   try {

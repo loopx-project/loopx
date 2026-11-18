@@ -33,7 +33,7 @@ from loopx.control_plane.scheduler.state import (
 )
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.paths import shell_selected_global_registry
-from loopx.rollout_event_log import build_rollout_event
+from loopx.rollout_event_log import append_rollout_event, build_rollout_event
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture,
     read_fixture_todos,
@@ -3074,6 +3074,57 @@ def test_open_completion_todo_accepts_only_matching_in_flight_writeback(
         status, goal_id=GOAL_ID, todo_id=TODO_ID, agent_id=None,
         selected_todo=selected, delivery_run=delivery,
     )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unterminated_prior_guard_is_not_a_recovery_precondition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+
+    for case, committed in (("committed", True), ("unterminated", False)):
+        case_root = tmp_path / case
+        project, runtime, registry_path = _write_fixture(case_root)
+        _initialize_fixture_authority(project, runtime, provider=provider)
+        prior_turn_id = f"turn-{case}-prior"
+        rc, prior = _run_cli(
+            registry_path, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", prior_turn_id, "--todo-id", TODO_ID,
+        )
+        assert rc == 0, prior
+        assert prior["heartbeat_receipt"]["closeout_required"] is True
+        log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+        if not committed:
+            raw = log.read_bytes()
+            assert raw.endswith(b"\n")
+            log.write_bytes(raw[:-1])
+        # An unrelated append drops an unfinished tail before committing its
+        # own row.  The prior-turn decision must be the same before and after
+        # that append.
+        append_rollout_event(
+            log,
+            build_rollout_event(
+                goal_id=GOAL_ID,
+                event_kind="codex_session_observed",
+                agent_id=AGENT_ID,
+                run_id=f"turn-{case}-unrelated",
+                summary="unrelated append",
+            ),
+        )
+        admission_rc, admission = _run_cli(
+            registry_path, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--begin-turn",
+        )
+        assert admission_rc == 0, admission
+        if committed:
+            assert admission["effective_action"] == "unsettled_host_turn_recovery", admission
+        else:
+            assert admission["effective_action"] != "unsettled_host_turn_recovery", admission
+        assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
