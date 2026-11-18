@@ -29,6 +29,25 @@ Full Goal material is collected independently of that presentation choice.
 The active CLI selection between its compactor and `buildTurnEnvelope` is
 removed. Status, plan and scheduler-observation retain their separate purposes;
 historical readers and other remaining callers are not retired by this slice.
+The current model-behavior portfolio also composes its should-run inputs through
+this complete-source owner; it no longer exercises the retired CLI compactor as
+the product default. Candidate context, planning relations, task continuation and
+diagnostics stay intact. The crowded regression's pretty JSON changes from
+86,172 compact bytes to 121,318 complete bytes (120,963 source bytes); its old
+90,000-byte compact-output allowance characterizes the historical fixture, not
+the new full carrier. Wire/page limits and the terminal actor's ten-call budget
+do not change. Frozen raw/v0 model comparison controls remain separate.
+
+Todo completion, replan-successor return and blocked-completion recovery use the
+existing TypeScript settlement composer for their current continuation plans.
+They retain the original identity, route and supplied lease proof. JSON and
+Markdown expose the runtime-owned debit with writeback, without a second model
+spend command. The current terminal qualifier verifies committed receipts for
+that original effect and rejects missing, foreign, unknown or uncommitted
+receipts and duplicate model spend. A post-effect command failure still stops
+the actor; independently committed writeback/debit receipts are not rolled back
+or reported as absent. Historical plan rendering/decoding remains supported;
+these engineering checks do not establish live-model adoption or cost benefit.
 Both quota capture and Turn journal capture call `write_decision_capture` in
 [`decision_capture.py`](../../../../loopx/control_plane/turn_driver/decision_capture.py).
 Native context delivery and explicit host handoff also reuse that module and

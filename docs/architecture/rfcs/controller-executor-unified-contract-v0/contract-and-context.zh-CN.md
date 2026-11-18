@@ -21,6 +21,20 @@ TypeScript `composeCompleteTurnDecision` owner。默认调用及兼容别名
 此展示选择分开。CLI 中选择 compactor 或 `buildTurnEnvelope` 的活跃分支删除。
 Status、plan 与 scheduler-observation 保留各自用途；本切片不退役历史 reader 或
 其他剩余调用方。
+当前 model-behavior portfolio 的 should-run 输入也复用该完整来源 owner，不再把
+已退役 CLI compactor 当作产品默认路径。候选上下文、规划关系、任务续接与诊断事实
+保留。Crowded 回归的 pretty JSON 从压缩后的 86,172 字节变为完整的 121,318 字节
+（原来源 120,963 字节）；旧 90,000 字节压缩输出允许量只刻画历史 fixture，不约束
+新的完整 carrier。Wire/page 上限和终态 actor 的十次调用预算不变。冻结的 raw/v0
+模型对照继续独立保留。
+
+Todo 验收完成、replan-successor 返回及 blocked-completion 恢复的当前续接计划复用
+既有 TypeScript 结算 composer，保留原身份、路由与已提供的 lease 证明。JSON 与
+Markdown 展示随写回执行的运行时扣额，不再要求模型执行第二条 spend 命令。
+当前终态 qualifier 校验原 effect 的已提交回执，拒绝缺失、其他身份、未知或未提交
+的回执及模型重复 spend。副作用之后的命令失败仍停止 actor；独立提交的写回／扣额
+回执不回滚，也不能报告为不存在。历史 plan 展示／解码继续支持；这些工程检查
+不代表真实模型采用或成本收益。
 Quota capture 与 Turn journal capture 都调用
 [`decision_capture.py`](../../../../loopx/control_plane/turn_driver/decision_capture.py)
 中的 `write_decision_capture`。原生上下文交付与显式宿主 handoff 也复用该模块和既有
