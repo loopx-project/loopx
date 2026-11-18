@@ -326,12 +326,36 @@ def request(
 
 
 
-def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
+def returns(root, goal_id, agent_id, *, mark_read=False, scope=None, turn_instance_id=None, cursor=None):
+    """Read outgoing peer results through the shared Inbox transaction."""
     from .inbox import read_inbox_transaction
 
-    return read_inbox_transaction(root, {
+    query = {
         "operation": "returns", "goal_id": goal_id, "agent_id": agent_id, "mark_read": mark_read,
-    }, scope=scope)
+    }
+    if turn_instance_id is not None:
+        query["turn_instance_id"] = turn_instance_id
+    if cursor is not None:
+        query["cursor"] = cursor
+    return read_inbox_transaction(root, query, scope=scope)
+
+
+def read_turn_peer_returns(root, registry, goal_id, agent_id, *,
+                           turn_instance_id: str, caller_goal_ref, cursor: str | None):
+    """Supply pending peer results under the host's current Goal and Turn."""
+    from ..effect_runtime import EffectRuntimeResponseAmbiguous
+
+    try:
+        with collaboration_goal_scope(
+            registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref,
+        ) as scope:
+            return returns(root, goal_id, agent_id, mark_read=True, scope=scope,
+                           turn_instance_id=turn_instance_id, cursor=cursor)
+    except EffectRuntimeResponseAmbiguous as exc:
+        raise ValueError(
+            "Peer result delivery is uncertain. Repeat the same peer result read in this work Turn "
+            "before acknowledging it."
+        ) from exc
 
 
 def _deferred_acknowledgement(
@@ -381,8 +405,18 @@ def _record_return_disposition_locked(
     return False
 
 
+def _require_peer_result_readback(delivery, turn_instance_id, read_token, *, conclusion):
+    visible = delivery.get("model_turn")
+    if not isinstance(visible, dict) or visible.get("turn_instance_id") != turn_instance_id:
+        raise ValueError(f"read {conclusion} in this work Turn before acknowledging it")
+    if "read_token" in visible:
+        expected = visible["read_token"]
+        if not isinstance(expected, str) or not BARE_SHA256_PATTERN.fullmatch(expected) or read_token != expected:
+            raise ValueError(f"read {conclusion} and supply its read_token before acknowledging it")
+
+
 def _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key, *,
-                                          turn_instance_id, disposition):
+                                          turn_instance_id, disposition, read_token):
     from .inbox import result_paths, result_identity_matches
     requester = {"goal_ref": scope.caller_goal_ref, "agent_id": agent_id} if scope and scope.exact else None
     if route.get("kind") != "peer" or route.get("requester") != requester or requester["goal_ref"]["goal_id"] != goal_id:
@@ -406,9 +440,8 @@ def _consume_original_conversation_return(root, route, goal_id, agent_id, scope,
         if not result_identity_matches(reply, row, result) or delivery.get("status") != "delivered" or any(
                 delivery.get(key) != row.get(key) for key in ("recipient", "requester")):
             raise ValueError("read the exact original conversation conclusion before acknowledging it")
-        visible = delivery.get("model_turn")
-        if not isinstance(visible, dict) or visible.get("turn_instance_id") != turn_instance_id:
-            raise ValueError("read the exact original conversation conclusion in this work Turn before acknowledging it")
+        _require_peer_result_readback(delivery, turn_instance_id, read_token,
+                                      conclusion="the exact original conversation conclusion")
         value = {"request_id": request_id, "requester": requester, "recipient": recipient,
             **({"result_key": result_key} if "result_key" in reply else {}),
             "turn_instance_id": turn_instance_id, "disposition": disposition}
@@ -431,6 +464,7 @@ def consume_return(
     result_key="conclusion",
     turn_instance_id=None,
     disposition=None,
+    read_token=None,
 ):
     from ...turn_identity import normalize_turn_instance_id
 
@@ -451,6 +485,7 @@ def consume_return(
                 result_key=result_key,
                 turn_instance_id=turn_instance_id,
                 disposition=disposition,
+                read_token=read_token,
             )
     if not turn_instance_id:
         raise ValueError("peer result acknowledgement requires the current Turn identity")
@@ -459,7 +494,7 @@ def consume_return(
     route = _read(_root(root) / "roundtrips" / (_request_id(request_id) + ".json"))
     if "recipient" in route:
         return _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key,
-            turn_instance_id=turn_instance_id, disposition=disposition)
+            turn_instance_id=turn_instance_id, disposition=disposition, read_token=read_token)
     if (
         route.get("kind") != "peer"
         or route.get("goal_id") != goal_id
@@ -508,23 +543,6 @@ def consume_return(
         if k in row
     ):
         raise ValueError("peer reply identity conflict")
-    delivery = _read(delivery_path)
-    if delivery.get("status") != "delivered" or (
-        "result_key" in reply and delivery.get("result_key") != result_key
-    ) or (
-        "goal_ref" in row and delivery.get("goal_ref") != row["goal_ref"]
-    ):
-        raise ValueError("read the peer conclusion before acknowledging it")
-    visible = delivery.get("model_turn")
-    if not isinstance(visible, dict) or visible.get("turn_instance_id") != turn_instance_id:
-        raise ValueError("read the peer conclusion in this work Turn before acknowledging it")
-    if scope is not None:
-        decide_collaboration_lifecycle(
-            scope,
-            operation="peer_return_consume",
-            record=row,
-            route=route,
-        )
     acknowledgement = {
         "request_id": request_id,
         **({"result_key": result_key} if "result_key" in reply else {}),
@@ -536,6 +554,21 @@ def consume_return(
     }
     mutation_lock = folder / (result_key + ".acknowledgement.lock")
     with _request_lock(root, request_id, scope, mutation_lock):
+        delivery = _read(delivery_path)
+        if delivery.get("status") != "delivered" or (
+            "result_key" in reply and delivery.get("result_key") != result_key
+        ) or (
+            "goal_ref" in row and delivery.get("goal_ref") != row["goal_ref"]
+        ):
+            raise ValueError("read the peer conclusion before acknowledging it")
+        _require_peer_result_readback(delivery, turn_instance_id, read_token, conclusion="the peer conclusion")
+        if scope is not None:
+            decide_collaboration_lifecycle(
+                scope,
+                operation="peer_return_consume",
+                record=row,
+                route=route,
+            )
         replay = _record_return_disposition_locked(folder, result_key, acknowledgement)
     return {
         "ok": True,
@@ -733,6 +766,7 @@ def read_inbox(
             item["request_read_receipt"] = receipt
         item["receiver_followthrough"] = advice
     if turn_instance_id:
+        read_tokens = final.get("peer_read_tokens", {})
         for peer_result in result.get("peer_returns", {}).get("items", []):
             command = [*loopx_cli_argv(), "--registry", str(registry), "--runtime-root", str(root),
                 "--format", "json", "manager-inbox", "acknowledge-return", "--goal-id", goal_id,
@@ -741,6 +775,10 @@ def read_inbox(
                 "--disposition", "<accepted|deferred|rejected>"]
             if peer_result.get("result_key"):
                 command.extend(["--result-key", peer_result["result_key"]])
+            read_token = read_tokens.get(f"{peer_result['request_id']}:{peer_result.get('result_key', 'conclusion')}")
+            if read_token is not None:
+                peer_result["read_token"] = read_token
+                command.extend(["--read-token", read_token])
             peer_result["acknowledge_command"] = render_host_cli_command(command)
     if request_id is None and not native_continuation:
         result["unfinished_delegations"] = final["context"]["unfinished_delegations"]
@@ -764,8 +802,8 @@ def read_inbox(
             )
         else:
             result["followthrough"] += (
-                " Peer conclusions stay pending after this read. Use the current host-bound "
-                "read_context tool to receive them for acknowledgement when it is available."
+                " Peer conclusions stay pending after this read. In a bound work Turn, use "
+                "read_peer_returns and then consume_peer_result with each evaluated result's read_token."
             )
     if result.get("native_child_results", {}).get("items"):
         result["followthrough"] += (

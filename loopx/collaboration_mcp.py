@@ -74,6 +74,7 @@ from .control_plane.collaboration.peers import (
     read_inbox,
     request,
     require_operation_id,
+    read_turn_peer_returns,
 )
 from .presentation.answer_instruction import (
     collaboration_answer_instruction,
@@ -284,6 +285,18 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         result["instruction"] += " " + collaboration_answer_instruction()
         return result
 
+    if turn_instance_id is not None:
+        @server.tool()
+        def read_peer_returns(cursor: str | None = None) -> dict:
+            """Read only peer results for this bound work Turn.
+            Follow next_cursor in this Turn, or omit it to start a fresh scan.
+            Repeat the same page after an ambiguous read. After evaluating the result,
+            pass its read_token to consume_peer_result to accept, defer or reject it.
+            """
+            return {"peer_returns": read_turn_peer_returns(
+                root, registry, goal_id, agent_id,
+                turn_instance_id=turn_instance_id, caller_goal_ref=caller_goal_ref, cursor=cursor)}
+
     @server.tool()
     def assess_request(
         request_id: str,
@@ -436,11 +449,12 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         request_id: str,
         disposition: Literal["accepted", "deferred", "rejected"],
         result_key: str = "conclusion",
+        read_token: str | None = None,
     ) -> dict:
         """Acknowledge a peer result supplied to this exact work Turn.
-
-        Deferred results remain visible on the next Turn. Accepted or rejected
-        results are consumed idempotently and never change work state.
+        Pass the result's read_token when supplied. Deferred
+        results remain visible on the next Turn. Accepted or rejected results
+        are consumed idempotently and never change work state.
         """
         check_scope()
         if turn_instance_id is None:
@@ -453,6 +467,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             result_key=result_key,
             turn_instance_id=turn_instance_id,
             disposition=disposition,
+            read_token=read_token,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
