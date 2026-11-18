@@ -350,3 +350,99 @@ test('when apply response is lost after Core committed restricted profile, switc
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
   }
 });
+
+test('when prior profile was restricted and fallback session fails, concurrent trusted_owner setting is preserved', async () => {
+  const originalFetch = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  let runtimeProfile: 'trusted_owner' | 'restricted' = 'restricted';
+  let applyCalls = 0;
+  globalThis.fetch = async (input) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    if (path.endsWith('/api/chat/sessions')) {
+      // While session open is in flight, user concurrently saved trusted_owner in Settings:
+      runtimeProfile = 'trusted_owner';
+      return json({ ok: false, error: 'agent unavailable' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/preview') || path.endsWith('/api/chat/machine-configuration/apply')) {
+      applyCalls++;
+      return json({ ok: true });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    let thrownError: unknown = null;
+    try {
+      await switchManagerAgent('token-1', 'claude-code', {
+        selectedAgentId: 'codex',
+        runtimeProfile: 'restricted',
+        selectionPolicy: 'preferred',
+        eligibleEndpoints: [],
+        adapters: [],
+        availableAlternatives: [],
+      });
+    } catch (e) {
+      thrownError = e;
+    }
+    assert.ok(thrownError !== null, 'session open failure is propagated');
+    assert.equal(runtimeProfile, 'trusted_owner', 'concurrent user setting trusted_owner is preserved');
+    assert.equal(applyCalls, 0, 'no machine configuration modification attempted since no transaction was created by switch');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});
+
+test('when fallback session fails but configuration was updated concurrently, rollback is blocked and preserves newer setting', async () => {
+  const originalFetch = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  let runtimeProfile: 'trusted_owner' | 'restricted' = 'trusted_owner';
+  let rollbackExecuteCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    if (path.endsWith('/api/chat/machine-configuration/preview')) {
+      return json({ ok: true, plan_revision: 'sha256:plan-restrict' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/apply')) {
+      runtimeProfile = 'restricted';
+      return json({ ok: true, transaction_id: 'mc-tx-1' });
+    }
+    if (path.endsWith('/api/chat/sessions')) {
+      // Concurrently user updated setting to trusted_owner in Settings:
+      runtimeProfile = 'trusted_owner';
+      return json({ ok: false, error: 'session open failed' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/rollback')) {
+      if (body.execute === true) {
+        rollbackExecuteCalls++;
+        return json({ ok: true });
+      }
+      // Core detects current_revision != applied_revision and disallows rollback
+      return json({ ok: true, rollback_allowed: false, plan_revision: 'sha256:plan-blocked' });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    let thrownError: unknown = null;
+    try {
+      await switchManagerAgent('token-1', 'claude-code', {
+        selectedAgentId: 'codex',
+        runtimeProfile: 'trusted_owner',
+        selectionPolicy: 'preferred',
+        eligibleEndpoints: [],
+        adapters: [],
+        availableAlternatives: [],
+      });
+    } catch (e) {
+      thrownError = e;
+    }
+    assert.ok(thrownError !== null, 'session open failure is propagated');
+    assert.equal(runtimeProfile, 'trusted_owner', 'newer setting is preserved');
+    assert.equal(rollbackExecuteCalls, 0, 'rollback execution was skipped because rollback_allowed was false');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});

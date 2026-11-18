@@ -171,7 +171,6 @@ export async function switchManagerAgent(
 ): Promise<{ sessionId: string; messages: ManagerMessage[] }> {
   const priorProfile = capabilities?.runtimeProfile;
   let runtimeTransactionId: string | null = null;
-  let appliedProfile = false;
 
   // Read-only adapters (Claude Code, Kiro CLI, DSH, API endpoints) require the restricted manager runtime profile.
   if (!TRUSTED_OWNER_ENDPOINTS.has(agentId) && priorProfile === 'trusted_owner') {
@@ -180,7 +179,6 @@ export async function switchManagerAgent(
         schema_version: 'manager_runtime_profile_v0',
         runtime_profile: 'restricted',
       }, signal);
-      appliedProfile = true;
     } catch (applyError) {
       // Reconcile unconfirmed switch: Core may have committed restricted while the client lost the response.
       const readback = await readManagerCapabilities(token, null, signal).catch(() => null);
@@ -197,21 +195,10 @@ export async function switchManagerAgent(
   try {
     return await openManagerSession(token, signal, agentId);
   } catch (cause) {
+    // Only roll back when a configuration transaction was confirmed and attributable to this switch.
+    // Core guards rollback by expected plan revision, preserving newer user settings.
     if (runtimeTransactionId) {
       await rollbackMachineTransaction(token, runtimeTransactionId);
-    } else if (appliedProfile && priorProfile) {
-      await applyMachineNamespace(token, 'manager_runtime', {
-        schema_version: 'manager_runtime_profile_v0',
-        runtime_profile: priorProfile,
-      }).catch(() => undefined);
-    }
-    // Verify reconciliation: restore prior profile if still restricted after failure.
-    const verified = await readManagerCapabilities(token, null, signal).catch(() => null);
-    if (priorProfile && verified?.runtimeProfile && verified.runtimeProfile !== priorProfile) {
-      await applyMachineNamespace(token, 'manager_runtime', {
-        schema_version: 'manager_runtime_profile_v0',
-        runtime_profile: priorProfile,
-      }).catch(() => undefined);
     }
     throw cause;
   }
