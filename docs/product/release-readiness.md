@@ -281,10 +281,12 @@ main 运行时发布器在任何远端写入前，将下载的安装资格与源
 证据缺失、失败或不匹配时，保留已有发布及渠道。此工程资格不证明模型结果、完整成本收益
 或 C1 默认采用资格。
 
-New runtime descriptors carry the supported `default_contract`. Qualification
-observes the installed candidate's ordinary quota writer in an isolated original
-Goal with context delivery off; the publisher requires that observation to match
-the immutable descriptor. Desktop packaging observes its actual archived source
+New runtime descriptors carry the observed, supported `default_contract`.
+The builder probes the committed runtime before writing a channel descriptor
+or replacing existing output. Qualification checks the installed candidate's
+ordinary quota writer in an isolated original Goal with context delivery off.
+The publisher requires that observation to match the immutable descriptor.
+Desktop packaging observes its actual archived source
 through the same probe and support validator. Runtime updates reject an unsupported
 declared contract before downloading or activating it, and bind the archive's
 contract identity to its metadata. Historical v1 descriptors remain readable.
@@ -295,8 +297,9 @@ met. Installation checks or a new boolean cannot extend that scope. Explicit
 complete-contract opt-in, context-delivery configuration and historical recovery
 retain their existing owners; this boundary does not switch an installed writer.
 
-新 runtime 描述符携带支持的 `default_contract`。资格检查在隔离的原始 Goal 中，关闭
-上下文传输后观察安装候选的普通 quota writer；发布器要求该观察与不可变描述符一致。
+新 runtime 描述符记录实际观测到且受支持的 `default_contract`。构建器在写入渠道描述符
+或替换已有制品之前探测已提交的 runtime。安装资格检查在隔离的原始 Goal 中关闭
+上下文传输后再次观察普通 quota writer。发布器要求安装后的观察与不可变描述符一致。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
 当前分发范围是已有 `quota_packet` writer；完整契约默认切换在满足原 RFC §9 同单会话
