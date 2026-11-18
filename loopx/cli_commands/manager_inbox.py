@@ -45,6 +45,38 @@ def _same_goal_peer_refusal(
     )
 
 
+def _confirms_foreign_peer_link(
+    registry_path: Path,
+    *,
+    goal_id: str,
+    peer_agent_id: str,
+    thread_link: str,
+    host_surface: str | None,
+) -> bool:
+    from ..thread_agent_binding import (
+        CODEX_THREAD_HOST_SURFACES,
+        ThreadBindingRequestError,
+        resolve_registry_thread_agent_binding,
+    )
+
+    # Route selection compares the raw surface. Binding lookup normalizes it.
+    if host_surface is not None and host_surface not in CODEX_THREAD_HOST_SURFACES:
+        return False
+    try:
+        binding = resolve_registry_thread_agent_binding(
+            registry_path=registry_path,
+            thread_link=thread_link,
+            host_surface=host_surface,
+        )
+    except ThreadBindingRequestError:
+        return False
+    return (
+        binding["status"] == "bound"
+        and binding["goal_id"] != goal_id
+        and binding["agent_id"] == peer_agent_id
+    )
+
+
 def _share_item_guidance(result: dict) -> dict:
     items = result.get("items")
     shared = {}
@@ -368,20 +400,20 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                     host_surface=args.peer_host_surface,
                 )
                 if route["status"] != "resolved":
-                    if route["reason"] == "thread_not_bound_to_peer" and args.peer_thread_link:
-                        from ..thread_agent_binding import resolve_registry_thread_agent_binding
-
-                        binding = resolve_registry_thread_agent_binding(
-                            registry_path=registry_path,
+                    if (
+                        route["reason"] == "thread_not_bound_to_peer"
+                        and args.peer_thread_link
+                        and _confirms_foreign_peer_link(
+                            registry_path,
+                            goal_id=args.goal_id,
+                            peer_agent_id=args.peer_agent_id,
                             thread_link=args.peer_thread_link,
                             host_surface=args.peer_host_surface,
                         )
-                        if (binding["status"] == "bound"
-                                and binding["goal_id"] != args.goal_id
-                                and binding["agent_id"] == args.peer_agent_id):
-                            raise _same_goal_peer_refusal(
-                                args.goal_id, args.agent_id, args.peer_agent_id,
-                            )
+                    ):
+                        raise _same_goal_peer_refusal(
+                            args.goal_id, args.agent_id, args.peer_agent_id,
+                        )
                     raise ValueError(
                         f"peer host route {route['status']}: {route['reason']}; "
                         "no request was recorded"

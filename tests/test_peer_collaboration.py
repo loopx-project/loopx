@@ -533,8 +533,9 @@ def test_operation_replay_conflicts_and_independent_requests(scenario):
 
 @pytest.mark.parametrize("registered_locally", [False, True])
 @pytest.mark.parametrize("surface", ["codex-app", "codex-app-ssh"])
+@pytest.mark.parametrize("select_surface", [False, True])
 def test_cli_cross_goal_peer_failure_is_typed_and_records_no_delivery(
-    scenario, registered_locally, surface
+    scenario, registered_locally, surface, select_surface
 ):
     root, registry, brief, *_ = scenario
     data = json.loads(registry.read_text())
@@ -568,8 +569,7 @@ def test_cli_cross_goal_peer_failure_is_typed_and_records_no_delivery(
         "--require-host-route",
         "--peer-thread-link",
         "codex://threads/foreign-review-task",
-        "--peer-host-surface",
-        surface,
+        *(["--peer-host-surface", surface] if select_surface else []),
         "--operation-id",
         "cross-goal-review",
         "--brief-file",
@@ -588,9 +588,22 @@ def test_cli_cross_goal_peer_failure_is_typed_and_records_no_delivery(
 
 
 @pytest.mark.parametrize(
-    "case", ["unknown", "invalid", "wrong-agent", "ambiguous", "wrong-surface", "no-host-selection"]
+    ("case", "host_surface"),
+    [
+        ("unknown", None),
+        ("invalid", None),
+        ("wrong-agent", None),
+        ("ambiguous", None),
+        ("no-host-selection", None),
+        ("wrong-surface", "codex-app-ssh"),
+        ("wrong-surface", "lark"),
+        ("wrong-surface", "claude-code"),
+        ("wrong-surface", "unknown-host"),
+        pytest.param("wrong-surface", "", id="empty-host"),
+        pytest.param("wrong-surface", "codex-app ", id="host-with-trailing-space"),
+    ],
 )
-def test_cli_unconfirmed_foreign_link_keeps_original_route_refusal(scenario, case):
+def test_cli_unconfirmed_foreign_link_keeps_original_route_refusal(scenario, case, host_surface):
     root, registry, brief, *_ = scenario
     data = json.loads(registry.read_text())
     foreign = {
@@ -610,6 +623,7 @@ def test_cli_unconfirmed_foreign_link_keeps_original_route_refusal(scenario, cas
     registry_before = registry.read_bytes()
     ledger = _root(root)
     before = {path.relative_to(ledger): path.read_bytes() for path in ledger.rglob("*.json")}
+    assert before, "The fixture must contain a real Inbox record before checking no writes."
     path = root / "unconfirmed-review.json"
     path.write_text(json.dumps(brief))
     link = {
@@ -617,17 +631,20 @@ def test_cli_unconfirmed_foreign_link_keeps_original_route_refusal(scenario, cas
         "invalid": "codex://settings",
     }.get(case, "codex://threads/foreign-review-task")
     route_args = [] if case == "no-host-selection" else ["--require-host-route"]
-    if case == "wrong-surface":
-        route_args += ["--peer-host-surface", "codex-app-ssh"]
+    if host_surface is not None:
+        route_args += ["--peer-host-surface", host_surface]
     result = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
                  "--operation-id", "unconfirmed-review", "--brief-file", str(path),
                  "--peer-thread-link", link, *route_args, ok=False)
 
-    assert "error_code" not in result
-    expected = ("peer host selection requires" if case == "no-host-selection" else
-                "invalid_thread_link" if case == "invalid" else "thread_not_bound_to_peer")
-    assert expected in result["error"]
-    assert "request_id" not in result and "recommended_action" not in result
+    expected = {
+        "no-host-selection": "peer host selection requires --require-host-route",
+        "invalid": "peer host route unavailable: invalid_thread_link; no request was recorded",
+    }.get(
+        case,
+        "peer host route not_authorized: thread_not_bound_to_peer; no request was recorded",
+    )
+    assert result == {"ok": False, "error": expected}
     assert {p.relative_to(ledger): p.read_bytes() for p in ledger.rglob("*.json")} == before
     assert registry.read_bytes() == registry_before
 
