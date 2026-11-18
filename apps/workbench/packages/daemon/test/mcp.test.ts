@@ -270,3 +270,31 @@ test('toml edge cases: quoted names, booleans and numbers, inline tables, fresh 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('codex config with trailing header comments preserves file on overwrite:false and replaces cleanly on overwrite:true', async () => {
+  const codexTomlPath = join(home, '.codex', 'config.toml');
+  const commented = `model = "gpt-5.2-codex"\n\n[mcp_servers.example] # local MCP\ncommand = "node"\nargs = ["v1.js"]\n\n[mcp_servers.example.env]  # env comment\nFLAG = "1"\n`;
+  writeFileSync(codexTomlPath, commented);
+
+  const listed = await (await api('/api/mcp')).json();
+  const codex = listed.agents.find((item: { agent: string }) => item.agent === 'codex');
+  assert.ok(codex.servers.some((s: { name: string }) => s.name === 'example'), 'commented TOML header is discovered');
+
+  const noOverwrite = await api('/api/mcp/install', {
+    method: 'POST',
+    body: JSON.stringify({ targets: ['codex'], name: 'example', config: { command: 'node', args: ['v2.js'] }, overwrite: false }),
+  });
+  assert.equal(noOverwrite.status, 200);
+  assert.deepEqual(await noOverwrite.json(), [{ agent: 'codex', status: 'exists' }]);
+  assert.equal(readFileSync(codexTomlPath, 'utf8'), commented, 'overwrite:false leaves commented config byte-for-byte unchanged');
+
+  const withOverwrite = await api('/api/mcp/install', {
+    method: 'POST',
+    body: JSON.stringify({ targets: ['codex'], name: 'example', config: { command: 'node', args: ['v2.js'] }, overwrite: true }),
+  });
+  assert.equal(withOverwrite.status, 200);
+  assert.deepEqual(await withOverwrite.json(), [{ agent: 'codex', status: 'installed' }]);
+  const rewritten = readFileSync(codexTomlPath, 'utf8');
+  assert.equal((rewritten.match(/mcp_servers\.example/g) ?? []).length, 1, 'no duplicate table appended');
+  assert.deepEqual(tomlMcpServers(codexTomlPath), [{ name: 'example', config: { command: 'node', args: ['v2.js'] }, sourcePath: codexTomlPath }]);
+});

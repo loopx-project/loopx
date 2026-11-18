@@ -138,43 +138,30 @@ function lineRanges(text: string): LineRange[] {
   return out;
 }
 
-/** A line that opens any table (`[a.b]`, `[[a]]`): where the previous table's body ends. */
+/** A line that opens any table (`[a.b]`, `[[a]]`), with optional whitespace and `#` comment. */
 function isTableBoundary(line: string): boolean {
-  return /^\s*\[/.test(line);
+  if (parseHeader(line) !== null) return true;
+  const open = skipSpace(line, 0, line.length, false);
+  if (line[open] !== '[' || line[open + 1] !== '[') return false;
+  const key = readKeyPath(line, open + 2, line.length);
+  if (!key) return false;
+  const close = skipSpace(line, key.end, line.length, false);
+  if (line[close] !== ']' || line[close + 1] !== ']') return false;
+  const tail = skipSpace(line, close + 2, line.length, false);
+  return tail >= line.length || line[tail] === '#';
 }
 
 /** A table header (`[a.b]`) split into its path segments; null for anything else. */
 function parseHeader(line: string): string[] | null {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('[') || trimmed.startsWith('[[')) return null;
-  const match = /^\[([^\]]*)\](?:#.*)?$/.exec(trimmed);
-  if (!match) return null;
-  return splitKeyPath(match[1]);
-}
-
-/** Split `a.b` / `"a.b".c` on dots, quotes respected. */
-function splitKeyPath(text: string): string[] | null {
-  const segments: string[] = [];
-  let pos = 0;
-  while (pos < text.length) {
-    while (pos < text.length && /[\s.]/.test(text[pos])) pos++;
-    if (pos >= text.length) break;
-    const quote = text[pos];
-    let segment: string;
-    if (quote === '"' || quote === "'") {
-      const parsed = parseTomlString(text, pos, text.length);
-      if (!parsed) return null;
-      segment = parsed.value;
-      pos = parsed.end;
-    } else {
-      const match = /^[^\s.]+/.exec(text.slice(pos));
-      if (!match) return null;
-      segment = match[0];
-      pos += match[0].length;
-    }
-    segments.push(segment);
-  }
-  return segments.length ? segments : null;
+  const open = skipSpace(line, 0, line.length, false);
+  if (line[open] !== '[' || line[open + 1] === '[') return null;
+  const key = readKeyPath(line, open + 1, line.length);
+  if (!key) return null;
+  const close = skipSpace(line, key.end, line.length, false);
+  if (line[close] !== ']') return null;
+  const tail = skipSpace(line, close + 1, line.length, false);
+  if (tail < line.length && line[tail] !== '#') return null;
+  return key.segments;
 }
 
 function skipSpace(text: string, pos: number, end: number, newlines: boolean): number {
@@ -278,18 +265,19 @@ function readKeyPath(text: string, pos: number, limit: number): { segments: stri
     pos = skipSpace(text, pos, limit, false);
     const c = text[pos];
     if (c === '"' || c === "'") {
+      if (text.startsWith(c.repeat(3), pos)) return null;
       const parsed = parseTomlString(text, pos, limit);
-      if (!parsed) return null;
+      if (!parsed || parsed.end > limit) return null;
       segments.push(parsed.value);
       pos = parsed.end;
     } else {
-      const match = /^[^\s=,.{}[\]]+/.exec(text.slice(pos, limit));
+      const match = /^[A-Za-z0-9_-]+/.exec(text.slice(pos, limit));
       if (!match) return null;
       segments.push(match[0]);
       pos += match[0].length;
     }
     const after = skipSpace(text, pos, limit, false);
-    if (text[after] === '.') {
+    if (after < limit && text[after] === '.') {
       pos = after + 1;
       continue;
     }
@@ -403,7 +391,7 @@ function serializeTomlServer(name: string, config: Record<string, unknown>): str
   const queue: Array<{ path: string[]; body: Record<string, unknown> }> = [{ path: [], body: config }];
   while (queue.length) {
     const { path, body } = queue.shift()!;
-    const lines = [`[${['mcp_servers', name, ...path].join('.')}]`];
+    const lines = [`[${['mcp_servers', name, ...path].map(tomlKey).join('.')}]`];
     for (const [key, value] of Object.entries(body)) {
       if (isPlain(value)) {
         if (Object.keys(value).length) queue.push({ path: [...path, key], body: value });
