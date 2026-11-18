@@ -794,3 +794,91 @@ def test_installed_core_start_goal_preflights_before_creation(core_python, tmp_p
     if invalid == "owned-goal":
         assert refused["error_code"] == "kunluncode_outer_controller_write_owned"
     assert not (tmp_path / ".loopx").exists()
+
+
+def _configure_first_goal_storage(core_python, project, runtime, provider):
+    setup = '''import sys
+from pathlib import Path
+from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+from loopx.capabilities.machine_configuration.contract import MACHINE_CONFIGURATION_SCHEMA
+from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+configuration={'schema_version':MACHINE_CONFIGURATION_SCHEMA,'namespaces':{'goal_storage':{
+'schema_version':'loopx_goal_storage_defaults_v1','new_goal_provider':sys.argv[2],
+'canonical_creation':True,'new_goal_handoff_mode':'hard_lease'}}}
+arguments={'runtime_root':Path(sys.argv[1]),'configuration':configuration,
+'registry':build_builtin_machine_configuration_registry()}
+preview=configure_machine_configuration(**arguments)
+result=configure_machine_configuration(**arguments,execute=True,expected_plan_revision=preview['plan_revision'])
+assert result['readback_verified']
+'''
+    configured = subprocess.run([core_python, "-I", "-c", setup, str(runtime), provider], cwd=project,
+        env=_environment(core_python), capture_output=True, text=True, timeout=45)
+    assert configured.returncode == 0, configured.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGKILL")
+@pytest.mark.parametrize("provider", ["sqlite", "file"])
+@pytest.mark.parametrize("phase", ["registration", "initial-source"])
+def test_installed_core_recovers_first_goal_publication(core_python, tmp_path, monkeypatch, provider, phase):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "first-work"
+    project.mkdir()
+    runtime = project / ".loopx/runtime"
+    registry = project / ".loopx/registry.json"
+    state = project / ".loopx/goals/first-work-goal/ACTIVE_GOAL_STATE.md"
+    if provider == "file":
+        _configure_first_goal_storage(core_python, project, runtime, provider)
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", "Produce and independently check the first report.", "--execute",
+        "--host-adapter-command-json", json.dumps([core_python, "-I", "-c", HOST_SOURCE]),
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])]
+    hook = """import os,signal
+def kill_after(effect):
+    def run(*args, **kwargs):
+        effect(*args, **kwargs)
+        os.kill(os.getpid(), signal.SIGKILL)
+    return run
+"""
+    if phase == "registration":
+        hook += """from loopx.control_plane.projects.registry_codec import ProjectRegistryTransaction
+ProjectRegistryTransaction.commit=kill_after(ProjectRegistryTransaction.commit)
+"""
+    else:
+        hook += """from loopx import bootstrap
+bootstrap.atomic_write_state_text=kill_after(bootstrap.atomic_write_state_text)
+"""
+    command = _command(core_python, arguments)
+    command[3] = hook + command[3]
+    interrupted = subprocess.run(command, cwd=project, env=_environment(core_python),
+        capture_output=True, text=True, timeout=90)
+    assert interrupted.returncode == -signal.SIGKILL, (interrupted.stdout, interrupted.stderr)
+    before = registry.read_bytes()
+    (goal,) = json.loads(before)["goals"]
+    assert goal["id"] == "first-work-goal" and goal["coordination"]["storage_target"]["provider"] == provider
+    assert state.exists() == (phase == "initial-source")
+    assert not (project / "host-invocations").exists()
+
+    _configure_first_goal_storage(core_python, project, runtime, "file" if provider == "sqlite" else "sqlite")
+    changed = list(arguments)
+    changed[changed.index("--goal-text") + 1] = "Start an unrelated task."
+    denied = json.loads(_run(core_python, changed, project, expected=1).stdout)
+    assert "already connected" in denied["error"] and registry.read_bytes() == before
+    assert state.exists() == (phase == "initial-source")
+    assert not (project / "host-invocations").exists()
+
+    recovered = json.loads(_run(core_python, arguments, project).stdout)
+    assert recovered["status"] == "committed" and recovered["validation"]["status"] == "passed"
+    assert recovered["turn_instance_id"] == goal["creation_operation_id"]
+    assert state.is_file() and registry.read_bytes() == before
+    readback = json.loads(_run(core_python, ["--registry", str(registry), "--format", "json",
+        "todo", "list", "--goal-id", goal["id"], "--todo-id", recovered["todo_id"]], project).stdout)
+    assert readback["todo"]["status"] == "done"
+    assert readback["authority_read"]["source_authority"] == f"{provider}_v0"
+    assert json.loads((project / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    replay = json.loads(_run(core_python, arguments, project).stdout)
+    assert replay["todo_id"] == recovered["todo_id"] and replay["resume_turn_key"] == recovered["resume_turn_key"]
+    assert replay["replayed"] and not any(replay["effects"].values())
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+    assert (runtime / "goals/first-work-goal/runs/index.jsonl").read_text().count("quota_slot_spent") == 1

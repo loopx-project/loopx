@@ -7,9 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..bootstrap import DEFAULT_DOMAIN, bootstrap_project, read_json_if_exists
+from ..bootstrap import DEFAULT_DOMAIN, bootstrap_project, initialize_first_goal_storage, read_json_if_exists
 from ..cli_runtime import add_subcommand_format
-from ..control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
 from ..control_plane.goals.source_session_registry_state import canonical_digest
 from ..control_plane.projects.identity import GoalCreationConflictError, default_goal_id, derive_goal_display_name
 from ..control_plane.quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA
@@ -79,7 +78,7 @@ def _register_first_goal(
     goal = find_registry_goal(registry, goal_id)
     if goal is None or goal.get("creation_operation_id") != operation_id or goal.get("repo") != str(project):
         raise ValueError("This project is already connected. Use its original start request or inspect the existing goal.")
-    initialize_goal_storage_target(runtime_root, goal, registry_path=registry_path)
+    initialize_first_goal_storage(runtime_root, goal, registry_path=registry_path, objective=objective)
 
 
 def execute_managed_start(

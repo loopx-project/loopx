@@ -26,9 +26,10 @@ loopx start-goal --execute --project . --goal-text "Create and check an inventor
 
 The configured caller supplies the two JSON argv arrays. Core registers the
 local Goal and worker, creates one task, then runs the existing checked Turn.
-Repeat the original invocation to continue its saved attempt or read back its
-result. The `--guided` route remains available for an existing project or an
-interactive host.
+Repeat the original invocation after an interruption, including during
+registration. It continues the saved attempt or returns the checked result.
+The `--guided` route remains available for an existing project or an interactive
+host.
 
 Python 3.11+ is required. Import and help do not need Node. Executing governed
 tasks requires a qualified Node runtime (22.22.3+ and the existing SQLite
