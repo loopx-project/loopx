@@ -235,6 +235,49 @@ try {
   await page.waitForURL(url => url.searchParams.get("goalId") === parent.goal_id);
   assertParentAddress();
 
+  // Pinning the default study to its chapter address rereads the same version.
+  // Its late response must respect the focus returned by the evidence reader.
+  const defaultStudy = new URL(address);
+  defaultStudy.searchParams.delete("research_pack");
+  defaultStudy.searchParams.delete("research_analysis_goal");
+  defaultStudy.hash = "";
+  await page.goto(defaultStudy.href);
+  await page.setViewportSize({width: 390, height: 900});
+  await chapterControl.locator("summary").waitFor();
+  const isSelectedVersionRead = url => url.origin === defaultStudy.origin && url.pathname === analysisPath
+    && url.searchParams.get("pack_id") === studyPack.pack_id;
+  const isLocalizedRead = url => isSelectedVersionRead(url) && url.searchParams.has("output_language");
+  const stagedRead = Promise.withResolvers();
+  await page.route(isLocalizedRead, async route => {
+    await stagedRead.promise;
+    return route.continue();
+  }, {times: 1});
+  try {
+    const selectedVersionRequest = page.waitForRequest(request => isLocalizedRead(new URL(request.url())));
+    await page.getByRole("navigation", {name: "解读目录"}).getByRole("link").nth(1).press("Enter");
+    await selectedVersionRequest;
+    await atChapter();
+    await chapterControl.locator("summary").press("Enter");
+    await originalLink.press("Enter");
+    await citation.locator("pre").first().waitFor();
+    await citation.press("Escape");
+    await page.waitForFunction(id => document.activeElement?.id === id, bookmark.hash.slice(1));
+    const savedOriginalRead = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.ok() && isSelectedVersionRead(url) && !url.searchParams.has("output_language");
+    });
+    stagedRead.resolve();
+    await (await savedOriginalRead).finished();
+    await page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
+    assert.equal(await originalLink.evaluate(link => document.activeElement === link), true,
+      "A delayed reread of the selected version must leave focus on the citation after closing it");
+    assert.equal(new URL(page.url()).hash, address.hash);
+  } finally {
+    stagedRead.resolve();
+    await page.unroute(isLocalizedRead);
+  }
+  await page.setViewportSize({width: 1200, height: 900});
+
   // A saved case address is never rewritten to a nearby version. Recover
   // explicitly with the owner's version selector or default catalogue read.
   const metrics = async () => (await fetch(new URL("/fixture/readback", study))).json();

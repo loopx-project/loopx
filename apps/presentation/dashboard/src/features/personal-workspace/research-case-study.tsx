@@ -62,11 +62,15 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
   onCitationLocationChange: (hash: string) => void;
 }) {
   const article = useRef<HTMLElement>(null);
+  const currentStudy = useRef(study);
+  currentStudy.current = study;
   const openCitation = useRef(onCitation);
   openCitation.current = onCitation;
   const [missingAnchor, setMissingAnchor] = useState("");
   const {url, goalId, packId, namespace, follow} = navigation;
   const prefix = `${caseChapterHashPrefix.slice(1)}${namespace ? namespace + '-' : ''}${packId}-`;
+  // A reread can replace the study object while the saved version and address
+  // stay the same. Only navigation should run chapter and citation restoration.
   useEffect(() => {
     if (!active) return;
     let frame = 0;
@@ -85,7 +89,8 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
           // into a source identifier or range for the evidence API.
           const match = scoped ? /^([a-zA-Z0-9_-]*)~([1-9][0-9]?)$/.exec(hash.slice(prefix.length + 1)) : null;
           const section = match?.[1];
-          const citations = section ? study.sections.find(item => item.id === section)?.citations : study.citations;
+          const savedStudy = currentStudy.current;
+          const citations = section ? savedStudy.sections.find(item => item.id === section)?.citations : savedStudy.citations;
           const citation = match ? citations?.[Number(match[2]) - 1] : undefined;
           const origin = document.getElementById(hash.slice(1));
           if (!citation || !origin || !article.current?.contains(origin)) {
@@ -115,7 +120,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
       window.removeEventListener('popstate', restore);
       window.removeEventListener('hashchange', restore);
     };
-  }, [active, goalId, packId, prefix, study, onCitationLocationChange]);
+  }, [active, goalId, packId, prefix, onCitationLocationChange]);
   const citationLinks = (citations: AssessmentCitation[], section = "") => <ul className="case-citation-links" role="list">
     {citations.map((c, i) => {
       const id = `${prefix}${section}~${i + 1}`;
