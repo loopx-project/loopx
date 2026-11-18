@@ -90,7 +90,7 @@ from .semantic_history import (
     _latest_runs_for_goal,
     latest_agent_vision_from_runs as latest_agent_vision_from_runs,
     latest_agent_vision_from_status_payload,
-    latest_autonomous_replan_ack_from_status_payload,
+    receipt_bound_replan_ack_history,
     latest_missing_vision_checkpoint_from_status_payload,
     latest_replan_ack_feedback_from_status_payload,
 )
@@ -1451,25 +1451,13 @@ def build_goal_frontier_projection_context_from_status(
     if replan_scope.get("required") and not replan_scope.get("applies"):
         replan_obligation = None
 
-    latest_agent_replan_ack = latest_autonomous_replan_ack_from_status_payload(
+    latest_agent_replan_ack, scoped_ack_history = receipt_bound_replan_ack_history(
         status_payload,
         goal_id=goal_id,
         agent_id=agent_id,
         neutral_classifications=neutral_replan_ack_classifications,
+        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
     )
-    # Receipt recovery supplies the owned ACK history, including an empty list.
-    # The status snapshot's newest ACK can belong to another Goal instance, so
-    # it must not satisfy or replace this Turn's review.
-    scoped_ack_history = (
-        status_payload.get("receipt_bound_replan_ack_candidates")
-        if receipt_bound_replan_obligation_id
-        else None
-    )
-    if isinstance(scoped_ack_history, list):
-        latest_agent_replan_ack = next(
-            (candidate for candidate in scoped_ack_history if isinstance(candidate, dict)),
-            None,
-        )
     latest_replan_ack_feedback = latest_replan_ack_feedback_from_status_payload(
         status_payload,
         goal_id=goal_id,
@@ -1690,11 +1678,7 @@ def build_goal_frontier_projection_context_from_status(
         )[:8]
         if isinstance(candidate, dict)
     ]
-    if (
-        latest_agent_replan_ack is not None
-        and receipt_bound_replan_obligation_id
-        and not isinstance(raw_historical_ack_candidates, list)
-    ):
+    if latest_agent_replan_ack is not None and receipt_bound_replan_obligation_id:
         historical_ack_candidates.append(
             {"historical_ack": latest_agent_replan_ack}
         )
