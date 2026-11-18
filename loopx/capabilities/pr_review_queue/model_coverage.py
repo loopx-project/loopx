@@ -24,6 +24,11 @@ _COMPACT_DECLARATION = re.compile(
     r"\s*\((runtime_reported|self_reported)(?:,\s*[\w -]+)?\)",
     re.IGNORECASE,
 )
+_DOTTED_DECLARATION = re.compile(
+    r"model_agent\s*·\s*([^·]+?)\s*·\s*([^·]+?)\s*·\s*(runtime_reported|self_reported)"
+    r"(?:\s*·\s*(?:reasoning_effort=[\w -]+|effort_unavailable))?",
+    re.IGNORECASE,
+)
 _KEYED_DECLARATION = re.compile(
     r"model_agent;\s*model=([^;]+);\s*provider=([^;]+);\s*"
     r"declaration_source=(runtime_reported|self_reported)"
@@ -65,6 +70,7 @@ def published_review_model(body: object) -> tuple[str, str] | None:
         return None
     match = (
         _COMPACT_DECLARATION.fullmatch(lines[0])
+        or _DOTTED_DECLARATION.fullmatch(lines[0])
         or _KEYED_DECLARATION.fullmatch(lines[0])
         or _KEYED_PIPE_DECLARATION.fullmatch(lines[0])
     )

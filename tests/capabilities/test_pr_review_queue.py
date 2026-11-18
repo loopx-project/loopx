@@ -768,14 +768,20 @@ def test_model_queue_reviews_another_familys_current_head(author_only):
 
 
 @pytest.mark.parametrize("shared_login", [True, False])
-def test_later_other_family_does_not_repeat_a_current_matching_review(shared_login):
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "Reviewer: model_agent | model=gpt-6.2-sol | provider=OpenAI "
+        "| reasoning_effort=max | source=runtime_reported",
+        "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · reasoning_effort=max",
+    ],
+    ids=["keyed-pipe", "middle-dot"],
+)
+def test_later_other_family_does_not_repeat_a_current_matching_review(shared_login, declaration):
     matching = "shared-review-account" if shared_login else "independent"
     report = _github_model_review(10, login=matching, family="gpt-6.2-sol", source="runtime_reported")
     _, separator, rest = report["body"].partition("\n")
-    report["body"] = (
-        "Reviewer: model_agent | model=gpt-6.2-sol | provider=OpenAI "
-        f"| reasoning_effort=max | source=runtime_reported{separator}{rest}"
-    )
+    report["body"] = f"{declaration}{separator}{rest}"
     pr = _github_model_pr([report, _github_model_review(11, login="second-peer", family="Gemini")])
     before = _model_queue_row(pr, family=None)
     after = _model_queue_row(pr)
@@ -851,6 +857,12 @@ def test_model_queue_reads_complete_history_for_author_only_review_events():
         ("Reviewer: Gemini | Google DeepMind (self_reported)", ("gemini", "self_reported")),
         ("Reviewer: model_agent | self_reported | Gemini | Google DeepMind", ("gemini", "self_reported")),
         ("Reviewer: model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)", ("gpt", "runtime_reported")),
+        (
+            "Reviewer: model_agent · GPT-6 · OpenAI · runtime_reported · effort_unavailable",
+            ("gpt", "runtime_reported"),
+        ),
+        ("Reviewer: model_agent · Gemini · Google · self_reported", ("gemini", "self_reported")),
+        ("Reviewer: model_agent · GPT-6 · OpenAI · runtime_reported · self_reported", None),
         ("Reviewer: model_agent; model=GPT-5; provider=OpenAI; declaration_source=self_reported.", ("gpt", "self_reported")),
         ("Reviewer: model_agent | model=Gemini | provider=Google DeepMind | source=self_reported", ("gemini", "self_reported")),
         ("Reviewer: model_agent | model=Gemini | provider=Google | provider=OpenAI | source=self_reported", None),
