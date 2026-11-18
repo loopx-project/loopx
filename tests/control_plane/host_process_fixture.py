@@ -19,10 +19,28 @@ def assert_host_task_context(model_input, source):
     context = model_input["task_context"]
     outer_fields = {"schema_version", "contract_binding", "projection_envelope", "scheduler_hint",
                     "automation_cadence_readback", "automation_liveness", "scheduler_execution_context"}
-    assert set(context) == set(source) - outer_fields
-    for field in set(source) - outer_fields - {"interaction_contract"}:
+    expected = {field: value for field, value in source.items() if field not in outer_fields}
+    hints = expected.get("todo_write_hint")
+    if isinstance(hints, dict):
+        commands = {"rule", "section", "agent_todo_command_template", "user_action_command_template",
+                    "user_gate_command_template"}
+        retained = {k: v for k, v in hints.items() if k not in commands or not isinstance(v, str)}
+        if retained:
+            expected["todo_write_hint"] = retained
+        elif hints:
+            del expected["todo_write_hint"]
+    heartbeat = expected.get("heartbeat_recommendation")
+    if (source.get("normal_delivery_allowed") is True and isinstance(heartbeat, dict)
+            and heartbeat.get("recommended_mode") == "steering_audit_then_one_step"
+            and isinstance(heartbeat.get("spend_policy"), str)):
+        expected["heartbeat_recommendation"] = {k: v for k, v in heartbeat.items() if k != "spend_policy"}
+    assert set(context) == set(expected), {
+        "unexpected": sorted(context.keys() - expected.keys()),
+        "missing": sorted(expected.keys() - context.keys()),
+    }
+    for field in set(expected) - {"interaction_contract"}:
         assert json.dumps(context[field], sort_keys=True, ensure_ascii=False) == json.dumps(
-            source[field], sort_keys=True, ensure_ascii=False), field
+            expected[field], sort_keys=True, ensure_ascii=False), field
     interaction = source["interaction_contract"]
     assert context["interaction_contract"] == {k: v for k, v in interaction.items() if k != "cli_channel"}
     if "source_decision_hash" in model_input:

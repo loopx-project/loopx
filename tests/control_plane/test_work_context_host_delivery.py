@@ -1,9 +1,7 @@
 """Authored requirements must reach the Host, not just agree after projection."""
 import copy
 import json
-import os
 import shlex
-import subprocess
 from urllib.parse import quote
 
 import pytest
@@ -75,6 +73,10 @@ def test_policy_observer_reads_original_signed_capture_after_todo_references(tmp
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('repetitions', [1, 40])
 def test_authored_requirements_survive_capture_projection_and_host(tmp_path, monkeypatch, provider, repetitions):
+    from loopx.control_plane.quota.turn_envelope import bind_turn_decision_capture, build_turn_envelope
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+    from tests.control_plane.host_process_fixture import assert_host_task_context
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
@@ -101,12 +103,14 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'original-context'
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
+    code, current = _run_cli(registry, runtime, *args, '--turn-envelope',
                               '--decision-output-dir', str(capture))
-    assert code == 0, envelope
+    assert code == 0, current
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
+    assert current == full and full['schema_version'] == 'loopx_turn_envelope_v1'
+    envelope = build_turn_envelope(full, captured_decision_path=str(saved))
     source_context = full['interaction_contract']['agent_channel']['work_context']
     assert source_context['complete'] is True
     assert source_context['instruction']  # Non-vacuous instruction transport.
@@ -139,16 +143,11 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert task_detail['note'] == note
     delivered_task = task_detail.get('text', authority['selected_todo']['text'])
     assert delivered_task == source_task['text']
-    # This fixture has an unregistered Goal narrative: pending read must remain
-    # explicit even when all available inline sources were loaded successfully.
-    goal_read = next(item for item in authority['required_reads'] if item['source'] == 'goal_state')
-    assert goal_read['ordering'] == 'before_work'
-    if os.name != 'nt':
-        readback = subprocess.run(shlex.split(goal_read['command']), capture_output=True,
-                                  text=True, check=True)
-        assert goal in readback.stdout
-    else:
-        assert goal in state.read_text(encoding='utf-8')
+    # The current capture delivers the complete Goal inline. Keep the separate
+    # acceptance text and avoid making the Worker read the same file twice.
+    assert source_by_kind['goal_state']['full_source'] is True
+    assert goal in source_by_kind['goal_state']['text']
+    assert all(item['source'] != 'goal_state' for item in authority['required_reads'])
     # The actual Host prompt must contain the independent source requirements,
     # not merely match an action signature computed by the same projector.
     prompt = render_prompt(authority)
@@ -188,6 +187,25 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             plan = build_loopx_turn_plan(altered, host='generic-cli', execution_mode='isolated-headless')
             assert plan['route']['kind'] == 'contract_error'
             assert plan['route']['would_invoke_host'] is False
+    plan = build_loopx_turn_plan(full, host='generic-cli', execution_mode='isolated-headless',
+                                turn_instance_id=TURN_ID)
+    request = build_loopx_turn_host_request(plan)
+    assert request['work_contract'] == full
+    request.update(bind_turn_decision_capture(
+        full, captured_decision_path=str(saved), turn_instance_id=TURN_ID, turn_key=request['turn_key'],
+        complete_host_request={key: request[key] for key in ('schema_version', 'turn_key', 'source_decision_hash')},
+    ))
+    structured = render_prompt(extract_turn_authority(request))
+    model_input, _ = json.JSONDecoder().raw_decode(structured.split('Turn request:\n', 1)[1])
+    codex_input = json.loads(_prompt(request).split('Turn request:\n', 1)[1])
+    assert model_input == codex_input
+    worker = assert_host_task_context(model_input, full)
+    worker_context = worker['interaction_contract']['agent_channel']['work_context']
+    worker_sources = {source['source']: source['content'] for source in worker_context['sources']}
+    primary = worker_sources['selected_todo']['todo']
+    assert primary['note'] == note
+    assert primary.get('text', worker['selected_todo']['text']) == source_task['text']
+    assert goal in worker_sources['goal_state']['text']
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)
     code, ordinary = _run_cli(registry, runtime, *args)
     assert code == 0, ordinary

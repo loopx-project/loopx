@@ -281,6 +281,10 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 4. **提供上下文：** 为所选工作和 executor 渲染现有受治理工作契约，复用统一 Controller/Executor
    设计的首次完整、后续差量与恢复语义。Required reads 和来源完整性仍有约束力。
 
+内置 Host 启动的 Worker 收到任务要求、权限范围和原始依据的读取路径。Todo 写入指令
+和普通执行模式的扣额说明留在外层执行器持有的完整 capture 中。Worker 仍能读取工作、
+修复和停止条件。
+
 相关来源/要求版本变化、Session generation 变化、compaction 或 ACK 丢失时，必须使上下文复用失效。
 不能因为 packet 更小，就认为 executor 已掌握前文。连续性未知时走所属契约的恢复路径。
 Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导。

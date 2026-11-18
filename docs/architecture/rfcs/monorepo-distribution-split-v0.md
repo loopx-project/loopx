@@ -407,6 +407,12 @@ retained core capability (D2).
    recovery semantics from the unified controller/executor design. Required
    reads and source completeness remain binding.
 
+A Worker launched by a built-in Host receives task requirements, scoped
+authority, and the original read route. Todo-authoring directions and the
+ordinary delivery mode's quota spend instructions stay with the outer executor
+in the complete captured contract. Work, repair, and stop conditions remain
+available to the Worker.
+
 Context reuse must be invalidated by relevant source/requirement revisions,
 session generation changes, compaction or lost acknowledgements. A smaller
 packet cannot be treated as proof the executor has the prior context. Recover

@@ -692,6 +692,7 @@ def test_installed_core_rejects_unverified_artifact_without_settlement(core_pyth
 
 
 def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_python, task, tmp_path, monkeypatch):
+    from tests.control_plane.host_process_fixture import assert_host_task_context
     from tests.test_loopx_turn_codex_cli import _fake_codex
 
     workspace, runtime, registry, _ = task
@@ -704,7 +705,10 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         "--owner", AGENT, "--idempotency-key", lease["idempotency_key"],
         "--expected-version", str(lease["version"])], workspace)
     binary, log = _fake_codex(tmp_path)
-    binary.write_text(binary.read_text().replace('output_path = ',
+    binary.write_text(binary.read_text().replace("prompt = sys.stdin.read()",
+        'prompt = sys.stdin.read()\npathlib.Path("worker-context.json").write_text('
+        'prompt.split("Turn request:\\n", 1)[1], encoding="utf-8")'
+    ).replace('output_path = ',
         'pathlib.Path("squares.json").write_text(json.dumps([n*n for n in range(8)]))\noutput_path = '))
     home = tmp_path / "codex-home"
     home.mkdir()
@@ -724,6 +728,14 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         workspace, environment=environment).stdout)
     assert result["status"] == "committed" and result["validation"]["status"] == "passed", result
     assert json.loads((workspace / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    model_input = json.loads((workspace / "worker-context.json").read_text(encoding="utf-8"))
+    capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
+    original = json.loads(capture.read_text(encoding="utf-8"))
+    assert original["todo_write_hint"]["agent_todo_command_template"].startswith("loopx todo add")
+    assert "spend_policy" in original["heartbeat_recommendation"]
+    context = assert_host_task_context(model_input, original)
+    assert "todo_write_hint" not in context
+    assert "spend_policy" not in context["heartbeat_recommendation"]
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
     resume_command = [item for index, item in enumerate(command)
                       if item != "--todo-id" and (index == 0 or command[index - 1] != "--todo-id")]

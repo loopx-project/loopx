@@ -1878,6 +1878,27 @@ function hostModelContextChanges(decision: JsonObject): JsonObject {
     "scheduler_execution_context"]) {
     delete context[field];
   }
+  // Todo-authoring directions belong to the outer executor. Preserve other
+  // fields because task context may depend on future additions.
+  const writeHint = object(decision.todo_write_hint);
+  const hintCount = Object.keys(writeHint).length;
+  for (const key of ["rule", "section", "agent_todo_command_template",
+    "user_action_command_template", "user_gate_command_template"]) {
+    if (typeof writeHint[key] === "string") delete writeHint[key];
+  }
+  const retainedHints = Object.keys(writeHint).length;
+  if (retainedHints !== hintCount) {
+    if (retainedHints) context.todo_write_hint = writeHint;
+    else delete context.todo_write_hint;
+  }
+  const heartbeat = object(decision.heartbeat_recommendation);
+  // Other modes can include read, repair or wait conditions inside spend_policy.
+  if (decision.normal_delivery_allowed === true &&
+      heartbeat.recommended_mode === "steering_audit_then_one_step" &&
+      typeof heartbeat.spend_policy === "string") {
+    delete heartbeat.spend_policy;
+    context.heartbeat_recommendation = heartbeat;
+  }
   const interaction = {...object(decision.interaction_contract)};
   const agent = object(interaction.agent_channel);
   // The complete source may share task authoring/evidence with its effect

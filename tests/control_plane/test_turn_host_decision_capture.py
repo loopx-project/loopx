@@ -1531,6 +1531,36 @@ def test_task_presentation_retains_unknown_values_and_source_gate(complete_host_
             _prompt(changed)
 
 
+@pytest.mark.parametrize("mode", ["steering_audit_then_one_step", "monitor_quiet_until_material_transition"])
+def test_task_presentation_keeps_task_and_stop_guidance_inside_control_records(complete_host_request, mode):
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+
+    request, original = complete_host_request
+    source = {key: value for key, value in original.items() if key not in {"schema_version", "contract_binding"}}
+    source["todo_write_hint"] = {
+        **source["todo_write_hint"], "task_evidence": {"instruction": "Read the result artifact before reporting."},
+    }
+    source["heartbeat_recommendation"] = {
+        **source["heartbeat_recommendation"], "recommended_mode": mode, "stop_if_unchanged": True,
+    }
+    source["execution_obligation"] = {
+        **source["execution_obligation"], "spend_policy": "Hold dependent work until the pending evidence is verified.",
+    }
+    contract = compose_turn_decision(source)
+    request = {**request, "work_contract": contract, "turn_envelope": build_turn_envelope(contract)}
+    task = json.loads(_prompt(request).split("Turn request:\n", 1)[1])["task_context"]
+    assert task["todo_write_hint"] == {"task_evidence": source["todo_write_hint"]["task_evidence"]}
+    assert task["heartbeat_recommendation"]["stop_if_unchanged"] is True
+    assert task["execution_obligation"] == source["execution_obligation"]
+    policy = source["heartbeat_recommendation"]["spend_policy"]
+    assert contract["heartbeat_recommendation"]["spend_policy"] == policy
+    if mode == "steering_audit_then_one_step":
+        assert "spend_policy" not in task["heartbeat_recommendation"]
+    else:
+        assert task["heartbeat_recommendation"]["spend_policy"] == policy
+
+
 def test_task_view_resolves_authoring_and_explore_before_hiding_effects(complete_host_request):
     from copy import deepcopy
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
