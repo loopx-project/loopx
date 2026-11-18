@@ -5097,6 +5097,110 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(
     assert _spend_run_count(runtime) == 0
 
 
+def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, handoff_mode="hard_lease")
+
+    preview_rc, preview = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert preview_rc == 0, preview
+    selection = preview["interaction_contract"]["cli_channel"]["selection_command"]
+    command = (
+        selection["route_prefix"] + " " + selection["command_args_template"]
+    ).replace("{todo_id}", ALTERNATIVE_TODO_ID)
+
+    selected_rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert selected_rc == 0, selected
+    assert selected["execution_preparation"]["state"] == "claim_required"
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    turn_instance_id = identity["turn_instance_id"]
+    receipt_events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert receipt_events[-1]["details"]["quota_spend_source"] == "visible-goal"
+
+    claim_rc, claim = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "claim",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--claimed-by",
+        AGENT_ID,
+    )
+    assert claim_rc == 0 and claim["execution_managed"] is True, claim
+    ready_rc, ready = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    assert ready_rc == 0, ready
+    assert ready["execution_preparation"]["state"] == "ready"
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--classification",
+        "visible_goal_hard_lease_progress",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
+        "--progress-result-class",
+        "advanced",
+        "--progress-work-item-id",
+        ALTERNATIVE_TODO_ID,
+        "--progress-evidence-id",
+        "evidence:visible-goal-hard-lease",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["settlement_progress"]["quota_spend_source"] == "visible-goal"
+    assert "--source visible-goal" in refresh["settlement_owed"]["command"]
+
+
 @pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
 def test_host_owned_turn_executes_projected_selection_and_replays_identity(
     tmp_path: Path, profile: str,

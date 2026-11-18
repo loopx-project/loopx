@@ -28,6 +28,9 @@ from .quota_registration import (
 from .quota_reward_memory import attach_reward_memory_ingest_after_spend
 
 if TYPE_CHECKING:
+    from ..control_plane.scheduler.execution_context import (
+        SchedulerExecutionContextResolution,
+    )
     from .quota_action_selection import RequestedQuotaActionSelection
     from .quota_context import QuotaCommandContext
     from .quota_should_run import ShouldRunExecutionState
@@ -445,6 +448,9 @@ def _execute_quota_command(
     heartbeat_stall_observation = "not_evaluated"
     detail_sections: frozenset[str] = frozenset()
     context: QuotaCommandContext | None = None
+    scheduler_context: (
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
+    ) = None
     goal_ref: dict[str, str] | None = None
     reentry: tuple[argparse.Namespace, str | None] | None = None
     should_run_state: ShouldRunExecutionState | None = None
@@ -639,6 +645,7 @@ def _execute_quota_command(
             args,
             todo_id=rollout_todo_id,
             replan_obligation_id=rollout_replan_obligation_id,
+            scheduler_execution_context=scheduler_context,
         )
         if heartbeat_turn_id and args.quota_command == "should-run":
             from .quota_should_run import record_should_run_heartbeat_receipt
