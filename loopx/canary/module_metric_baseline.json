@@ -37,6 +37,16 @@
     "loopx/capabilities/native_chat/external_conversations.py": {
       "lines": 2111
     },
+    "loopx/capabilities/steward_executor/allocation.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 225
+    },
+    "loopx/capabilities/steward_executor/machine_defaults.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 379
+    },
     "loopx/chat_actions.py": {
       "any_count": 52,
       "dict_any_count": 0
