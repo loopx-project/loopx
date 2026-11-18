@@ -147,7 +147,8 @@ interface Props {
   mentionExtra?: (mention: AgentMention) => ReactNode;
   /** The mark of the agent behind a choice, for the @ list. */
   mentionIcon?: (mention: AgentMention) => string | undefined;
-  onSend: (text: string, images: PreparedImage[], mentions?: AgentMention[], videos?: PreparedVideo[]) => Promise<void> | void;
+  /** Report the created thread's scoped draft key before uploads, independently of navigation. */
+  onSend: (text: string, images: PreparedImage[], mentions?: AgentMention[], videos?: PreparedVideo[], onCreated?: (draftKey: string) => void) => Promise<void> | void;
   onStop: () => void;
   /** Strip above the text area: which agent and which directory. */
   header: ReactNode;
@@ -500,19 +501,7 @@ export function Composer({
   const draftRef = useRef<Draft>({ text, notes, references, images, videos });
   draftRef.current = { text, notes, references, images, videos, mentions, ...(unsettled ? { sending: inFlight.current! } : {}) };
   const sendingRef = useRef<{ key: string | undefined; mark: Sending } | null>(null);
-  const previousDraftKey = useRef(draftKey);
-  const isNewDraftKey = (key: string | undefined) => key === 'new' || Boolean(key?.endsWith(':new'));
-  useLayoutEffect(() => {
-    if (draftKey === undefined) return;
-    const previous = previousDraftKey.current;
-    previousDraftKey.current = draftKey;
-    // Creating a thread changes its draft key before uploads finish. Keep that first message
-    // in the new thread so an interrupted upload still has an editable, retryable draft.
-    const activeSend = sendingRef.current;
-    const firstMessage = activeSend !== null && activeSend.key === previous && isNewDraftKey(previous);
-    if (firstMessage) activeSend.key = draftKey;
-    const saved = loadDraft(draftKey) ?? (firstMessage ? draftRef.current : undefined);
-    if (firstMessage && saved) keepDraft(draftKey, saved);
+  const showDraft = (saved: Draft | undefined) => {
     inFlight.current = saved?.sending ?? null;
     setText(saved?.text ?? '');
     setReferences(saved?.references ?? []);
@@ -525,12 +514,16 @@ export function Composer({
       saved.focus = false;
       ref.current?.focus();
     }
+  };
+  useLayoutEffect(() => {
+    if (draftKey === undefined) return;
+    showDraft(loadDraft(draftKey));
     return () => {
       const draft = draftRef.current;
-      // A message on its way out is not a draft: sending a new thread's first message opens the
-      // thread mid-send, and the text must not stay behind in the next new thread.
-      const leavingSentNewDraft = sendingRef.current !== null && sendingRef.current.key === draftKey && isNewDraftKey(draftKey);
-      keepDraft(draftKey, leavingSentNewDraft ? null : draft);
+      // A creation receipt or send completion may already have moved/cleared this marked draft.
+      // A late layout cleanup must not resurrect it or replace a newer draft.
+      if (draft.sending && loadDraft(draftKey)?.sending !== draft.sending) return;
+      keepDraft(draftKey, draft);
     };
   }, [draftKey]);
 
@@ -840,26 +833,42 @@ export function Composer({
     const message = asMessage(text, notes, references);
     const mark: Sending = { text: message, after: lastSent?.turnId ?? null };
     const sendOwner = { key: draftKey, mark };
+    const sentDraft = { text, notes, references, images, videos, mentions, sending: mark };
     sendingRef.current = sendOwner;
     // Carry the send identity when the new draft becomes its created conversation.
     inFlight.current = mark;
+    draftRef.current = sentDraft;
     // On the device the draft now says it is on its way. Should the page be reloaded before the
     // send comes back, it is neither lost nor taken for something still to send.
-    if (sendOwner.key !== undefined) keepDraft(sendOwner.key, { text, notes, references, images, videos, mentions, sending: mark });
+    if (sendOwner.key !== undefined) keepDraft(sendOwner.key, sentDraft);
+    const onCreated = (createdKey: string) => {
+      if (sendingRef.current !== sendOwner || createdKey === sendOwner.key) return;
+      const previousKey = sendOwner.key;
+      sendOwner.key = createdKey;
+      const saved = loadDraft(createdKey);
+      if (!saved) keepDraft(createdKey, sentDraft);
+      if (previousKey !== undefined && loadDraft(previousKey)?.sending === mark) keepDraft(previousKey, null);
+      if (keyRef.current === createdKey && !saved) showDraft(sentDraft);
+    };
     const slowTimer = setTimeout(() => setSlow(true), SLOW_SEND_MS);
     try {
       if (taker) await takeover!.go(taker.id, [message, taker.task?.trim()].filter(Boolean).join('\n\n'));
-      else await onSend(message, images, mentions, videos);
-      if (sendOwner.key !== undefined) keepDraft(sendOwner.key, null);
+      else await onSend(message, images, mentions, videos, onCreated);
+      const ownsDraft = sendOwner.key === undefined || loadDraft(sendOwner.key)?.sending === mark;
+      if (sendOwner.key !== undefined && ownsDraft) keepDraft(sendOwner.key, null);
       images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
       videos.forEach(video => URL.revokeObjectURL(video.previewUrl));
       // The same composer may now hold another conversation's draft.
-      if (keyRef.current !== sendOwner.key && inFlight.current !== mark) return;
+      if (!ownsDraft || keyRef.current !== sendOwner.key || inFlight.current !== mark) return;
+      if (draftRef.current.sending !== mark) {
+        // Edits made while sending are a new draft, not part of the completed message.
+        inFlight.current = null;
+        if (sendOwner.key !== undefined) keepDraft(sendOwner.key, draftRef.current);
+        return;
+      }
       setMentions([]);
-      // Forget the sent draft at once, but retain words committed while its request was pending.
-      const remainingText = draftRef.current.text === text ? '' : draftRef.current.text;
-      if (keyRef.current !== undefined) keepDraft(keyRef.current, remainingText ? { text: remainingText, notes: [], images: [] } : null);
       inFlight.current = null;
+      draftRef.current = { text: '', notes: [], images: [] };
       setNotes([]);
       setReferences([]);
       setVideos([]);
@@ -868,14 +877,14 @@ export function Composer({
     } catch (error) {
       const sentKey = sendOwner.key;
       if (error instanceof SendCancelled) {
-        if (keyRef.current === sentKey) inFlight.current = null;
-        if (sentKey !== undefined) {
+        if (sentKey !== undefined && loadDraft(sentKey)?.sending === mark) {
           const draft = keyRef.current === sentKey ? draftRef.current : { text, notes, references, images, videos, mentions };
           keepDraft(sentKey, { ...draft, sending: undefined });
         }
+        if (keyRef.current === sentKey && inFlight.current === mark) inFlight.current = null;
       } else {
         // A failed read can follow a successful send, so retain the mark until history resolves it.
-        if (keyRef.current === sentKey) inFlight.current = mark;
+        if (keyRef.current === sentKey && (sentKey === undefined || loadDraft(sentKey)?.sending === mark)) inFlight.current = mark;
       }
     } finally {
       clearTimeout(slowTimer);

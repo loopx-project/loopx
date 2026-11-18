@@ -2,8 +2,97 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement, type ComponentProps } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { Composer } from '../src/components/Composer.js';
-import { readDrafts, writeDraft } from '../src/drafts.js';
+import { Composer, prefillComposerDraft } from '../src/components/Composer.js';
+import { readDrafts, writeDraft, SendCancelled } from '../src/drafts.js';
+
+for (const prefix of ['', 'host:remote:']) for (const createdFirst of [false, true]) {
+  test(`a first send never borrows B's draft (prefix=${prefix}, createdFirst=${createdFirst})`, async () => {
+    const globals = ['window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'] as const;
+    const previous = globals.map(key => Object.getOwnPropertyDescriptor(globalThis, key));
+    const data = new Map<string, string>();
+    const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+    Object.assign(globalThis, {
+      window: Object.assign(new EventTarget(), { localStorage: storage, matchMedia: () => Object.assign(new EventTarget(), { matches: false }), setTimeout, clearTimeout }),
+      document: new EventTarget(), requestAnimationFrame: () => 0, cancelAnimationFrame() {}, IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    const newKey = `${prefix}new`, b = `${prefix}saved-b-${createdFirst}`, created = `${prefix}created-${createdFirst}`;
+    const note = { quote: 'B reference passage', comment: 'B question' };
+    writeDraft(storage, newKey, { text: 'First request', notes: [] });
+    writeDraft(storage, b, { text: 'Unsent B text', notes: [note] });
+    let resolve!: () => void;
+    let onCreated: ((key: string) => void) | undefined;
+    const sending = new Promise<void>(done => { resolve = done; });
+    const props: ComponentProps<typeof Composer> = {
+      draftKey: newKey, running: false, placeholder: '',
+      onSend: (_text, _images, _mentions, _videos, created) => { onCreated = created; return sending; },
+      onStop() {}, header: null, left: null, right: null,
+      commands: [], actions: [], hiddenCommands: [], onAction() {}, attachBlocked: null, onError() {}, queued: [], onRemoveQueued() {},
+      onEditQueued: async () => ({ text: '', images: [] }), onSendQueuedNow() {}, restore: null, note: null,
+    };
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => { renderer = create(createElement(Composer, props), { createNodeMock: () => ({ style: {}, focus() {}, contains: () => false, getBoundingClientRect: () => ({ height: 0 }) }) }); });
+      await act(async () => { renderer!.root.findByProps({ className: 'send-btn' }).props.onClick({ preventDefault() {} }); });
+      if (createdFirst) await act(async () => { onCreated?.(created); });
+      await act(async () => { renderer!.update(createElement(Composer, { ...props, draftKey: b })); });
+      assert.equal(renderer!.root.findByType('textarea').props.value, 'Unsent B text');
+      if (!createdFirst) await act(async () => { onCreated?.(created); });
+      assert.equal(readDrafts(storage)[created]?.text, 'First request');
+      assert.deepEqual(readDrafts(storage)[created]?.notes, [], 'only the sending draft migrates to the created thread');
+      assert.equal(readDrafts(storage)[b]?.sending, undefined, 'B never acquires this send identity');
+      await act(async () => { resolve(); await sending; });
+      assert.equal(readDrafts(storage)[b]?.text, 'Unsent B text', 'completion must not remove B storage');
+      assert.deepEqual(readDrafts(storage)[b]?.notes, [note]);
+      assert.equal(renderer!.root.findByType('textarea').props.value, 'Unsent B text');
+      assert.match(JSON.stringify(renderer!.toJSON()), /B reference passage/);
+      assert.equal(readDrafts(storage)[created], undefined, 'the sent draft is cleared only from its created thread');
+      await act(async () => { renderer!.update(createElement(Composer, { ...props, draftKey: created })); });
+      assert.equal(renderer!.root.findByType('textarea').props.value, '', 'created thread must not inherit B text');
+      assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /B reference passage/);
+      await act(async () => { renderer!.update(createElement(Composer, { ...props, draftKey: b })); });
+      assert.equal(renderer!.root.findByType('textarea').props.value, 'Unsent B text');
+      assert.match(JSON.stringify(renderer!.toJSON()), /B reference passage/);
+    } finally {
+      await act(async () => renderer?.unmount());
+      globals.forEach((key, index) => { const descriptor = previous[index]; if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
+    }
+  });
+}
+
+for (const cancelled of [false, true]) test(`settling a send cannot overwrite a newer unmarked draft (cancelled=${cancelled})`, async () => {
+  const globals = ['window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'] as const;
+  const previous = globals.map(key => Object.getOwnPropertyDescriptor(globalThis, key));
+  const data = new Map<string, string>();
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+  Object.assign(globalThis, {
+    window: Object.assign(new EventTarget(), { localStorage: storage, matchMedia: () => Object.assign(new EventTarget(), { matches: false }), setTimeout, clearTimeout }),
+    document: new EventTarget(), requestAnimationFrame: () => 0, cancelAnimationFrame() {}, IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const owner = `replaced-${cancelled}`;
+  writeDraft(storage, owner, { text: 'Original send', notes: [] });
+  let settle!: () => void;
+  const sending = new Promise<void>((resolve, reject) => { settle = () => cancelled ? reject(new SendCancelled()) : resolve(); });
+  const props: ComponentProps<typeof Composer> = {
+    draftKey: owner, running: false, placeholder: '', onSend: () => sending, onStop() {}, header: null, left: null, right: null,
+    commands: [], actions: [], hiddenCommands: [], onAction() {}, attachBlocked: null, onError() {}, queued: [], onRemoveQueued() {},
+    onEditQueued: async () => ({ text: '', images: [] }), onSendQueuedNow() {}, restore: null, note: null,
+  };
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => { renderer = create(createElement(Composer, props), { createNodeMock: () => ({ style: {}, focus() {}, contains: () => false, getBoundingClientRect: () => ({ height: 0 }) }) }); });
+    await act(async () => { renderer!.root.findByProps({ className: 'send-btn' }).props.onClick({ preventDefault() {} }); });
+    await act(async () => { renderer!.update(createElement(Composer, { ...props, draftKey: `other-${cancelled}` })); });
+    prefillComposerDraft(owner, 'A newer unsent draft');
+    await act(async () => { settle(); await sending.catch(() => {}); });
+    assert.equal(readDrafts(storage)[owner]?.text, 'A newer unsent draft');
+    assert.equal(readDrafts(storage)[owner]?.sending, undefined);
+    await act(async () => { renderer!.update(createElement(Composer, props)); });
+    assert.equal(renderer!.root.findByType('textarea').props.value, 'A newer unsent draft');
+  } finally {
+    await act(async () => renderer?.unmount());
+    globals.forEach((key, index) => { const descriptor = previous[index]; if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
+  }
+});
 
 for (const body of ['Unsent B text', '']) test(`a completed send only clears its own draft (${body ? 'text and note' : 'note only'})`, async () => {
   const globals = ['window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'] as const;

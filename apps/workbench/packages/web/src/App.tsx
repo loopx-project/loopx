@@ -800,7 +800,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [draftLoopx, setDraftLoopx] = useState(false);
   const [goalCaps, setGoalCaps] = useState<GoalAgentCapability[]>([]);
   const [draftGoalPermission, setDraftGoalPermission] = useState<GoalPermission | null>(null);
-  const [pendingGoal, setPendingGoal] = useState<{ text: string; resolve: () => void; reject: (e: unknown) => void } | null>(null);
+  const [pendingGoal, setPendingGoal] = useState<{ text: string; onCreated?: (threadId: string) => void; resolve: () => void; reject: (e: unknown) => void } | null>(null);
   const [worktreeOffer, setWorktreeOffer] = useState<{ cwd: string; branch: string | null; changes: number } | null>(null);
   const [draftSectionId, setDraftSectionId] = useState<string | null>(null);
   const [draftWorkMode, setDraftWorkMode] = useState<WorkMode>('execute');
@@ -2052,7 +2052,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   });
 
   // A new thread is created by its first message, or by starting voice on the draft.
-  const createDraftThread = async (isNewThread: boolean) => {
+  const createDraftThread = async (isNewThread: boolean, onCreated?: (threadId: string) => void) => {
     const t = await api.createThread({
       agent: draftAgent,
       cwd: draftCwd,
@@ -2065,6 +2065,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       ...(draftScratch ? { scratch: true } : draftWorktree && offer ? { worktree: true } : {}),
     });
     const id = t.id;
+    onCreated?.(id);
     if (draftWriting) {
       const updated = await api.setWriting(id, draftWriting);
       setThreads(prev => [updated, ...prev.filter(v => v.id !== updated.id)]);
@@ -2077,22 +2078,24 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return id;
   };
 
-  const performSend = async (text: string, images: PreparedImage[], isNewThread: boolean, mentions?: AgentMention[], videos: PreparedVideo[] = []) => {
+  const performSend = async (text: string, images: PreparedImage[], isNewThread: boolean, mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void) => {
     setError(null);
     let id = selectedId;
+    const created = (threadId: string) => onCreated?.(hostId ? `host:${hostId}:${threadId}` : threadId);
     try {
       // A Goal is reviewed by the LoopX core before it exists; the draft stays in the box until it is created or backed out of.
       if (!id && draftLoopx && !draftTeam) {
         if (images.length || videos.length) throw new Error(t('loopx.goal.noMedia'));
-        return await new Promise<void>((resolve, reject) => setPendingGoal({ text, resolve, reject }));
+        return await new Promise<void>((resolve, reject) => setPendingGoal({ text, onCreated: created, resolve, reject }));
       }
       if (!id && draftTeam) {
         if (videos.length) throw new Error(t('teams.attachments'));
         const task = await api.dispatchTeam(draftTeam, text, draftCwd, images.map(({ data, mimeType }) => ({ data, mimeType })));
+        created(task.threadId);
         setSelectedId(task.threadId); setDraftTeam(null); setDraftSectionId(null);
         setView('thread'); void refreshThreads(); return;
       }
-      if (!id) id = await createDraftThread(isNewThread);
+      if (!id) id = await createDraftThread(isNewThread, created);
       // Bringing an agent in with @ is itself the request to collaborate; there is no switch to find first.
       const collaboration = (draftCollaboration || mentions?.length) && !selected?.coordination
         ? { directories: collaborationDirectories.length ? collaborationDirectories : undefined, defaults: startingDefaults, permission: memberPermission } : undefined;
@@ -2116,14 +2119,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     }
   };
 
-  const send = async (text: string, images: PreparedImage[], mentions?: AgentMention[], videos: PreparedVideo[] = []) => {
+  const send = async (text: string, images: PreparedImage[], mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void) => {
     // The terminal wrote to this session after the hub last did. Both sides writing the same session
     // interleaves turns, so ask before joining in again.
     // The composer keeps the draft and its pictures until this settles, so backing out loses nothing.
     if (selectedId && selected?.terminalActivity) {
       return new Promise<void>((resolve, reject) => setPendingSend({ text, images, videos, mentions, resolve, reject }));
     }
-    await performSend(text, images, true, mentions, videos);
+    await performSend(text, images, true, mentions, videos, onCreated);
   };
 
   // Stopping means stopping: messages that were waiting are not sent. Their text goes back in the box.
@@ -3674,7 +3677,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         <GoalConfirm token={token} agent={draftAgent} agentLabel={agentLabel} cwd={draftCwd} permission={draftGoalLevel} text={pendingGoal.text}
           model={draftModel} effort={draftEffort}
           onCancel={() => { pendingGoal.reject(new SendCancelled()); setPendingGoal(null); }}
-          onCreated={(threadId) => { pendingGoal.resolve(); setPendingGoal(null); setDraftLoopx(false); setSelectedId(threadId); setView('thread'); void refreshThreads(); }} />
+          onCreated={(threadId) => { pendingGoal.onCreated?.(threadId); pendingGoal.resolve(); setPendingGoal(null); setDraftLoopx(false); setSelectedId(threadId); setView('thread'); void refreshThreads(); }} />
       )}
       {pendingSend && (
         <Dialog
