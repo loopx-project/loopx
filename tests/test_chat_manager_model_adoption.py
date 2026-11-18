@@ -6,9 +6,12 @@ actual answer quality, separately from this lifecycle regression.
 """
 
 import json
+import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from test_native_steward_private import finish, steward  # noqa: F401
 
 from loopx.capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
@@ -24,6 +27,7 @@ from loopx.chat_manager import (
 )
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_store import ChatSessionStore
+from loopx.extensions.lark.conversation_identity import identity_ref
 
 
 def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
@@ -406,6 +410,81 @@ def test_model_edit_keeps_early_context_through_public_resume(upstream_boundary,
     # Native history is restored once, separately from the repeated objective.
     assert [item["content"] for item in starts[-1][0]["history"]] == messages
     assert all(text not in starts[-1][0]["objective"] for text in messages)
+
+
+@pytest.mark.parametrize("source", ["working", "stale_context", "missing_rollout", "wrong_provider"])
+def test_bound_steward_model_edit_uses_original_native_checkpoint(steward, monkeypatch, source):
+    from loopx.capabilities.native_chat import codex_auth
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    home = workspace.parent / "codex-home"
+    home.mkdir()
+    runtime.codex_home = home
+    monkeypatch.setattr(codex_auth, "conversation_account_epoch", lambda *args, **kwargs: ("revision", "slot"))
+    fake = Path(runtime.codex_bin)
+    fake.write_text(fake.read_text().replace(
+        'result = {"thread": {"id": "durable-thread"}}',
+        'result = {"thread": {"id": "durable-thread"}, "modelProvider": "openai",\n'
+        '                  "model": request["params"].get("model"),\n'
+        '                  "reasoningEffort": request["params"].get("config", {}).get("model_reasoning_effort")}',
+    ))
+    configure(store.root.parent, model="gpt-6.1-sol", effort="xhigh")
+    event = provider.event("steward-app", "original-checkpoint", "Keep the original evidence.")
+    transport.admit("steward-app", event)
+    original = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    assert finish(runtime, original)["status"] == "completed"
+    sid = original["session_id"]
+    session = store.load_session(sid)
+    checkpoint = session["native_working_checkpoint"]
+    thread_id = checkpoint["thread_id"]
+    assert thread_id == session["upstream_thread_id"]
+    rollout = home / "sessions" / "original.jsonl"
+    rollout.parent.mkdir()
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": thread_id, "model_provider": "different-provider" if source == "wrong_provider" else "openai",
+    }}) + "\n")
+    with sqlite3.connect(home / "state_1.sqlite") as database:
+        database.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT, archived INTEGER)")
+        database.execute("INSERT INTO threads VALUES (?, ?, 0)", (thread_id, str(rollout)))
+    if source == "missing_rollout":
+        rollout.unlink()
+    if source == "stale_context":
+        store.update_session(sid, manager_context_version=MANAGER_CONTEXT_VERSION - 1)
+    old_turn = store.load_turn(sid, original["turn_id"])
+    configure(store.root.parent, model="gpt-6.2-sol", effort="high")
+    turn, _ = store.create_queued_turn(sid, client_turn_id="next-original", message="Next question.", origin="lark")
+    queued = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    history = store.messages(sid)
+    offset = capture.stat().st_size
+
+    if source in {"missing_rollout", "wrong_provider"}:
+        with pytest.raises(CodexChatAgentError, match="could not be restored"):
+            runtime._ensure_adapter(queued, work_dir=workspace, objective="manager")
+        assert capture.stat().st_size == offset
+        assert store.load_session(sid)["agent_model_id"] == "gpt-6.1-sol"
+    else:
+        runtime._ensure_adapter(queued, work_dir=workspace, objective="manager")
+        calls = [json.loads(line) for line in capture.read_bytes()[offset:].splitlines()]
+        method = "thread/resume" if source == "working" else "thread/start"
+        assert [call["method"] for call in calls
+                if call["method"] in {"thread/resume", "thread/start", "thread/fork"}] == [method]
+        options = next(call["params"] for call in calls if call["method"] == method)
+        assert options["model"] == "gpt-6.2-sol" and options["config"]["model_reasoning_effort"] == "high"
+        assert all(call["method"] not in {"turn/start", "thread/compact/start"} for call in calls)
+        if source == "working":
+            assert options["threadId"] == thread_id
+            assert all(call["method"] != "thread/inject_items" for call in calls)
+            assert store.load_session(sid)["upstream_thread_id"] == thread_id
+        else:
+            assert any(call["method"] == "thread/inject_items" for call in calls)
+        preparation = store.load_turn(sid, turn["turn_id"])["native_context_preparation"]
+        assert preparation["planned_method"] == method
+        assert preparation["manager_context_migration"] is (source == "stale_context")
+        assert store.load_session(sid)["agent_model_id"] == "gpt-6.2-sol"
+    assert store.load_turn(sid, original["turn_id"]) == old_turn
+    assert store.load_turn(sid, turn["turn_id"])["status"] == "queued"
+    assert store.load_session(sid)["active_turn_id"] == turn["turn_id"]
+    assert store.messages(sid) == history
 
 
 @pytest.mark.parametrize("policy,effort,expected_effort", [
