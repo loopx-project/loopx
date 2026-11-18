@@ -3888,9 +3888,10 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert _spend_run_count(runtime) == 1
 
     # A historical settlement receipt cannot issue a new scheduler operation.
-    assert settled_replay["scheduler_hint"]["action"] == "preserve_current_schedule"
-    for surface in ("app_automation", "codex_app"):
-        assert "ack_hint" not in settled_replay["scheduler_hint"][surface]
+    settled_scheduler = settled_replay["scheduler_hint"]
+    assert settled_scheduler["action"] == "preserve_current_schedule"
+    assert "codex_app" not in settled_scheduler
+    assert "ack_hint" not in settled_scheduler["app_automation"]
     assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
     assert original_ack_hint["cli_args"][-3:] == [
         "--turn-instance-id",

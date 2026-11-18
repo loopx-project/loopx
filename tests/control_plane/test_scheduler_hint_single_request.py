@@ -203,11 +203,8 @@ def test_retry_metadata_is_not_interpreted_as_followup_arguments(monkeypatch):
     assert hint["pending_retry"]["cli_args"] == retry["cli_args"]
 
 
-@pytest.mark.parametrize(
-    "surface,view",
-    [("\u0085trae_app", "app_automation"), ("\ufefftrae_app", "codex_app")],
-)
-def test_invalid_host_view_preserves_python_whitespace_rules(surface, view):
+@pytest.mark.parametrize("surface", ["\u0085trae_app", "\ufefftrae_app"])
+def test_invalid_host_has_one_non_executable_automation_view(surface):
     hint = scheduler_hint.build_scheduler_hint(
         {},
         scheduler_execution_context={
@@ -217,5 +214,6 @@ def test_invalid_host_view_preserves_python_whitespace_rules(surface, view):
         },
     )
     assert hint["action"] == "repair_scheduler_execution_context"
-    assert hint[view]["applicability"] == "blocked_invalid_context"
-    assert ("codex_app" if view == "app_automation" else "app_automation") not in hint
+    assert hint["app_automation"]["applicability"] == "blocked_invalid_context"
+    assert "stateful_backoff" not in hint["app_automation"]
+    assert "codex_app" not in hint
