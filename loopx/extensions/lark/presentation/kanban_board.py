@@ -570,7 +570,13 @@ def setup_lark_kanban_board(
     ).strip()
     raw_view_ids = existing_board.get("view_ids")
     view_ids: dict[str, str] = (
-        {str(k): str(v) for k, v in raw_view_ids.items()} if isinstance(raw_view_ids, dict) else {}
+        {
+            k.strip(): v.strip()
+            for k, v in raw_view_ids.items()
+            if isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip()
+        }
+        if isinstance(raw_view_ids, dict)
+        else {}
     )
 
     preflight = _lark_kanban_preflight(cli_bin=cli_bin, identity=identity, runner=runner)
