@@ -329,6 +329,15 @@ process-group behavior and Windows best-effort tree cleanup retain their
 existing qualification boundary. It is process supervision, not a sandbox;
 operator-selected tools retain only their already authorized effects.
 
+A configured local caller can use `start-goal --execute` to submit one goal
+sentence and run the first checked task in a fresh project. The approved
+adapter and independent validator are caller inputs. The entry uses the existing
+Goal, Todo, lease and Turn owners and defaults to project-local runtime state.
+After registration is published, identical requests recover the original task
+and Turn. A recoverable journal continues at its recorded phase and a settled
+journal returns the recorded result. The ordinary guided entry continues to
+handle interactive hosts and connected projects.
+
 ### Responsibility and installation acceptance
 
 Directory regrouping and distribution splitting have separate acceptance.

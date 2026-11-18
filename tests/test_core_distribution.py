@@ -732,3 +732,65 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         workspace, environment=environment).stdout)
     assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
+
+
+def test_installed_core_starts_one_checked_task_from_goal_text(core_python, tmp_path, monkeypatch):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "first-work"
+    project.mkdir()
+    objective = "生成并独立检查从零到七的平方值。"
+    adapter = HOST_SOURCE.replace("request=json.load(sys.stdin)\n",
+        f"request=json.load(sys.stdin)\nassert {objective!r} in json.dumps(request,ensure_ascii=False)\n")
+    arguments = ["--format", "json", "start-goal", "--project", str(project),
+        "--goal-text", objective, "--execute", "--host-adapter-command-json",
+        json.dumps([core_python, "-I", "-c", adapter]), "--validation-command-json",
+        json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])]
+    first = json.loads(_run(core_python, arguments, tmp_path).stdout)
+    assert first["status"] == "committed" and first["validation"]["status"] == "passed"
+    assert first["goal_id"] == "first-work-goal" and first["agent_id"] == "local-worker"
+    assert first["effects"]["host_invoked"] and first["effects"]["quota_spent"]
+    runtime = project / ".loopx/runtime"
+    registry = project / ".loopx/registry.json"
+    readback = json.loads(_run(core_python, ["--registry", str(registry), "--format", "json",
+        "todo", "list", "--goal-id", first["goal_id"], "--todo-id", first["todo_id"]], project).stdout)
+    assert readback["todo"]["status"] == "done"
+    assert json.loads((project / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    repeated = json.loads(_run(core_python, arguments, tmp_path).stdout)
+    assert repeated["replayed"] and repeated["resume_turn_key"] == first["resume_turn_key"]
+    assert repeated["todo_id"] == first["todo_id"]
+    assert all(value is False for value in repeated["effects"].values())
+    rendered = _run(core_python, ["--format", "markdown", *arguments[2:]], tmp_path).stdout
+    assert "Task completed and checked." in rendered and "artifact:squares.json" in rendered
+    assert "quota_spent" not in rendered and "turn_instance_id" not in rendered
+    changed = list(arguments)
+    changed[changed.index("--goal-text") + 1] = "Start an unrelated task."
+    registry_before = registry.read_bytes()
+    denied = json.loads(_run(core_python, changed, tmp_path, expected=1).stdout)
+    assert "already connected" in denied["error"]
+    assert registry.read_bytes() == registry_before
+    assert (project / "host-invocations").read_text().splitlines() == ["called"]
+    spends = runtime / "goals" / first["goal_id"] / "runs/index.jsonl"
+    assert spends.read_text().count("quota_slot_spent") == 1
+
+
+@pytest.mark.parametrize("invalid", ["missing-validator", "invalid-adapter", "owned-goal"])
+def test_installed_core_start_goal_preflights_before_creation(core_python, tmp_path, invalid):
+    arguments = ["--format", "json", "start-goal", "--project", str(tmp_path),
+        "--goal-text", "Produce a checked report.", "--execute"]
+    environment = None
+    if invalid == "owned-goal":
+        arguments += ["--goal-id", "native-owned-goal", "--host-adapter-command-json", json.dumps([core_python]),
+                      "--validation-command-json", json.dumps([core_python])]
+        environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1", "LOOPX_KUNLUNCODE_OUTER_GOAL_ID": "native-owned-goal"}
+    elif invalid == "missing-validator":
+        arguments += ["--host-adapter-command-json", json.dumps([core_python])]
+    else:
+        arguments += ["--host-adapter-command-json", "[]",
+                      "--validation-command-json", json.dumps([core_python])]
+    refused = json.loads(_run(core_python, arguments, tmp_path, expected=1, environment=environment).stdout)
+    assert refused["ok"] is False
+    if invalid == "owned-goal":
+        assert refused["error_code"] == "kunluncode_outer_controller_write_owned"
+    assert not (tmp_path / ".loopx").exists()

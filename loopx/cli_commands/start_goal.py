@@ -181,12 +181,26 @@ def add_capability_route_argument(parser: argparse.ArgumentParser) -> None:
 def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
     start_goal_parser = subparsers.add_parser(
         "start-goal",
-        help="Preview a guided /loopx <goal text> start transaction without mutating state.",
+        help="Preview a guided goal or execute its first checked task with a configured local adapter.",
     )
-    start_goal_parser.add_argument(
+    start_mode = start_goal_parser.add_mutually_exclusive_group()
+    start_mode.add_argument(
         "--guided",
         action="store_true",
-        help="Required for now: render the guided dry-run transaction packet.",
+        help="Render the guided read-only transaction packet.",
+    )
+    start_mode.add_argument(
+        "--execute",
+        action="store_true",
+        help="Start one checked task in a fresh local project using the supplied adapter and validator.",
+    )
+    start_goal_parser.add_argument(
+        "--host-adapter-command-json",
+        help="Approved JSON argv for a v1 generic CLI adapter when executing the first task.",
+    )
+    start_goal_parser.add_argument(
+        "--validation-command-json",
+        help="Approved JSON argv for a separate independent check when executing the first task.",
     )
     start_goal_parser.add_argument("--project", default=".", help="Project directory to inspect.")
     start_goal_parser.add_argument("--goal-id", help="Goal id. Defaults to <project-name>-goal.")
@@ -362,12 +376,29 @@ def handle_start_goal_command(
     print_payload: PrintPayload,
     *,
     runtime_root_arg: str | None = None,
+    explicit_registry: Path | None = None,
 ) -> int:
+    if getattr(args, "execute", False):
+        from .start_goal_managed import execute_managed_start, render_managed_start_markdown
+
+        try:
+            payload = execute_managed_start(args, runtime_root_arg=runtime_root_arg,
+                                            explicit_registry=explicit_registry)
+        except (OSError, RuntimeError, ValueError) as exc:
+            payload = {"ok": False, "error": str(exc)}
+            print_payload(payload, args.format, _render_start_goal_markdown)
+            return 1
+        print_payload(payload, args.format, render_managed_start_markdown)
+        return 0 if payload["ok"] else 1
+    if getattr(args, "host_adapter_command_json", None) is not None or getattr(args, "validation_command_json", None) is not None:
+        print_payload({"ok": False, "error": "Adapter and validator commands require start-goal --execute."},
+                      args.format, _render_start_goal_markdown)
+        return 2
     if not bool(getattr(args, "guided", False)):
         payload = {
             "ok": False,
             "schema_version": "loopx_start_goal_guided_v0",
-            "error": "`loopx start-goal` currently requires --guided",
+            "error": "`loopx start-goal` requires --guided or --execute",
             "suggested_command": "loopx start-goal --guided --goal-text '<goal text>'",
         }
         print_payload(payload, args.format, _render_start_goal_markdown)

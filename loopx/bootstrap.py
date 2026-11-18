@@ -326,6 +326,7 @@ def bootstrap_project(
     sync_global: bool,
     allow_global_route_replacement: bool = False,
     creation_operation_id: str | None = None,
+    initial_agent_id: str | None = None,
 ) -> dict[str, Any]:
     project = project.expanduser().resolve()
     goal_id = validate_goal_id_path_segment(goal_id or default_goal_id(project))
@@ -391,6 +392,13 @@ def bootstrap_project(
     if storage_target is not None:
         goal_entry.setdefault("coordination", {})["storage_target"] = storage_target
     canonical_creation = (storage_target or {}).get("schema_version") == "loopx_new_goal_storage_target_v1"
+    if initial_agent_id is not None:
+        from .control_plane.todos.contract import normalize_todo_claimed_by
+
+        agent_id = normalize_todo_claimed_by(initial_agent_id)
+        if not canonical_creation or creation_operation_id is None or agent_id != initial_agent_id:
+            raise ValueError("First task creation requires a new canonical Goal and an exact Agent identity")
+        goal_entry["coordination"].update(agent_model="peer_v1", registered_agents=[agent_id])
     # Imported/promoted Goals have no canonical *creation* receipt. Resolve
     # their current authority through the existing typed reader, never by
     # manufacturing a creation target or reviving their old Markdown source.
@@ -553,6 +561,8 @@ def bootstrap_project(
         ) as registry_transaction, nullcontext():
             current_registry = registry_transaction.payload_copy()
             current_goal = find_registry_goal(current_registry, goal_id)
+            if initial_agent_id is not None and current_registry.get("goals"):
+                raise GoalCreationConflictError("First task creation requires a fresh local project registry")
             if canonical_existing and current_goal != previous_goal:
                 raise ValueError("Canonical Goal registration changed; retry bootstrap")
             if creation_operation_id is not None and current_goal is not None:
@@ -567,6 +577,8 @@ def bootstrap_project(
                     goal_entry["coordination"]["storage_target"] = frozen
             frozen_target = goal_entry.get("coordination", {}).get("storage_target") or {}
             canonical_creation = frozen_target.get("schema_version") == "loopx_new_goal_storage_target_v1"
+            if initial_agent_id is not None and not canonical_creation:
+                raise ValueError("First task creation could not establish its original canonical storage target")
             if canonical_creation and force and (current_goal is not None or state_file.exists()):
                 raise ValueError("Canonical creation cannot rebuild existing state; restore or migrate through its owning operation")
 
