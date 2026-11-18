@@ -149,6 +149,7 @@ _REPLY_IMAGE_TYPES = {
     ".gif": "image/gif", ".webp": "image/webp",
 }
 _REPLY_IMAGE_SIGNATURES = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/gif": b"GIF8"}
+REPLY_IMAGE_NAME_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}")
 
 
 def reply_image_directory(turn_id: str) -> Path:
@@ -189,7 +190,7 @@ def reply_image_attachment(data: bytes, mime: str, index: int) -> dict[str, Any]
 def read_reply_image(workspace: Path, turn_id: str, name: str) -> tuple[str, bytes]:
     from ...control_plane.collaboration.result_files import _workspace_file
 
-    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}", name):
+    if not REPLY_IMAGE_NAME_PATTERN.fullmatch(name):
         raise ValueError("invalid reply image name")
     mime = _REPLY_IMAGE_TYPES.get(Path(name).suffix.lower())
     if mime is None:

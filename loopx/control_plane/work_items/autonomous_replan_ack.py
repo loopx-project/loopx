@@ -274,11 +274,30 @@ def _event_details(event: dict[str, Any]) -> dict[str, Any]:
 
 def _admission_event_index(
     events: list[dict[str, Any]], *, goal_id: str, agent_id: str,
-    turn_instance_id: str, recorded_at: str,
+    turn_instance_id: str, recorded_at: str, event_id: str | None = None,
 ) -> int | None:
-    if not turn_instance_id or not recorded_at:
+    """Log position of the Turn's original bound admission.
+
+    The settlement readback names that event after GoalRef filtering. Matching
+    the id keeps a retired Goal instance that reused this Turn id out of the
+    order. Callers without an id use the first row with the admission time.
+    """
+
+    if not turn_instance_id:
         return None
-    found: int | None = None
+    if event_id:
+        for index, event in enumerate(events):
+            if (
+                event.get("event_id") == event_id
+                and event.get("event_kind") == "quota_should_run"
+                and event.get("goal_id") == goal_id
+                and event.get("agent_id") == agent_id
+                and event.get("run_id") == turn_instance_id
+            ):
+                return index
+        return None
+    if not recorded_at:
+        return None
     for index, event in enumerate(events):
         if (
             event.get("event_kind") == "quota_should_run"
@@ -287,8 +306,8 @@ def _admission_event_index(
             and event.get("run_id") == turn_instance_id
             and event.get("recorded_at") == recorded_at
         ):
-            found = index
-    return found
+            return index
+    return None
 
 
 def _binding_text(value: Any) -> str:
@@ -406,6 +425,7 @@ def attach_historical_ack_writeback_order(
     goal_id: str, agent_id: str, obligation_id: str,
     guard_recorded_at: str | None, guard_turn_instance_id: str | None,
     runs: list[dict[str, Any]] | None = None,
+    admission_event_id: str | None = None,
 ) -> None:
     """Copy the original refresh event order onto matching ACK candidates.
 
@@ -417,6 +437,7 @@ def attach_historical_ack_writeback_order(
         events, goal_id=goal_id, agent_id=agent_id,
         turn_instance_id=str(guard_turn_instance_id or "").strip(),
         recorded_at=str(guard_recorded_at or "").strip(),
+        event_id=str(admission_event_id or "").strip() or None,
     )
     for candidate in candidates:
         turn_instance_id = _binding_text(candidate.get("turn_instance_id"))
@@ -443,6 +464,7 @@ def historical_ack_candidates_with_writeback_order(
     guard_scoped: bool = True, runtime_root: Path | str | None = None,
     source_route: Any = None,
     guard_recorded_at: str | None = None, guard_turn_instance_id: str | None = None,
+    admission_event_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Project obligation candidates and attach their original writeback order."""
     from ...rollout_event_log import load_rollout_events, rollout_event_log_path
@@ -459,7 +481,7 @@ def historical_ack_candidates_with_writeback_order(
         candidates, load_rollout_events(rollout_event_log_path(root, goal_id)),
         goal_id=goal_id, agent_id=agent_id, obligation_id=selected,
         guard_recorded_at=guard_recorded_at, guard_turn_instance_id=guard_turn_instance_id,
-        runs=newest_first_runs,
+        runs=newest_first_runs, admission_event_id=admission_event_id,
     )
     return candidates
 
@@ -467,6 +489,7 @@ def historical_ack_candidates_with_writeback_order(
 def load_receipt_replan_ack_candidates(
     runtime_root: Path, *, goal_id: str, agent_id: str, obligation_id: str,
     guard_recorded_at: str | None = None, guard_turn_instance_id: str | None = None,
+    admission_event_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Read exact recovery candidates without widening ordinary status history."""
     from ...history import load_index
@@ -479,6 +502,7 @@ def load_receipt_replan_ack_candidates(
         newest_first, goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id,
         runtime_root=runtime_root, guard_recorded_at=guard_recorded_at,
         guard_turn_instance_id=guard_turn_instance_id,
+        admission_event_id=admission_event_id,
     )
 
 

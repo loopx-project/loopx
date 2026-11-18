@@ -90,7 +90,8 @@ def test_scripted_consumer_cannot_replace_current_retained_context_with_eof(tmp_
         latest_quota_payload({"messages": messages})
 
 
-@pytest.mark.parametrize("attack", ["other_capture", "other_digest", "session_lookup", "shell_chain"])
+@pytest.mark.parametrize("attack", ["other_capture", "other_digest", "session_lookup", "shell_chain",
+    "missing_reference", "missing_reference_parent"])
 @NATIVE_CAPTURE_TEST
 def test_model_read_cannot_escape_the_current_capture(tmp_path, attack):
     output, _ = _captured_output(tmp_path / "current")
@@ -106,6 +107,11 @@ def test_model_read_cannot_escape_the_current_capture(tmp_path, attack):
         command[8] = "0" * 64
     elif attack == "session_lookup":
         command = command[:5] + ["--codex-context-dir", str(tmp_path)]
+    elif attack in {"missing_reference", "missing_reference_parent"}:
+        reader = tmp_path / "missing.reader.json"
+        if attack == "missing_reference_parent":
+            reader = tmp_path / "missing" / "current.reader.json"
+        command = command[:5] + ["--reference-file", str(reader)]
     shell = shlex.join(command)
     if attack == "shell_chain":
         shell += " && loopx quota should-run --goal-id another-goal"

@@ -47,6 +47,11 @@
     "loopx/capabilities/native_chat/external_conversations.py": {
       "lines": 2111
     },
+    "loopx/capabilities/reward_memory/utility_reducer.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1182
+    },
     "loopx/capabilities/steward_executor/allocation.py": {
       "any_count": 0,
       "dict_any_count": 0,

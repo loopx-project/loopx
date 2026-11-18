@@ -1560,7 +1560,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         # Produce an actual legacy reply and provider receipt before installing
         # the media-only repair. The stored answer and Core are real.
         with monkeypatch.context() as legacy:
-            legacy.setattr(transport, "_deliver_completed_answer", lambda p, row, text, *, inbox:
+            legacy.setattr(transport, "_deliver_completed_answer", lambda p, row, text, *, inbox, answer_image_plan=None:
                            transport._deliver(p, row, "terminal", text, inbox=inbox))
             assert transport.reconcile_request(path) == 1
         saved = json.loads(path.read_text())
@@ -1749,6 +1749,110 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         assert json.loads(path.read_text())["deliveries"]["terminal"] == terminal
         assert core == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
         assert sum(json.loads(line).get("method") == "turn/start" for line in ordinary[4].read_text().splitlines()) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("fault", [
+    "none", "bad_digest", "different_turn", "symlink", "foreign_name",
+    "edited_reply", "stopped", "revoked", "unknown_upload", "unknown_send",
+])
+def test_legacy_local_reply_images_are_recovered_only_by_the_original_worker(ordinary, source_https, fault):  # noqa: F811
+    from hashlib import sha256
+
+    from loopx.capabilities.native_chat.file_discovery import reply_image_directory
+    from loopx.chat_store import _atomic_write_json
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    _, _, contexts, _, capture, fake, _ = ordinary
+    contexts.workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    io = ImageIO(provider)
+    transport.runner = io
+    fetched, _ = source_https(lambda _: (None, "image/png", PNG_BYTES))
+    answer = "Original explanation.\n\nFirst figure\n\nSecond figure"
+    marker = '"message": "Runtime response.",'
+    fake.write_text(fake.read_text().replace(marker, f'"message": {answer!r},', 1))
+    try:
+        event = provider.event("notes-app", "historical-captured-images", "Read the requested figures.")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        request = transport.core.pending()[0]
+        sid, tid, ref = (request[key] for key in ("session_id", "turn_id", "request_ref"))
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed" and not completed["response"].get("answer_image_plan")
+        path = transport.root / f"{ref}.json"
+        assert transport.reconcile_request(path) == 1
+        original = json.loads(path.read_text())
+        terminal = original["deliveries"]["terminal"]
+        message_id = terminal["attempt"]["message_ref"]
+        core_before = transport.core.read_request(ref), completed, store.messages(sid)
+        assert terminal["verified"] and not terminal.get("image_keys")
+
+        private = transport.root / "historical-answer-images"
+        staged = private / reply_image_directory("f" * 32 if fault == "different_turn" else tid)
+        staged.mkdir(parents=True)
+        raw_images = [PNG_BYTES + b"first", PNG_BYTES + b"second"]
+        names = ["figure-first.png", "figure-second.png"]
+        for name, data in zip(names, raw_images, strict=True):
+            output = staged / name
+            if fault == "symlink":
+                other = staged.parent / name
+                other.write_bytes(data)
+                output.symlink_to(other)
+            else:
+                output.write_bytes(data)
+        manifest = {"binding_id": original["binding_id"], "turn_id": tid, "message_id": message_id,
+                    "answer_sha256": sha256(answer.encode()).hexdigest(),
+                    "captured_images": [{"name": name, "sha256": sha256(data).hexdigest()}
+                                        for name, data in zip(names, raw_images, strict=True)]}
+        if fault == "bad_digest":
+            (staged / names[1]).write_bytes(PNG_BYTES + b"changed")
+        if fault == "foreign_name":
+            manifest["captured_images"][0]["name"] = str(staged / names[0])
+        _atomic_write_json(private / path.name, manifest)
+
+        if fault == "edited_reply":
+            provider.messages[message_id]["body"]["content"] = '{"zh_cn":{"content":[[{"tag":"text","text":"Changed"}]]}}'
+        elif fault == "stopped":
+            transport.admit("notes-app", provider.event("notes-app", "stop-legacy-captured-images", "/stop"))
+        elif fault == "revoked":
+            contexts.workspace_grant = "workspace_read"
+        elif fault == "unknown_upload":
+            io.unknown_upload = True
+        elif fault == "unknown_send":
+            provider.lose_next_reply = True
+
+        writes = len(provider.writes)
+        def restart():
+            return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                            runner=io, cli_bin="lark-cli")
+
+        worker = restart()
+        assert path not in worker.pending_body_paths()
+        assert path in worker.pending_delivery_paths()
+        assert worker.reconcile_request(path) == int(fault == "none")
+        saved = json.loads(path.read_text())
+        assert saved["deliveries"]["terminal"] == terminal
+        if fault == "none":
+            media = saved["deliveries"]["answer_images.historical"]
+            assert media["images_verified"] and io.downloads == 2
+            post = provider.messages[media["attempt"]["message_ref"]]
+            assert post["chat_id"] == event["chat_id"]
+            assert post["sender"]["id"] == provider.profile_apps["notes-app"]
+            assert [io.resources[key] for key in media["image_keys"]] == raw_images
+            assert saved["historical_answer_images"]["status"] == "delivered"
+        elif fault in {"unknown_upload", "unknown_send"}:
+            saved["historical_answer_images"]["next_check_at"] = 0
+            _atomic_write_json(path, saved)
+            io.unknown_upload = False
+        assert restart().reconcile_request(path) == 0
+        assert len(provider.writes) == writes + int(fault in {"none", "unknown_send"})
+        assert io.uploads == {"none": 2, "unknown_upload": 1, "unknown_send": 2}.get(fault, 0)
+        assert fetched == []
+        assert sum(json.loads(line).get("method") == "turn/start" for line in capture.read_text().splitlines()) == 1
+        if fault != "stopped":
+            assert core_before == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
     finally:
         runtime.close()
 
