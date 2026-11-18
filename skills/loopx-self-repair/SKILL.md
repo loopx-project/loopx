@@ -83,7 +83,7 @@ verify that the public entrypoint admits independent work before continuing it.
 Preserve actual authority, budget and stop conditions; when no useful authorized
 work remains, retain the evidenced wait rather than inventing activity. Never
 erase receipts or fabricate progress to escape a wait. See
-[settlement classification](../../docs/quota-allocation.md#allocation-contract).
+[settlement classification](https://github.com/loopx-project/loopx/blob/main/docs/quota-allocation.md#allocation-contract).
 
 ## Upstream Issue Escalation
 
@@ -187,9 +187,9 @@ replan, or terminal closeout must return to the strict semantic checkpoint.
 - For guarded public GitHub issue escalation, read
   `references/upstream-issue-escalation.md`.
 - For user/agent/state channel semantics, read
-  `../../docs/state-interaction-model.md` and
-  `../../docs/concepts/interaction-pattern-catalog.md`.
+  [docs/state-interaction-model.md](https://github.com/loopx-project/loopx/blob/main/docs/state-interaction-model.md) and
+  [docs/concepts/interaction-pattern-catalog.md](https://github.com/loopx-project/loopx/blob/main/docs/concepts/interaction-pattern-catalog.md).
 - For quota and heartbeat decisions, read
-  `../../docs/quota-allocation.md` and
-  `../../docs/heartbeat-automation-prompt.md`.
-- For commit/PR hygiene failures, read `../../AGENTS.md`.
+  [docs/quota-allocation.md](https://github.com/loopx-project/loopx/blob/main/docs/quota-allocation.md) and
+  [docs/heartbeat-automation-prompt.md](https://github.com/loopx-project/loopx/blob/main/docs/heartbeat-automation-prompt.md).
+- For commit/PR hygiene failures, read [AGENTS.md](https://github.com/loopx-project/loopx/blob/main/AGENTS.md).

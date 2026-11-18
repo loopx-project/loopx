@@ -96,13 +96,6 @@ def scheduler_rrule_interval_minutes(value: Any) -> int | None:
     return interval
 
 
-def normalize_scheduler_host_update_failure(value: Any) -> dict[str, Any] | None:
-    failure = _operation_result("normalize_failure", value=value)
-    if failure is not None and not isinstance(failure, dict):
-        raise RuntimeError("TypeScript scheduler failure must be an object or null")
-    return failure
-
-
 def _failure_list(value: Any, *, operation: str) -> list[dict[str, Any]]:
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         raise RuntimeError(f"TypeScript scheduler {operation} must be an object list")
@@ -138,23 +131,6 @@ def retained_scheduler_host_update_failures(
             observed_host_rrule=observed_host_rrule,
         ),
         operation="retained failures",
-    )
-
-
-def merge_scheduler_host_update_failure(
-    value: Any,
-    failure: dict[str, Any],
-    *,
-    reference_time: datetime | str | None = None,
-) -> list[dict[str, Any]]:
-    return _failure_list(
-        _operation_result(
-            "merge_failure",
-            value=value,
-            failure=failure,
-            reference_time=_reference_time(reference_time),
-        ),
-        operation="merged failures",
     )
 
 

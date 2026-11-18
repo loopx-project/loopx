@@ -64,8 +64,8 @@ problem
 一个本来可以一行的修复带上一份长期兼容承诺。
 
 本章案例属于第一类。现有
-[`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
-已经规定 Gate 是 scoped authority；[State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
+[`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
+已经规定 Gate 是 scoped authority；[State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
 也把 ambiguous scope 导向 repair。
 
 如果实现把它变成全局 wait，应该修实现，无需新增一个"允许全局猜测"的兼容字段。
@@ -413,7 +413,7 @@ invariant、画完协议链，通常要几个小时。换到的东西是：这�
 一个真正的 additive protocol change 可以合理地跨十几个文件；一个 implementation repair 通常
 不应该。
 
-**边界一：full validation 跑不起全套，这是设计如此。** 本仓库的 [PR 基线](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md) 包含 lint、type、
+**边界一：full validation 跑不起全套，这是设计如此。** 本仓库的 [PR 基线](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md) 包含 lint、type、
 output budget smoke、`pytest` 分层、`loopx canary premerge --from-git-diff` 和 public/private
 scan；真实路径验证（例如 PostgreSQL integration）需要一个一次性隔离实例。开发阶段应当从最
 聚焦的那条命令开始，无需等最宽矩阵。完整公开 smoke fleet 的职责是宽覆盖与健康观察，不是
@@ -443,7 +443,7 @@ diff 和描述来发现，这也是为什么下一章把 PR 描述本身当成�
 推导出来。
 
 **在 Python facade 里重建 TypeScript 侧规则。** 这是本章开头提到的第二个错误。可以通过
-`loopx canary premerge --from-git-diff` 发现两侧漂移，也可以用 [TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
+`loopx canary premerge --from-git-diff` 发现两侧漂移，也可以用 [TypeScript Control-Plane Migration RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
 判断一处逻辑归谁：它是否已经是一个 domain-owned decision 或 effect receipt。如果答案是肯定的，
 改动应落在 TypeScript 侧，Python 侧只做适配或兼容投影。
 

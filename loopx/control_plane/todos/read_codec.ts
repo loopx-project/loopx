@@ -115,7 +115,7 @@ function repr(value: unknown): string {
   if (value == null) return "None";
   if (typeof value === "boolean") return value ? "True" : "False";
   if (Array.isArray(value)) return "[" + value.map((_, i) => fieldRepr(value, i)).join(", ") + "]";
-  if (typeof value === "object") return "{" + Object.entries(value).map(([k, v]) => `${repr(k)}: ${fieldRepr(value as JsonObject, k)}`).join(", ") + "}";
+  if (typeof value === "object") return "{" + Object.entries(value).map(([k]) => `${repr(k)}: ${fieldRepr(value as JsonObject, k)}`).join(", ") + "}";
   if (typeof value !== "string") return String(value);
   const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
   return quote + Array.from(value).map(point => {
@@ -198,7 +198,7 @@ export function handoffSource(item: JsonObject): JsonObject {
   for (const key of ["handoff", "handoff_note"]) {
     const value = item[key], row = object(value);
     if (truthy(value)) nested[key] = {truthy: true, fields: value !== null && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(row).map(([k, v]) => [k, pythonFieldText(row, k)])) : null};
+      ? Object.fromEntries(Object.entries(row).map(([k]) => [k, pythonFieldText(row, k)])) : null};
     nestedMetadata[key] = {from_agent: readAgent(truthy(row.from_agent) ? row.from_agent : item.agent_id),
       to_agent: readAgent(row.to_agent), evidence_refs: refs(row.evidence_refs)};
   }

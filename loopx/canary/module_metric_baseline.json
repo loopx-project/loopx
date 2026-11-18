@@ -5,6 +5,11 @@
     "lines": 2000
   },
   "module_metric_ceilings": {
+    "loopx/authority.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 686
+    },
     "loopx/bootstrap_command_pack.py": {
       "any_count": 32,
       "dict_any_count": 0,
@@ -31,6 +36,16 @@
     },
     "loopx/capabilities/native_chat/external_conversations.py": {
       "lines": 2111
+    },
+    "loopx/capabilities/steward_executor/allocation.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 225
+    },
+    "loopx/capabilities/steward_executor/machine_defaults.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 379
     },
     "loopx/chat_actions.py": {
       "any_count": 52,
@@ -60,6 +75,16 @@
     "loopx/control_plane/goals/goal_frontier/terminal.py": {
       "any_count": 15,
       "dict_any_count": 0
+    },
+    "loopx/control_plane/quota/heartbeat_recommendation.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 719
+    },
+    "loopx/control_plane/quota/monitor_poll.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1109
     },
     "loopx/control_plane/work_items/interaction_contract.py": {
       "any_count": 85,
@@ -113,6 +138,11 @@
       "any_count": 11,
       "dict_any_count": 0
     },
+    "loopx/state_projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 795
+    },
     "loopx/state_refresh.py": {
       "any_count": 30,
       "dict_any_count": 0
@@ -125,6 +155,11 @@
     "loopx/todos.py": {
       "any_count": 48,
       "dict_any_count": 0
+    },
+    "loopx/upgrade.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1062
     },
     "loopx/worker_bridge.py": {
       "any_count": 28,

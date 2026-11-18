@@ -257,7 +257,7 @@ If you read an earlier edition of the Dev Book, recalibrate these five areas fir
 | Area | Shipped in `v0.5.4` | Continue with |
 | --- | --- | --- |
 | Control Plane | Complete Turn/Host Todo settlement, quota commit, task-lease lifecycle, Vision refresh, and scheduler-heartbeat transactions have typed TypeScript owners; Python facades still carry migration-time boundaries | [Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
-| Operator surface | Personal Workspace exposes Goal, Task, Chat, and read-only status-source entrypoints; the UI is not a new source of truth | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
+| Operator surface | Personal Workspace exposes Goal, Task, Chat, and read-only status-source entrypoints; the UI is not a new source of truth | [Dashboard README](https://github.com/loopx-project/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
 | Host runtime | Codex, Claude Code, OpenCode, Pi, KunlunCode, DeepSeek Harness, and custom runners have distinct activation and stop contracts | [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/) |
 | Capability and Provider | A Capability is defined by a package-owned catalog entry, a real command, and durable validation; a Provider or Extension does not inherit Kernel authority | [Capability Catalog](/loopx/docs/capabilities/) |
 | Shared authority | File, NoKV, and PostgreSQL providers remain staged candidates; installing a Provider does not change the default local authority | [Shared Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/) |

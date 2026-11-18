@@ -41,7 +41,6 @@ from .capabilities.integration_branch.cli import (
     register_integration_branch_commands,
 )
 from .capabilities.repository_change_window.cli import (
-    handle_repository_change_window_command,
     register_repository_change_window_commands,
 )
 from .capabilities.decision_context.cli import (
@@ -92,9 +91,7 @@ from .capabilities.performance_diagnosis.cli import (
 )
 from .cli_commands import (
     handle_benchmark_command,
-    handle_bootstrap_connect_command,
     handle_canary_command,
-    handle_coordination_shadow_command,
     handle_capability_command,
     handle_dreaming_command,
     handle_explore_command,
@@ -115,12 +112,9 @@ from .cli_commands import (
     handle_registry_admin_command,
     handle_starter_command,
     handle_support_control_command,
-    handle_task_lease_command,
     handle_authority_shadow_command,
-    handle_postgres_command,
     handle_version_command,
     handle_usage_ping_command,
-    handle_host_mode_plan_command,
     handle_worker_bridge_command,
     handle_workflow_skills_command,
     register_benchmark_command_group,
@@ -332,6 +326,7 @@ def build_parser() -> LoopXArgumentParser:
     register_coordination_shadow_command(sub, add_subcommand_format)
     register_automation_cadence_command(sub, add_subcommand_format)
     register_authority_archive_command(sub, add_subcommand_format)
+    register_postgres_commands(sub, add_subcommand_format)
     register_task_lease_command(sub, add_subcommand_format)
     register_authority_shadow_command(sub, add_subcommand_format)
     register_todo_continuation(sub, add_subcommand_format)
@@ -377,14 +372,6 @@ def _main(argv: list[str] | None = None) -> int:
     version_result = handle_version_command(args, output_format=output_format, print_payload=print_payload)
     if version_result is not None:
         return version_result
-
-    bootstrap_connect_result = handle_bootstrap_connect_command(
-        args,
-        registry_path=registry_path,
-        print_payload=print_payload,
-    )
-    if bootstrap_connect_result is not None:
-        return bootstrap_connect_result
 
     starter_result = handle_starter_command(args, print_payload)
     if starter_result is not None:
@@ -487,26 +474,8 @@ def _main(argv: list[str] | None = None) -> int:
     if integration_branch_result is not None:
         return integration_branch_result
 
-    repository_change_window_result = handle_repository_change_window_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if repository_change_window_result is not None:
-        return repository_change_window_result
-
     if args.command == "ml-experiment":
         return handle_ml_experiment_command(args, output_format=output_format, print_payload=print_payload)
-
-    host_mode_plan_result = handle_host_mode_plan_command(
-        args,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if host_mode_plan_result is not None:
-        return host_mode_plan_result
 
     preset_result = handle_preset_command(
         args,
@@ -781,25 +750,6 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if cadence_result is not None:
         return cadence_result
-    coordination_shadow_result = handle_coordination_shadow_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if coordination_shadow_result is not None:
-        return coordination_shadow_result
-
-    task_lease_result = handle_task_lease_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if task_lease_result is not None:
-        return task_lease_result
 
     authority_shadow_result = handle_authority_shadow_command(
         args,
@@ -810,16 +760,6 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if authority_shadow_result is not None:
         return authority_shadow_result
-
-    postgres_result = handle_postgres_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if postgres_result is not None:
-        return postgres_result
 
     shared_goal_alignment_result = handle_shared_goal_alignment_command(
         args,

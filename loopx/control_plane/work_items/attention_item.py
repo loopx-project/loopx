@@ -38,7 +38,7 @@ def attention_item(
         missing_gates=missing_gates,
         next_handoff_condition=next_handoff_condition,
     )
-    item = {
+    item: dict[str, Any] = {
         "goal_id": goal_id,
         "status": status,
         "waiting_on": waiting_on,
@@ -70,8 +70,8 @@ def attention_item(
     if dreaming_proposal:
         dreaming_lane_badge = compact_dreaming_lane_badge(dreaming_proposal)
         item["dreaming_proposal"] = dreaming_proposal
-        item["project_asset"]["dreaming_proposal"] = dreaming_proposal
+        project_asset["dreaming_proposal"] = dreaming_proposal
         if dreaming_lane_badge:
             item["dreaming_lane_badge"] = dreaming_lane_badge
-            item["project_asset"]["dreaming_lane_badge"] = dreaming_lane_badge
+            project_asset["dreaming_lane_badge"] = dreaming_lane_badge
     return item

@@ -384,16 +384,3 @@ def stall_repair_payload(repair: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(consistency, dict):
         return {}
     return {"todo_decision_scope_consistency": consistency}
-
-
-def stall_repair_suppresses_user_gate_notification(
-    repair: dict[str, Any] | None,
-) -> bool:
-    return bool(
-        repair
-        and repair.get("trigger")
-        in {
-            USER_GATE_SCOPE_REPAIR_TRIGGER,
-            RUNTIME_CAPABILITY_USER_GATE_REPAIR_TRIGGER,
-        }
-    )

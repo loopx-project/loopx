@@ -335,7 +335,8 @@ def redact_local_paths(
 
 
 def redact_response_markdown(
-    text: str, *, protected_paths: Iterable[Path | str] = ()
+    text: str, *, protected_paths: Iterable[Path | str] = (),
+    image_targets: list[str] | None = None,
 ) -> str:
     """Keep local inline-link labels without publishing unusable destinations.
 
@@ -344,6 +345,8 @@ def redact_response_markdown(
     all output still passes through the existing path privacy owner.
     """
     protected = tuple(protected_paths)
+    if image_targets is not None:
+        image_targets.clear()
     lines: list[str] = []
     fence: tuple[str, int] | None = None
     for line in str(text or "").splitlines(keepends=True):
@@ -400,6 +403,14 @@ def redact_response_markdown(
                 cursor = close
                 continue
             destination = line[destination_start : close - 1]
+            is_image = bool(start and line[start - 1] == "!")
+            if (image_targets is not None and is_image and not line.startswith(("    ", "\t"))
+                    and not line[:start - 1].endswith("\\") and len(image_targets) < 5):
+                candidate = destination.strip()
+                target = (candidate[1:].partition(">")[0] if candidate.startswith("<")
+                          else candidate.split(maxsplit=1)[0] if candidate else "")
+                if target and target not in image_targets:
+                    image_targets.append(target)
             decoded = unquote(destination)
             local = decoded.lstrip("< ").lower().startswith("file:") or any(
                 redact_local_paths(value, protected_paths=protected) != value
@@ -841,6 +852,7 @@ def normalize_agent_response(
     *,
     protected_paths: Iterable[Path | str] = (),
     team_plan_context: Mapping[str, Any] | None = None,
+    image_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     """Normalize one structured provider response to the public Chat contract."""
 
@@ -851,6 +863,7 @@ def normalize_agent_response(
     message = redact_response_markdown(
         str(payload.get("message") or ""),
         protected_paths=protected,
+        image_targets=image_targets,
     ).strip()
     goal_draft = _normalize_goal_draft(payload, protected_paths=protected)
     # A worker's bounded progress report, never a grant or a retry decision.
@@ -890,6 +903,7 @@ def parse_agent_response(
     *,
     protected_paths: Iterable[Path | str] = (),
     team_plan_context: Mapping[str, Any] | None = None,
+    image_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     protected = tuple(protected_paths)
     openings, _, uncertain = _review_openings(raw_text)
@@ -915,6 +929,7 @@ def parse_agent_response(
                     payload,
                     protected_paths=protected,
                     team_plan_context=team_plan_context,
+                    image_targets=image_targets,
                 )
             except ValueError:
                 # A bad action envelope must not discard an already generated
@@ -928,7 +943,7 @@ def parse_agent_response(
                 summary = "答复正文已保留，但操作或委派元数据未通过校验；相关操作和委派尚未提交。"
                 return normalize_agent_response({"message": answer + "\n\n待处理：" + summary,
                     "gate": {"kind": "response_metadata_invalid", "summary": summary}},
-                    protected_paths=protected)
+                    protected_paths=protected, image_targets=image_targets)
         key = re.search(r'"message"\s*:\s*', body)
         if key:
             try:
@@ -939,7 +954,7 @@ def parse_agent_response(
                 return {
                     "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
                     "message": redact_response_markdown(
-                        salvaged, protected_paths=protected
+                        salvaged, protected_paths=protected, image_targets=image_targets
                     ).strip(),
                     "proposals": [],
                     "protected_action": None,
@@ -973,7 +988,7 @@ def parse_agent_response(
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
         "message": redact_response_markdown(
-            raw_text, protected_paths=protected
+            raw_text, protected_paths=protected, image_targets=image_targets
         ).strip(),
         "proposals": [],
         "protected_action": None,

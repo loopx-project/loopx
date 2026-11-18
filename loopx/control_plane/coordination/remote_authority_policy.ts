@@ -96,8 +96,10 @@ export function decodeRemoteAuthorityPolicy(value: unknown): JsonObject {
 export function remoteAuthorityPolicyAdmission(policy: JsonObject, credential: string,
   request: RemoteAuthorityRequest, mode: RemoteAuthorityMode = "execute"): RemoteAuthorityAdmission {
   const digest = createHash("sha256").update(credential).digest();
-  const principal = (policy.principals as JsonObject[]).find(p =>
-    timingSafeEqual(Buffer.from(String(p.credential_sha256), "hex"), digest));
+  const principal = (policy.principals as JsonObject[]).find(p => {
+    const candidate = Buffer.from(String(p.credential_sha256), "hex");
+    return candidate.length === digest.length && timingSafeEqual(candidate, digest);
+  });
   if (!principal) return {status: "rejected", reason_code: "principal_unauthenticated"};
   const scope = (policy.scopes as JsonObject[]).find(s => sameScope(s, request));
   const scoped = policy.schema_version === REMOTE_AUTHORITY_SCOPED_READ_POLICY;
