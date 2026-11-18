@@ -196,6 +196,34 @@ export function selectEffectiveHeartbeatReceipt<Value>(
     : entries.at(-1)!.value;
 }
 
+/**
+ * The first bound receipt for one Turn, used only as the admission clock.
+ *
+ * `selectEffectiveHeartbeatReceipt` still returns the latest bound receipt so
+ * review and work content stay current. A later same-Turn upgrade must not
+ * move the historical-ACK admission time or log position. Callers pass the
+ * GoalRef-filtered receipt list; this reduction does not widen that scope.
+ * Conflicting bindings fail closed, the same way the effective reduction does.
+ */
+export function selectAdmissionHeartbeatReceipt<Value>(
+  goalId: string,
+  agentId: string,
+  entries: readonly { fact: HeartbeatReceiptFact; value: Value }[],
+): Value | null {
+  const identities = new Map<string, Value>();
+  for (const entry of entries) {
+    const binding = heartbeatReceiptBinding(goalId, agentId, entry.fact);
+    if (!binding || identities.has(binding.identity_key)) continue;
+    identities.set(binding.identity_key, entry.value);
+  }
+  if (identities.size > 1) {
+    throw receiptIdentityConflict(
+      "heartbeat receipt has conflicting settlement identities for the same goal, agent, and turn",
+    );
+  }
+  return identities.size === 1 ? [...identities.values()][0]! : null;
+}
+
 /** Reentry can qualify work on the original binding, never replace its authority.
  * The caller commits this append-only projection under the receipt-log lock. */
 export function heartbeatWorkRequalification(

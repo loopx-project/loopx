@@ -27,7 +27,9 @@ from ...capabilities.native_chat.external_conversations import (
     STEWARD_BINDING_ADOPTION_PENDING,
 )
 from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
-from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint, reply_image_workspace
+from ...capabilities.native_chat.file_discovery import (
+    REPLY_IMAGE_NAME_PATTERN, FileChatDiscovery, file_change_fingerprint, reply_image_workspace,
+)
 from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, normalize_chat_image_attachments
 from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
@@ -1567,35 +1569,45 @@ class LarkPrivateConversations:
                        for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))):
             raise ValueError("original request no longer matches")
         turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"]) or {}
-        if (not isinstance(answer := (turn.get("response") or {}).get("message"), str)
+        response = turn.get("response") or {}
+        if (not isinstance(answer := response.get("message"), str)
                 or hashlib.sha256(answer.encode()).hexdigest() != plan["answer_sha256"]
                 or terminal.get("text") != _presentation_text(answer)
-                or not private_answer_images(answer)[1]
                 or (session := resumable_answer_image_session(self.core, native, turn)) is None):
             raise ValueError("original completed answer or its authority changed")
+        image_targets = private_answer_images(answer)[1]
+        if "captured_images" in plan:
+            if image_targets or response.get("answer_image_plan") or reply_image_workspace(session, turn) is None:
+                raise ValueError("original reply is not a qualified legacy project answer")
+        elif not image_targets:
+            raise ValueError("original remote image reply unavailable")
         return session
 
     def _historical_image_plan(self, record: Mapping[str, Any], plan: Mapping[str, Any]) -> dict:
         from ..public_source_reader import public_url
 
-        if set(plan) != {"binding_id", "turn_id", "message_id", "answer_sha256", "images"}:
+        captured = "captured_images" in plan
+        image_field, reference_field = ("captured_images", "name") if captured else ("images", "url")
+        if set(plan) != {"binding_id", "turn_id", "message_id", "answer_sha256", image_field}:
             raise ValueError("invalid original image repair fields")
         if (not isinstance(plan["message_id"], str) or not LARK_MESSAGE_ID_PATTERN.fullmatch(plan["message_id"])
                 or not isinstance(plan["answer_sha256"], str)
                 or not BARE_SHA256_PATTERN.fullmatch(plan["answer_sha256"])
-                or not isinstance(plan["images"], list) or not 1 <= len(plan["images"]) <= CHAT_IMAGE_MAX_COUNT):
+                or not isinstance(plan[image_field], list) or not 1 <= len(plan[image_field]) <= CHAT_IMAGE_MAX_COUNT):
             raise ValueError("invalid original image repair target")
         images = []
-        for image in plan["images"]:
-            if (not isinstance(image, dict) or set(image) != {"url", "sha256"}
-                    or not isinstance(image["sha256"], str) or not BARE_SHA256_PATTERN.fullmatch(image["sha256"])
-                    or not isinstance(image["url"], str)):
-                raise ValueError("each original image requires a URL and its SHA-256")
-            images.append({"url": public_url(image["url"]), "sha256": image["sha256"]})
-        if len({image["url"] for image in images}) != len(images):
-            raise ValueError("duplicate original image URL")
+        for image in plan[image_field]:
+            if (not isinstance(image, dict) or set(image) != {reference_field, "sha256"}
+                    or not isinstance(reference := image[reference_field], str)
+                    or not isinstance(image["sha256"], str) or not BARE_SHA256_PATTERN.fullmatch(image["sha256"])):
+                raise ValueError("each original image requires a reference and its SHA-256")
+            if captured and not REPLY_IMAGE_NAME_PATTERN.fullmatch(reference):
+                raise ValueError("invalid original image snapshot name")
+            images.append({reference_field: reference if captured else public_url(reference), "sha256": image["sha256"]})
+        if len({image[reference_field] for image in images}) != len(images):
+            raise ValueError("duplicate original image reference")
         self._historical_image_source(record, plan)
-        return {**plan, "images": images}
+        return {**plan, image_field: images}
 
     def _load_historical_image_plan(self, path: Path, record: dict[str, Any]) -> dict | None:
         if record.get("historical_answer_images") is not None:
@@ -1652,17 +1664,30 @@ class LarkPrivateConversations:
                 if not original_pair_matches():
                     return 0
                 phase = "answer_images.historical"
+                snapshots = plan.get("captured_images")
+                if snapshots is None:
+                    images = plan["images"]
+                    targets = [item["url"] for item in images]
+                    local_scope = None
+                    verification_key = "source_urls_verified"
+                else:
+                    # The operator stages the exact Turn's snapshots in this private host
+                    # directory. Paths from the project and model text are never opened here.
+                    images = snapshots
+                    targets = snapshots
+                    local_scope = (self.root / "historical-answer-images", plan["turn_id"])
+                    verification_key = "captured_images_verified"
                 attachments = state.get("attachments")
-                recheck_sources = attachments is None or state.get("source_urls_verified") is not True
+                recheck_sources = attachments is None or state.get(verification_key) is not True
                 if recheck_sources:
-                    attachments = read_answer_images(event["content"], [item["url"] for item in plan["images"]],
-                                                      attachments, record["deliveries"].get(phase, {}))
+                    attachments = read_answer_images(event["content"], targets, attachments,
+                                                     record["deliveries"].get(phase, {}), local_scope=local_scope)
                 digests = [hashlib.sha256(base64.b64decode(
                     picture["data_url"].split(",", 1)[1], validate=True)).hexdigest() for picture in attachments]
-                if digests != [item["sha256"] for item in plan["images"]]:
+                if digests != [item["sha256"] for item in images]:
                     return 0
                 if recheck_sources:
-                    state.update(attachments=attachments, source_urls_verified=True)
+                    state.update(attachments=attachments, **{verification_key: True})
                     _atomic_write_json(path, record)
                 def authorized() -> bool:
                     try:
