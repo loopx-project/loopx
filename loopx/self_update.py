@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 import time
+from tempfile import TemporaryDirectory
 import zipimport
 from typing import Any
 from urllib.parse import quote
@@ -1450,6 +1451,22 @@ def _verify_rollback_todos(
                 raise RuntimeError(refusal)
 
 
+def _managed_rollback_helper_target(helper: Path, releases_dir: Path) -> str | None:
+    if not helper.is_symlink():
+        return None
+    previous = os.readlink(helper)
+    # Allow a prior partial rollback: either release can own this sibling.
+    # Check the archive launcher path even if that release was pruned.
+    script = helper.parent / previous
+    if (
+        script.name == helper.name
+        and script.parent.name == "scripts"
+        and script.parent.parent.parent.resolve() == releases_dir.resolve()
+    ):
+        return previous
+    return None
+
+
 def execute_rollback_plan(
     payload: dict[str, Any],
     *,
@@ -1479,6 +1496,10 @@ def execute_rollback_plan(
     route_arguments = _runtime_route_arguments(registry_path, runtime_root)
     loopx_bin = _user_loopx_bin(home)
     previous_link_target = os.readlink(loopx_bin) if loopx_bin.is_symlink() else None
+    primary_was_absent = previous_link_target is None and not os.path.lexists(loopx_bin)
+    previous_targets = {loopx_bin: previous_link_target}
+    target_scripts = {loopx_bin: target_script}
+    helper = loopx_bin.with_name("loopx-apply-rrule")
     execution: dict[str, Any] = {
         "target_script": str(target_script),
         "loopx_command": str(loopx_bin),
@@ -1486,9 +1507,14 @@ def execute_rollback_plan(
         "restored_previous_on_failure": False,
     }
     updated = dict(payload)
-    switched = False
+    promoted: dict[Path, os.stat_result] = {}
+    temporary: TemporaryDirectory[str] | None = None
     promotion_guard = None
     try:
+        previous_helper = _managed_rollback_helper_target(helper, release_root.parent)
+        if previous_helper is not None:
+            previous_targets[helper] = previous_helper
+            target_scripts[helper] = target_script.with_name(helper.name)
         compatible = subprocess.run(
             [str(target_script), *route_arguments, "--format", "json", "authority-archive", "upgrade",
              "--all-known", "--require-current"],
@@ -1517,17 +1543,35 @@ def execute_rollback_plan(
             time.sleep(min(0.1, remaining))
         if registry_path is not None:
             _verify_rollback_todos(target_script, registry_path, runtime_root, timeout_seconds=timeout_seconds)
-        observed_link = os.readlink(loopx_bin) if loopx_bin.is_symlink() else None
-        if observed_link != previous_link_target:
-            raise RuntimeError("LoopX launcher changed during rollback checks. Read it back before retrying.")
+        if previous_helper is not None:
+            helper_script = target_scripts[helper]
+            if not helper_script.is_file() or not os.access(helper_script, os.X_OK):
+                raise RuntimeError(
+                    "Rollback target lacks an executable loopx-apply-rrule. "
+                    "Choose a release containing both managed launchers."
+                )
+            if previous_link_target is None and not primary_was_absent:
+                raise RuntimeError(
+                    "Cannot roll back the managed launcher pair over a regular loopx command."
+                )
         loopx_bin.parent.mkdir(parents=True, exist_ok=True)
-        temp_link = loopx_bin.with_name(f".{loopx_bin.name}.rollback.{os.getpid()}")
-        if temp_link.exists() or temp_link.is_symlink():
-            temp_link.unlink()
-        temp_link.symlink_to(target_script)
-        promoted_link_stat = temp_link.lstat()
-        os.replace(temp_link, loopx_bin)
-        switched = True
+        temporary = TemporaryDirectory(prefix=".loopx-rollback-", dir=loopx_bin.parent)
+        staging = Path(temporary.name)
+        for launcher, script in target_scripts.items():
+            observed_link = os.readlink(launcher) if launcher.is_symlink() else None
+            if observed_link != previous_targets[launcher] or (
+                launcher == loopx_bin and primary_was_absent and os.path.lexists(launcher)
+            ):
+                raise RuntimeError(
+                    f"LoopX launcher changed during rollback checks ({launcher.name}). "
+                    "Read it back before retrying."
+                )
+            (staging / launcher.name).symlink_to(script)
+        for launcher in target_scripts:
+            staged = staging / launcher.name
+            staged_stat = staged.lstat()
+            os.replace(staged, launcher)
+            promoted[launcher] = staged_stat
         doctor_result = subprocess.run(
             [str(loopx_bin), *route_arguments, "--format", "json", "doctor"],
             text=True, encoding="utf-8", errors="replace",
@@ -1574,37 +1618,48 @@ def execute_rollback_plan(
             updated["ok"] = False
         if doctor_result.returncode != 0:
             raise RuntimeError("Rollback target failed runtime checks; inspect the Doctor output.")
-    except Exception as exc:
+        for launcher, staged_stat in promoted.items():
+            if not os.path.samestat(staged_stat, launcher.lstat()):
+                raise RuntimeError(f"LoopX launcher changed during rollback validation ({launcher.name}).")
+    except BaseException as exc:
         execution["error"] = str(exc)
         updated["ok"] = False
-        if switched and previous_link_target:
-            restore_link = loopx_bin.with_name(
-                f".{loopx_bin.name}.rollback.restore.{os.getpid()}"
-            )
-            try:
-                if os.path.samestat(promoted_link_stat, loopx_bin.lstat()):
-                    if restore_link.exists() or restore_link.is_symlink():
-                        restore_link.unlink()
-                    restore_link.symlink_to(previous_link_target)
-                    os.replace(restore_link, loopx_bin)
-                    execution["restored_previous_on_failure"] = True
-            except Exception as restore_exc:
-                execution["restore_error"] = str(restore_exc)
+        restore_errors = []
+        if temporary is not None:
+            for launcher, staged_stat in reversed(promoted.items()):
+                try:
+                    if not os.path.samestat(staged_stat, launcher.lstat()):
+                        continue
+                    previous = previous_targets[launcher]
+                    if previous is not None:
+                        staged = Path(temporary.name) / launcher.name
+                        staged.symlink_to(previous)
+                        os.replace(staged, launcher)
+                        if launcher == loopx_bin:
+                            execution["restored_previous_on_failure"] = True
+                    elif primary_was_absent:
+                        launcher.unlink()
+                except OSError as restore_exc:
+                    restore_errors.append(f"{launcher.name}: {restore_exc}")
+        if restore_errors:
+            execution["restore_error"] = "\n".join(restore_errors)
+        if not isinstance(exc, Exception):
+            raise
     finally:
-        if "temp_link" in locals() and (temp_link.exists() or temp_link.is_symlink()):
-            temp_link.unlink()
-        if "restore_link" in locals() and (
-            restore_link.exists() or restore_link.is_symlink()
-        ):
-            restore_link.unlink()
-        if promotion_guard is not None:
-            promotion_guard.close()
+        try:
+            if temporary is not None:
+                temporary.cleanup()
+        finally:
+            if promotion_guard is not None:
+                promotion_guard.close()
     updated["execution"] = execution
     if updated["ok"]:
         updated["recommended_action"] = "rollback complete; review doctor output"
-    elif execution.get("doctor_returncode") == 0 and execution.get(
-        "extension_doctor_returncode"
-    ) not in {None, 0}:
+    elif (
+        "error" not in execution
+        and execution.get("doctor_returncode") == 0
+        and execution.get("extension_doctor_returncode") not in {None, 0}
+    ):
         updated["recommended_action"] = (
             "rollback activated, but one or more enabled extensions remain fail "
             "closed; repair the provider and run `loopx extension doctor "
@@ -1660,6 +1715,8 @@ def render_update_plan_markdown(payload: dict[str, Any]) -> str:
                             lines.extend(["", f"### {label} {stream}", "", "```text", str(output), "```"])
             if execution.get("error"):
                 lines.extend(["", f"Error: {execution['error']}"])
+            if execution.get("restore_error"):
+                lines.extend(["", f"Recovery error: {execution['restore_error']}"])
         return "\n".join(lines) + "\n"
 
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
