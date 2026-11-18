@@ -16,7 +16,11 @@ version = {file = "VERSION"}
 dependencies = {file = "requires-core.txt"}
 
 [tool.setuptools.packages.find]
-include = ["loopx", "loopx.chat", "loopx.chat.*", "loopx.cli_commands", "loopx.presentation"]
+include = [
+    "loopx", "loopx.chat", "loopx.chat.*", "loopx.cli_commands", "loopx.presentation",
+    "loopx.capabilities.native_chat", "loopx.control_plane.collaboration", "loopx.extensions.lark",
+]
 
 [tool.setuptools.package-data]
 loopx = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
+"loopx.control_plane.collaboration" = ["steward_reports.ts"]

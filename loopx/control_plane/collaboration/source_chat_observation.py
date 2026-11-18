@@ -4,13 +4,14 @@ The address locates evidence; source grants and Goal lifetime decisions remain
 with their existing typed owners. No model or peer supplies this address.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ...chat_store import (
-    CHAT_SESSION_SCHEMA_VERSION, CHAT_TURN_SCHEMA_VERSION, ChatSessionStore, _opaque_id, _read_json,
-)
+if TYPE_CHECKING:
+    from ...chat_store import ChatSessionStore
 
 
 def _source_chat_root(coordination_root: Path, route: dict[str, Any]) -> Path:
@@ -31,6 +32,8 @@ def original_turn_reader(store: ChatSessionStore, session_id: str) -> Callable[[
     Keep only trusted store paths, not Turn contents or authorization. The
     caller discards this locator after its read, including between pages.
     """
+    from ...chat_store import _read_json
+
     turns_dir = store._session_dir(session_id) / "turns"
     paths: dict[str, Path] = {}
     for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
@@ -51,6 +54,13 @@ def original_turn_reader(store: ChatSessionStore, session_id: str) -> Callable[[
 
 
 def observe_source_chat(coordination_root: Path, route: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    from ...chat_store import (
+        CHAT_SESSION_SCHEMA_VERSION,
+        CHAT_TURN_SCHEMA_VERSION,
+        _opaque_id,
+        _read_json,
+    )
+
     source_root = _source_chat_root(coordination_root, route)
     session_id = _opaque_id(route.get("session_id"), field="session_id")
     client_turn_id = _opaque_id(route.get("client_turn_id"), field="client_turn_id")

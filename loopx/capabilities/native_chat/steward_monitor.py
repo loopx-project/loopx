@@ -113,7 +113,7 @@ class StewardMonitor:
         Selecting it through heartbeat advancement qualification would reject
         a due watch whenever unrelated executable work is also available.
         """
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.lark_inbox import build_lark_operator_inbox_urgency_projector
         from ...cli_commands.quota_context import prepare_quota_command_context
         from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
@@ -121,7 +121,7 @@ class StewardMonitor:
         from ...quota import record_quota_monitor_poll
         from .steward_commands import NativeStewardCommandError
 
-        args = build_parser().parse_args(["--format", "json", *argv])
+        args = _build_selected_parser("quota").parse_args(["--format", "json", *argv])
 
         def current():
             return prepare_quota_command_context(args,

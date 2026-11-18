@@ -10,7 +10,7 @@ import pytest
 
 from test_native_steward_managed_mode import original, storage
 from test_native_steward_private import steward as steward_fixture, finish
-from loopx.cli import main
+from loopx.entrypoint import main
 from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 

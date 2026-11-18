@@ -250,6 +250,15 @@ readback after installing and restarting Workspace, and Core replay after
 removal on File and SQLite. The native App, IM and split public release still
 have their own R2/M3 acceptance.
 
+Workspace carries the native Steward session, monitor and report adapters
+and the managed Session calendar because they use its original conversation
+store. These adapters reuse the Core command parsers and execution owners.
+Standalone Core observes pending requests and results at Turn start
+through the shared Inbox owner. Peers can request, adopt and return work
+through that owner. Only returns to an original Workspace conversation use its
+session store. Inbox read routes and receipts retain their scoped identities
+when Workspace is added or removed.
+
 Authority does not move: the kernel remains the only writer of Goal/Todo/claim/
 lease/quota/effect state. A capability package may only register providers,
 capability contracts and CLI subcommands through `CapabilityRegistry`; it never

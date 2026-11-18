@@ -17,6 +17,7 @@ from zipfile import ZipFile
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle, read_cli_policy_payload
 from tests.test_core_distribution import AGENT, GOAL, _assert_committed, _environment, _run
 from tests.test_core_distribution import task as task
 
@@ -54,8 +55,70 @@ def test_workspace_wheel_owns_the_complete_bundle_without_core_files(wheels):
                    for name, digest in manifest["files"].items())
         assert "loopx/chat_server.py" in workspace_zip.namelist()
         assert "loopx/dashboard_launcher.py" in workspace_zip.namelist()
+        assert {
+            "loopx/capabilities/native_chat/steward_turn.py",
+            "loopx/capabilities/native_chat/steward_managed_mode.py",
+            "loopx/capabilities/native_chat/steward_monitor.py",
+            "loopx/capabilities/native_chat/steward_reports.py",
+            "loopx/capabilities/native_chat/session_calendar_tasks.py",
+            "loopx/control_plane/collaboration/steward_reports.ts",
+            "loopx/extensions/lark/steward_reports.py",
+        } <= set(workspace_zip.namelist())
         assert "loopx/cli.py" not in workspace_zip.namelist()
         assert "loopx/control_plane/turn_driver/executor.py" in core_zip.namelist()
+        assert "loopx/control_plane/collaboration/inbox_turn_start.py" in core_zip.namelist()
+        assert "loopx/control_plane/collaboration/steward_managed_mode.ts" in core_zip.namelist()
+
+
+def test_core_requests_and_returns_peer_work_without_workspace(core_python, task):
+    workspace, runtime, registry, _ = task
+    route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    source = "source-fixture"
+    _run(core_python, [*route, "configure-goal", "--goal-id", GOAL, "--registered-agent", AGENT,
+                       "--registered-agent", source, "--execute"], workspace)
+    brief = workspace / "brief.json"
+    brief.write_text(json.dumps({
+        "schema_version": "collaboration_brief_v0",
+        "purpose": "Check the inventory totals",
+        "context": "Verify the supplied total independently.",
+        "constraints": [],
+        "inputs": [],
+        "acceptance": ["Return a checked total"],
+        "return_requirement": "Share the result with the original sender.",
+    }), encoding="utf-8")
+
+    def inbox(action, agent, *args):
+        out = _run(core_python, [*route, "manager-inbox", action, "--goal-id", GOAL,
+                                 "--agent-id", agent, *args], workspace)
+        return json.loads(out.stdout)
+
+    request_id = inbox("request", source, "--peer-agent-id", AGENT, "--operation-id", "core-peer-review",
+                       "--brief-file", str(brief))["request_id"]
+    probe = '''
+import json, sys
+from loopx.entrypoint import main
+
+assert main(json.loads(sys.argv[1])) == 0
+assert "loopx.capabilities.manager_context" not in sys.modules
+assert "loopx.chat_store" not in sys.modules
+'''
+    for agent in (AGENT, source):
+        arguments = [*route, "quota", "should-run", "--goal-id", GOAL, "--agent-id", agent, "--dry-run"]
+        result = subprocess.run([core_python, "-I", "-c", probe, json.dumps(arguments)],
+                                cwd=workspace, env=_environment(core_python), capture_output=True, text=True, timeout=45)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        view = reference_metadata_oracle(json.loads(result.stdout))
+        payload = read_cli_policy_payload(json.dumps(view), returncode=result.returncode)
+        hook = payload["turn_start_capability_hook_dispatch"]
+        assert any(read["hook_id"] == "manager.context_inbox" for read in hook["required_reads"])
+        if agent == AGENT:
+            assert [row["request_id"] for row in inbox("read", agent)["items"]] == [request_id]
+            inbox("acknowledge", agent, "--request-id", request_id, "--decision", "adopt",
+                  "--reason", "Review the fixture independently.")
+            inbox("report", agent, "--request-id", request_id, "--reply-text", "The checked total is 35.")
+        else:
+            row = inbox("read", agent)["peer_returns"]["items"][0]
+            assert row["request_id"] == request_id and row["text"] == "The checked total is 35."
 
 
 def _python_json(python, cwd, source):
@@ -146,6 +209,18 @@ print(json.dumps({
     assert "loopx dashboard" in help_text
     endpoint_help = _run(core_python, ["chat-endpoint", "--help"], workspace).stdout
     assert "chat-endpoint" in endpoint_help
+    native_spend = _python_json(core_python, workspace, f"""
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from loopx.capabilities.native_chat.steward_commands import native_command
+
+controller = SimpleNamespace(registry_path=Path({str(registry)!r}), coordination_runtime_root=Path({str(runtime)!r}))
+status = native_command(controller, ["quota", "status", "--goal-id", {GOAL!r}])
+print(json.dumps([row["quota"]["spent_slots"] for group in status["groups"].values()
+                  for row in group if row["goal_id"] == {GOAL!r}]))
+""")
+    assert native_spend == [1]
 
     route = ["--registry", str(registry), "--runtime-root", str(runtime)]
     endpoint_list = json.loads(_run(core_python, [*route, "chat-endpoint", "list", "--format", "json"], workspace).stdout)

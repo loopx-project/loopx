@@ -166,6 +166,12 @@ Minimal 必须执行并恢复真实的受治理任务；standard 围绕同一内
 和 SQLite 上由 Core 完成并独立验收的任务、安装和重启 Workspace 后的读回，以及卸载后
 从 Core 重放原结果。原生 App、IM 和公开拆包发布仍需各自完成 R2/M3 验收。
 
+管家的原生会话、监控和报告适配器，以及托管会话的日历，使用 Workspace 的原会话存储，
+随 Workspace 发行，复用 Core 的命令解析和执行入口。独立 Core 在 Turn 开始时通过共用收件箱
+发现待处理的请求和结果。
+普通 Agent 通过同一实现提交、接受协作请求并回传结果。回传到 Workspace 原会话时才使用
+对应的会话存储。加装或卸载 Workspace 时，收件箱读取入口及回执继续沿用原有作用域和身份。
+
 权威不移动：内核仍是 Goal/Todo/claim/lease/quota/effect 状态的唯一写者。capability 包只能通过 `CapabilityRegistry` 注册 provider、capability 契约和 CLI 子命令，绝不 import 内核私有模块。
 
 ### 治理与运行时所有权
