@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 
+AGENT_TURN_RECALL_SCHEMA_VERSION = "agent_turn_recall_v0"
+AGENT_TURN_RECALL_SURFACE_ID = "agent_workflow.turn_admission"
+
+
 AGENT_TURN_RECALL_CATALOG_ENTRY: dict[str, Any] = {
     "id": "agent-turn-recall",
     "origin": "builtin",
@@ -60,7 +64,7 @@ AGENT_TURN_RECALL_CATALOG_ENTRY: dict[str, Any] = {
             "doc": "loopx/capabilities/agent_turn_recall/README.md",
         },
         {
-            "schema_version": "agent_turn_recall_v0",
+            "schema_version": AGENT_TURN_RECALL_SCHEMA_VERSION,
             "module": "loopx.capabilities.agent_turn_recall.core",
             "doc": "loopx/capabilities/agent_turn_recall/README.md",
         },
