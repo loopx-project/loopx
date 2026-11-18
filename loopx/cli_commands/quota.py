@@ -17,7 +17,6 @@ from ..control_plane.quota.error_codes import (
 from ..usage_goal import observe_quota_result as observe_quota_result  # noqa: PLC0414
 from .quota_capture import handle_native_context_command, prepare_quota_capture
 from .quota_presentation import (
-    _project_native_cli_settlement as _project_native_cli_settlement,
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
     project_scheduler_observation as project_scheduler_observation,
@@ -260,7 +259,6 @@ def _prepare_quota_result_context(
     *,
     registry_path: Path,
     heartbeat_turn_id: str | None,
-    capture_directory: Path | None,
 ) -> tuple[dict[str, object], dict[str, Any]]:
     from .quota_result_delivery import prepare_quota_result_context
 
@@ -269,7 +267,6 @@ def _prepare_quota_result_context(
         args,
         registry_path=registry_path,
         heartbeat_turn_id=heartbeat_turn_id,
-        capture_directory=capture_directory,
     )
 
 

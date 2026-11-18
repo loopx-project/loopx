@@ -192,10 +192,29 @@ class StewardTurnHost:
     def monitor_restart_request(original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Prepare correlation only; current typed admission decides recovery."""
         prior = original.get("loopx_request") or {}
-        if (original.get("status") != "failed" or original.get("error_code") not in {"server_restarted", "runtime_error"}
-                or prior.get("work_kind") != "monitor" or prior.get("monitor_restart_recovery") is not None):
+        error = original.get("error_code")
+        if (original.get("status") != "failed" or error not in {"server_restarted", "runtime_error"}
+                or prior.get("work_kind") != "monitor"
+                or (prior.get("monitor_restart_recovery") is not None and error != "server_restarted")):
             return None
         return {**prior, "monitor_restart_recovery": {"original_turn_id": original["turn_id"]}}
+
+    def monitor_restart_carrier(self, original: dict[str, Any], client_id: str) -> dict[str, Any] | None:
+        """Find the latest carrier for the same observation; typed admission proves a safe restart."""
+        request = self.monitor_restart_request(original)
+        if request is None:
+            return None
+        base = client_id + ".restart-recovery"
+        next_client_id = base
+        while (carrier := self.store.turn_for_client(original["session_id"], next_client_id)) is not None:
+            if ((carrier.get("loopx_request") or {}).get("monitor_restart_recovery")
+                    != request["monitor_restart_recovery"]):
+                raise ValueError("native watch continuation identity conflict")
+            request = self.monitor_restart_request(carrier)
+            if request is None:
+                return {"turn": carrier}
+            next_client_id = base + "." + carrier["turn_id"]
+        return {"request": request, "client_id": next_client_id}
 
     def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """Transport original journal observations; the typed owner admits work."""
@@ -535,14 +554,12 @@ class StewardTurnHost:
         if existing is not None:
             # Keep the separately proven legacy admission-refusal route
             # below ahead of broader runtime-error observation candidates.
-            restart_request = (self.monitor_restart_request(existing)
+            recovery = (self.monitor_restart_carrier(existing, client_id)
                 if work_kind == "monitor" and not self._monitor_selection_failed_before_poll(existing) else None)
-            if restart_request is not None:
-                client_id += ".restart-recovery"
-                continued = self.store.turn_for_client(actor["session_id"], client_id)
-                if continued is not None:
-                    return {"turn": continued}
-                request, existing = restart_request, None
+            if recovery is not None:
+                if "turn" in recovery:
+                    return recovery
+                request, client_id, existing = recovery["request"], recovery["client_id"], None
         if existing is not None:
             monitor_retry = work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
             if not monitor_retry and work_kind != "report":

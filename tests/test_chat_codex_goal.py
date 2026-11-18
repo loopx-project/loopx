@@ -177,13 +177,17 @@ def test_resume_keeps_objective_and_accounting(tmp_path, monkeypatch):
         goal=native_goal("budgetLimited"),
         events=[begin("one"), complete, end("one")],
     )
+    owner_resumes = []
     host.driver.run(
-        parse_native_goal_command("/goal resume --tokens 2000"), lambda *a: None
+        parse_native_goal_command("/goal resume --tokens 2000"),
+        lambda *a: None,
+        on_resume_activated=lambda: owner_resumes.append("recorded"),
     )
     activation = next(p for m, p in host.calls if m == "thread/goal/set")
     assert "objective" not in activation
     assert host.goal["objective"] == "Original objective"
     assert host.goal["tokensUsed"] == 500 and host.goal["createdAt"] == 123
+    assert owner_resumes == ["recorded"]
 
 
 @pytest.mark.parametrize(
@@ -383,6 +387,193 @@ def test_runtime_replay_and_native_state_use_existing_chat_turn(tmp_path, monkey
         == 1
     )
     assert len([m for m in store.messages(sid) if m["role"] == "agent"]) == 1
+    controller.close()
+
+
+def test_runtime_records_owner_resume_only_after_native_resume_activation(
+    tmp_path, monkeypatch
+):
+    import loopx.agent_registry as agent_registry
+    import loopx.control_plane.goals.activation_service as activation_service
+
+    host = Host(
+        tmp_path,
+        monkeypatch,
+        goal=native_goal("paused"),
+        events=[begin("one"), complete, end("one")],
+    )
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(
+        agent_registry,
+        "load_goal_from_registry",
+        lambda path, goal_id: {"id": goal_id},
+    )
+    activations = []
+
+    def record_activation(**kwargs):
+        activations.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        activation_service, "set_goal_activation_state", record_activation
+    )
+    store = ChatSessionStore(tmp_path / "runtime" / "chat")
+    controller = ChatRuntimeController(
+        store=store, registry_path=registry_path, codex_bin="codex"
+    )
+    session = store.create_session(
+        goal_id="fixture",
+        agent_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id=host.session.thread_id,
+        upstream_mode="chat_native_goal",
+        channel_id="goal.fixture",
+    )
+    sid = session["session_id"]
+    controller.adapters[sid] = CodexAppServerAdapter(
+        host.session, goal_driver=host.driver
+    )
+    turn, created = controller.submit_turn(
+        session_id=sid,
+        client_turn_id="resume-one",
+        message="/goal resume --tokens 2000",
+        work_dir=tmp_path,
+        objective="Research",
+    )
+    done = controller.wait_for_turn(
+        session_id=sid, turn_id=turn["turn_id"], timeout_sec=5
+    )
+    assert created and done["status"] == "completed", done
+    assert len(activations) == 1
+    assert activations[0]["goal_id"] == "fixture"
+    assert activations[0]["state"] == "active"
+    assert activations[0]["actor_kind"] == "owner"
+    assert activations[0]["owner_resume_action"] is True
+    assert activations[0]["execute"] is True
+    controller.close()
+
+
+def test_runtime_delegation_wake_does_not_advance_owner_resume(
+    tmp_path, monkeypatch
+):
+    import loopx.agent_registry as agent_registry
+    import loopx.control_plane.goals.activation_service as activation_service
+
+    host = Host(
+        tmp_path,
+        monkeypatch,
+        goal=native_goal("paused"),
+        events=[begin("one"), complete, end("one")],
+    )
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(
+        agent_registry,
+        "load_goal_from_registry",
+        lambda path, goal_id: {"id": goal_id},
+    )
+    activations = []
+    monkeypatch.setattr(
+        activation_service,
+        "set_goal_activation_state",
+        lambda **kwargs: activations.append(kwargs) or {"ok": True},
+    )
+    store = ChatSessionStore(tmp_path / "runtime" / "chat")
+    controller = ChatRuntimeController(
+        store=store, registry_path=registry_path, codex_bin="codex"
+    )
+    session = store.create_session(
+        goal_id="fixture",
+        agent_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id=host.session.thread_id,
+        upstream_mode="chat_native_goal",
+        channel_id="goal.fixture",
+    )
+    sid = session["session_id"]
+    original_load_turn = store.load_turn
+
+    def load_wake_turn(session_id, turn_id):
+        turn = original_load_turn(session_id, turn_id)
+        if turn is not None and turn.get("client_turn_id") == "delegation-wake-one":
+            return {**turn, "loopx_request": {"operation": "wake"}}
+        return turn
+
+    monkeypatch.setattr(store, "load_turn", load_wake_turn)
+    controller.adapters[sid] = CodexAppServerAdapter(
+        host.session, goal_driver=host.driver
+    )
+
+    turn, created = controller.submit_turn(
+        session_id=sid,
+        client_turn_id="delegation-wake-one",
+        message="/goal resume --tokens 2000",
+        work_dir=tmp_path,
+        objective="Research",
+        loopx_request={"operation": "wake"},
+    )
+    done = controller.wait_for_turn(
+        session_id=sid, turn_id=turn["turn_id"], timeout_sec=5
+    )
+
+    assert created and done["status"] == "completed", done
+    assert activations == []
+    controller.close()
+
+
+def test_runtime_goal_resume_preserves_owner_stopped_state(
+    tmp_path, monkeypatch
+):
+    import loopx.agent_registry as agent_registry
+    import loopx.control_plane.goals.activation_service as activation_service
+
+    host = Host(
+        tmp_path,
+        monkeypatch,
+        goal=native_goal("paused"),
+        events=[begin("one"), complete, end("one")],
+    )
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(
+        agent_registry,
+        "load_goal_from_registry",
+        lambda path, goal_id: {"id": goal_id, "activation_state": "stopped"},
+    )
+    activations = []
+    monkeypatch.setattr(
+        activation_service,
+        "set_goal_activation_state",
+        lambda **kwargs: activations.append(kwargs) or {"ok": True},
+    )
+    store = ChatSessionStore(tmp_path / "runtime" / "chat")
+    controller = ChatRuntimeController(
+        store=store, registry_path=registry_path, codex_bin="codex"
+    )
+    session = store.create_session(
+        goal_id="fixture",
+        agent_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id=host.session.thread_id,
+        upstream_mode="chat_native_goal",
+        channel_id="goal.fixture",
+    )
+    sid = session["session_id"]
+    controller.adapters[sid] = CodexAppServerAdapter(
+        host.session, goal_driver=host.driver
+    )
+
+    turn, created = controller.submit_turn(
+        session_id=sid,
+        client_turn_id="stopped-resume-one",
+        message="/goal resume --tokens 2000",
+        work_dir=tmp_path,
+        objective="Research",
+    )
+    done = controller.wait_for_turn(
+        session_id=sid, turn_id=turn["turn_id"], timeout_sec=5
+    )
+
+    assert created and done["status"] == "completed", done
+    assert activations == []
     controller.close()
 
 
