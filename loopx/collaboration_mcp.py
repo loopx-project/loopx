@@ -1366,9 +1366,11 @@ class Delegations:
                      "--workspace", binding["workspace"], "--operation-id", operation_id]
         native_tools: list[str] = []
         if turn_host_arg_option(binding["host_args"], "--host") == "codex-cli":
+            from .control_plane.turn_driver.codex_cli import LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME
+
             mcp_server = {
                 "schema_version": "codex_stdio_mcp_server_v0",
-                "name": "loopx_delegation",
+                "name": LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME,
                 "command": [*_mcp_module_command(),
                     "--runtime-root",
                     str(self.root),

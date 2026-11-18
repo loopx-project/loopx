@@ -106,8 +106,9 @@ Read the result with the requester's Turn-bound `read_context` tool. After
 checking it, use `consume_peer_result` or the acknowledgement command in that
 tool's result to record acceptance, deferral or rejection. A CLI Inbox read
 can inspect the conclusion and leaves it pending until a bound tool supplies
-it. Deferral keeps the same result visible on the next Turn. The
-saved requester route is verified at dispatch, source control,
+it. Deferral keeps the same result visible on the next Turn. Managed Codex
+invocations supply the current Turn identity to their built-in collaboration
+server on both start and resume. The saved requester route is verified at dispatch, source control,
 requester read and consumption. Results do not automatically go to the
 recipient conversation's external audience.
 
