@@ -17,10 +17,10 @@ import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts";
 import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.ts";
 
-/** A stopped observation may get one new Chat carrier, never a new native
- * observation identity. The host independently reads the old worker lock,
- * complete journals and native poll receipts; normal admission still checks
- * current ownership, deadline, permissions and user work on every reentry. */
+/** A stopped observation may get a new Chat carrier for the same native
+ * identity. After a recovery starts, only another proven process restart can
+ * continue it. The host reads the stopped worker lock, journals and native poll
+ * receipts. Normal admission still checks ownership, deadline, permissions and user work. */
 function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
   if (request.monitor_restart_recovery === undefined) {
     if (params.monitor_restart_basis != null) throw new EffectRuntimeRequestError("watch recovery lacks its original request");
@@ -31,6 +31,9 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
   const original = requireJsonObject(basis.original, "original stopped watch");
   const prior = requireJsonObject(original.loopx_request, "original watch request");
   const keys = Object.keys(request).filter(key => key !== "monitor_restart_recovery");
+  const priorKeys = Object.keys(prior).filter(key => key !== "monitor_restart_recovery");
+  const predecessor = prior.monitor_restart_recovery === undefined ? null :
+    requireJsonObject(prior.monitor_restart_recovery, "previous watch continuation");
   const events = basis.event_kinds;
   // Compatibility with persisted Chat failures: the exact error alone is not
   // proof. Require the original collector's single, empty typed refusal too.
@@ -66,10 +69,14 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
-      || prior.monitor_restart_recovery !== undefined || basis.old_worker_excluded !== true
-      || basis.poll_absent !== true || basis.lease_available !== true || !Array.isArray(events) || !events.includes("turn.failed")
+      || (predecessor !== null && (original.error_code !== "server_restarted"
+        || Object.keys(predecessor).join() !== "original_turn_id"
+        || typeof predecessor.original_turn_id !== "string" || !/^[a-f0-9]{32}$/.test(predecessor.original_turn_id)
+        || predecessor.original_turn_id === original.turn_id))
+      || basis.old_worker_excluded !== true || basis.poll_absent !== true || basis.lease_available !== true
+      || !Array.isArray(events) || !events.includes("turn.failed")
       || events.some(kind => !["turn.queued", "agent.phase", "manager.context", "turn.failed"].includes(String(kind)))
-      || Object.keys(prior).length !== keys.length
+      || priorKeys.length !== keys.length
       || keys.some(key => key !== "monitor_lease_version" && JSON.stringify(request[key]) !== JSON.stringify(prior[key]))
       || Number(params.queued_turn_count) !== 0) {
     throw new EffectRuntimeRequestError("watch restart requires independent proof before any native observation");
