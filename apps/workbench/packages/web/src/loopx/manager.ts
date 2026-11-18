@@ -174,27 +174,10 @@ export async function switchManagerAgent(
 
   // Read-only adapters (Claude Code, Kiro CLI, DSH, API endpoints) require the restricted manager runtime profile.
   if (!TRUSTED_OWNER_ENDPOINTS.has(agentId) && priorProfile === 'trusted_owner') {
-    try {
-      runtimeTransactionId = await applyMachineNamespace(token, 'manager_runtime', {
-        schema_version: 'manager_runtime_profile_v0',
-        runtime_profile: 'restricted',
-      }, signal);
-    } catch (applyError) {
-      // If Core explicitly rejected the apply (e.g. 409 conflict when Settings was updated concurrently),
-      // preserve the newly confirmed setting and do not trigger any compensating write.
-      if (applyError instanceof ManagerError) {
-        throw applyError;
-      }
-      // Reconcile unconfirmed switch only when the response was lost (network error) after Core might have committed:
-      const readback = await readManagerCapabilities(token, null, signal).catch(() => null);
-      if (readback?.runtimeProfile === 'restricted') {
-        await applyMachineNamespace(token, 'manager_runtime', {
-          schema_version: 'manager_runtime_profile_v0',
-          runtime_profile: priorProfile,
-        }).catch(() => undefined);
-      }
-      throw applyError;
-    }
+    runtimeTransactionId = await applyMachineNamespace(token, 'manager_runtime', {
+      schema_version: 'manager_runtime_profile_v0',
+      runtime_profile: 'restricted',
+    }, signal);
   }
 
   try {

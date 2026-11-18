@@ -286,15 +286,14 @@ test('when an alternate steward session fails to open, the restricted manager_ru
   }
 });
 
-test('when apply response is lost after Core committed restricted profile, switchManagerAgent reconciles and restores trusted_owner', async () => {
+test('when apply encounters a transport failure without a transaction receipt, switchManagerAgent propagates error without triggering compensating write', async () => {
   const originalFetch = globalThis.fetch;
   const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
   Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
   let runtimeProfile: 'trusted_owner' | 'restricted' = 'trusted_owner';
   let applyCalls = 0;
-  globalThis.fetch = async (input, init) => {
+  globalThis.fetch = async (input) => {
     const path = new URL(String(input), 'http://localhost').pathname;
-    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
     if (path.endsWith('/api/chat/capabilities')) {
       return json({
         ok: true,
@@ -313,17 +312,10 @@ test('when apply response is lost after Core committed restricted profile, switc
     }
     if (path.endsWith('/api/chat/machine-configuration/apply')) {
       applyCalls++;
-      if (applyCalls === 1) {
-        // Core committed restricted but response was dropped/interrupted
-        runtimeProfile = 'restricted';
-        throw new TypeError('Failed to fetch');
-      }
-      // Reconciling restore call:
-      if (body.namespace_configuration && (body.namespace_configuration as Record<string, unknown>).runtime_profile === 'trusted_owner') {
-        runtimeProfile = 'trusted_owner';
-        return json({ ok: true, transaction_id: 'mc-tx-restore' });
-      }
-      return json({ ok: true });
+      // Transport drops before apply reaches Core or response arrives;
+      // independently user saved restricted in Settings:
+      runtimeProfile = 'restricted';
+      throw new TypeError('Failed to fetch');
     }
     throw new Error(`unexpected request: ${path}`);
   };
@@ -343,8 +335,8 @@ test('when apply response is lost after Core committed restricted profile, switc
     }
     assert.ok(thrownError !== null, 'propagates apply error');
     assert.equal((thrownError as Error).message, 'Failed to fetch');
-    assert.equal(runtimeProfile, 'trusted_owner', 'reconciled and restored prior trusted_owner profile');
-    assert.equal(applyCalls, 2, 'second apply call restored trusted_owner');
+    assert.equal(runtimeProfile, 'restricted', 'Settings confirmed restricted mode is preserved without overwrite');
+    assert.equal(applyCalls, 1, 'no compensating write is triggered without a confirmed transaction receipt');
   } finally {
     globalThis.fetch = originalFetch;
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
