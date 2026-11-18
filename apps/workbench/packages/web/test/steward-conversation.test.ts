@@ -446,3 +446,64 @@ test('when fallback session fails but configuration was updated concurrently, ro
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
   }
 });
+
+test('when apply receives 409 conflict because Settings updated concurrently, switchManagerAgent preserves confirmed setting and does not write', async () => {
+  const originalFetch = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  let runtimeProfile: 'trusted_owner' | 'restricted' = 'trusted_owner';
+  let applyCalls = 0;
+  globalThis.fetch = async (input) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    if (path.endsWith('/api/chat/capabilities')) {
+      return json({
+        ok: true,
+        manager: {
+          runtime: { runtime_profile: runtimeProfile },
+          channel_binding: { executor_endpoint: 'codex', selection_policy: 'preferred', eligible_endpoints: [] },
+        },
+        adapters: [
+          { agent_id: 'codex', display_name: 'Codex', available: false, unavailable_reason: 'executable_not_found', executable: 'codex' },
+          { agent_id: 'claude-code', display_name: 'Claude Code', available: true, executable: 'claude' },
+        ],
+      });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/preview')) {
+      return json({ ok: true, plan_revision: 'sha256:plan-rev-1' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/apply')) {
+      applyCalls++;
+      // Concurrently user committed restricted in Settings before our apply was processed:
+      runtimeProfile = 'restricted';
+      // Core rejects stale preview with 409 Conflict:
+      return new Response(JSON.stringify({
+        ok: false,
+        error_code: 'machine_configuration_preview_stale',
+        message: 'machine-configuration plan revision changed; preview again',
+      }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    let thrownError: unknown = null;
+    try {
+      await switchManagerAgent('token-1', 'claude-code', {
+        selectedAgentId: 'codex',
+        runtimeProfile: 'trusted_owner',
+        selectionPolicy: 'preferred',
+        eligibleEndpoints: [],
+        adapters: [],
+        availableAlternatives: [],
+      });
+    } catch (e) {
+      thrownError = e;
+    }
+    assert.ok(thrownError !== null, 'propagates 409 error');
+    assert.equal((thrownError as { status?: number }).status, 409);
+    assert.equal(runtimeProfile, 'restricted', 'Settings confirmed restricted mode is preserved without overwrite');
+    assert.equal(applyCalls, 1, 'no second compensating write was made after 409 conflict');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});

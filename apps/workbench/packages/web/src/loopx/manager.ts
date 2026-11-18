@@ -180,7 +180,12 @@ export async function switchManagerAgent(
         runtime_profile: 'restricted',
       }, signal);
     } catch (applyError) {
-      // Reconcile unconfirmed switch: Core may have committed restricted while the client lost the response.
+      // If Core explicitly rejected the apply (e.g. 409 conflict when Settings was updated concurrently),
+      // preserve the newly confirmed setting and do not trigger any compensating write.
+      if (applyError instanceof ManagerError) {
+        throw applyError;
+      }
+      // Reconcile unconfirmed switch only when the response was lost (network error) after Core might have committed:
       const readback = await readManagerCapabilities(token, null, signal).catch(() => null);
       if (readback?.runtimeProfile === 'restricted') {
         await applyMachineNamespace(token, 'manager_runtime', {
