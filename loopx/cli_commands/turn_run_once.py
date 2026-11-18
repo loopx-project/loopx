@@ -42,7 +42,7 @@ from ..control_plane.turn_driver import (
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
-from .turn_cadence import managed_cadence_start
+from .turn_cadence import managed_cadence_start, uses_effect_bound_start_identity
 from .turn_host_request import build_codex_cli_host_runner, prepare_turn_host_request
 from .turn_decision import collect_turn_status_payload, current_turn_host_launch_decision
 from .turn_rendering import build_turn_error_payload
@@ -771,7 +771,9 @@ def execute_turn_run_once(
             automation_id=args.automation_id,
             manual_reason=args.manual_interval_bypass_reason,
             on_admitted=on_managed_start_admitted,
-            request_id=settlement_identity.effect_id if args.host == "codex-cli" else None,
+            request_id=settlement_identity.effect_id if uses_effect_bound_start_identity(
+                args.host, getattr(args, "host_adapter_request_schema", None),
+            ) else None,
         )
 
         execution_started = bool(args.execute)

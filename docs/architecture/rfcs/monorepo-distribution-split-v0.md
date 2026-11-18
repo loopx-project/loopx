@@ -428,6 +428,12 @@ and persist evidence, settle once, then deliver/read back through the owning
 channel. Each step uses its existing legal transitions and replay rules;
 this description adds no competing status enum or transaction coordinator.
 
+An explicit `turn run-once --execute` with a compatible generic CLI adapter
+and an independent validator can prepare an eligible Todo's missing lease.
+The Host reuses the ordinary claim and reads back that same Todo before
+dispatch. The claim and launch share one Turn identity. Recovery uses the
+lease generation captured by the original attempt.
+
 An executor crash, a lost effect acknowledgement and a lost result-delivery
 acknowledgement are different recovery cases. An operation provider must expose
 whether an effect can be reconciled and retried safely. Unknown external state

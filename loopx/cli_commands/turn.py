@@ -94,31 +94,39 @@ def handle_turn_command(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
+        from .turn_cadence import managed_cadence_start, uses_effect_bound_start_identity
+
         preparation_admission: dict[str, Any] | None = None
         execution_preparer = native_execution_preparer
         preparation_error = "native task preparation did not make the same Todo ready"
         if (
             execution_preparer is None
             and args.turn_command == "run-once"
-            and args.host == "codex-cli"
             and bool(getattr(args, "execute", False))
+            and (args.host != "generic-cli" or getattr(args, "validation_command_json", None))
+            and uses_effect_bound_start_identity(
+                args.host, getattr(args, "host_adapter_request_schema", None),
+            )
         ):
             from ..control_plane.turn_driver.codex_execution_preparation import (
                 builtin_execution_preparation_claim,
             )
 
             from .turn_host_request import prepare_turn_host_arguments
-            from ..control_plane.turn_driver import build_loopx_turn_command_validator
-            from .turn_cadence import managed_cadence_start
+            from ..control_plane.turn_driver.command_validation import (
+                build_loopx_turn_command_validator, normalize_host_argv,
+            )
 
             project_cwd = Path(args.project).expanduser().resolve()
 
             def admit_preparation(identity):
                 nonlocal preparation_admission
-                prepare_turn_host_arguments(
+                _, raw_argv, _ = prepare_turn_host_arguments(
                     args, native_host_runner=None, native_session_binding_resolver=None,
                     native_task_validator=None, validator_builder=build_loopx_turn_command_validator,
                 )
+                if raw_argv is not None:
+                    normalize_host_argv(raw_argv)
                 args.turn_instance_id = identity.turn_instance_id
                 cadence = managed_cadence_start(
                     runtime_root=runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,

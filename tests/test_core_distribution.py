@@ -402,6 +402,10 @@ def test_installed_core_module_doctor_requires_recorded_entrypoints(core_python,
 
 @pytest.fixture(params=["sqlite", "file"])
 def task(tmp_path, monkeypatch, core_python, request):
+    return _prepare_task(tmp_path, monkeypatch, core_python, provider=request.param, claim=True)
+
+
+def _prepare_task(tmp_path, monkeypatch, core_python, *, provider, claim):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -410,7 +414,7 @@ def task(tmp_path, monkeypatch, core_python, request):
     registry = project / ".loopx/registry.json"
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
 
-    if request.param == "file":
+    if provider == "file":
         # Configure the existing installed owner before creating synthetic
         # state; never migrate or edit a live Goal for qualification.
         setup = '''import json,sys
@@ -437,7 +441,7 @@ assert result['readback_verified']
     created = command("connect", "--project", str(project), "--goal-id", GOAL,
         "--objective", "Produce and independently check squared integers zero through seven.",
         "--write-scope", "docs/**", "--no-global-sync")
-    assert created["storage_selection"]["provider"] == request.param
+    assert created["storage_selection"]["provider"] == provider
     assert created["storage_selection"]["handoff_mode"] == "hard_lease"
     command("configure-goal", "--goal-id", GOAL, "--registered-agent", AGENT,
         "--quota-compute", "1", "--execute")
@@ -445,8 +449,9 @@ assert result['readback_verified']
         "--text", "Produce and independently validate squares.json.", "--priority", "P1",
         "--task-class", "advancement_task", "--action-kind", "validate",
         "--operation-id", "core-create-task")
-    command("todo", "claim", "--goal-id", GOAL, "--todo-id", added["todo_id"],
-        "--agent-id", AGENT, "--claimed-by", AGENT, "--claim-operation-id", "core-new-task")
+    if claim:
+        command("todo", "claim", "--goal-id", GOAL, "--todo-id", added["todo_id"],
+            "--agent-id", AGENT, "--claimed-by", AGENT, "--claim-operation-id", "core-new-task")
     workspace = project / "docs/isolated-work"
     workspace.mkdir(parents=True)
     arguments = ["--registry", str(registry), "--runtime-root", str(runtime),
@@ -567,6 +572,47 @@ def _assert_committed(core_python, workspace, runtime, result):
     return result["resume_turn_key"]
 
 
+@pytest.mark.parametrize("provider", ["sqlite", "file"])
+def test_installed_core_prepares_generic_cli_first_turn(core_python, tmp_path, monkeypatch, provider):
+    workspace, runtime, registry, arguments = _prepare_task(
+        tmp_path, monkeypatch, core_python, provider=provider, claim=False,
+    )
+    configure_cadence = '''import sys
+from loopx.control_plane.effect_runtime import effect_runtime_result
+
+runtime, goal, agent = sys.argv[1:]
+result = effect_runtime_result("quota.automation_cadence.manage", {
+    "runtime_root": runtime, "goal_id": goal, "agent_id": agent,
+    "operation": "configure", "min_interval_minutes": 1440,
+    "expected_revision": 0, "owner_reference": "fixture-owner", "execute": True,
+})
+assert result["ok"] and result["min_interval_minutes"] == 1440
+'''
+    configured = subprocess.run([core_python, "-I", "-c", configure_cadence, str(runtime), GOAL, AGENT],
+        cwd=workspace, env=_environment(core_python), capture_output=True, text=True, timeout=30)
+    assert configured.returncode == 0, configured.stderr
+
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    before = json.loads(_run(core_python, [*prefix, "quota", "should-run", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--context-delivery", "off"], workspace).stdout)
+    preparation = before["execution_preparation"]
+    assert preparation["state"] == "claim_required" and preparation["reason_code"] == "task_lease_missing"
+    lease_args = [*prefix, "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", preparation["todo_id"]]
+
+    refused = json.loads(_run(core_python, [*arguments, "--host-adapter-command-json", "[]"],
+                              workspace, expected=1).stdout)
+    assert not any(value is True for value in refused["effects"].values())
+    assert json.loads(_run(core_python, lease_args, workspace).stdout)["active"] is False
+    assert not (workspace / "host-invocations").exists() and _spends(runtime) == 0
+
+    result = json.loads(_run(core_python, arguments, workspace).stdout)
+    key = _assert_committed(core_python, workspace, runtime, result)
+    assert result["admission"]["reason"] == "resumed_unstarted_reservation"
+    replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", key], workspace).stdout)
+    assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
+    _assert_committed(core_python, workspace, runtime, replay)
+
+
 @pytest.mark.parametrize("checkpoint", [None, "continue", "no_change"])
 def test_installed_core_executes_checks_and_replays_once(core_python, task, checkpoint):
     workspace, runtime, registry, arguments = task
@@ -612,9 +658,14 @@ def test_installed_core_executes_checks_and_replays_once(core_python, task, chec
 
 
 @pytest.mark.skipif(os.name == "nt", reason="this qualification injects a POSIX SIGKILL")
+@pytest.mark.parametrize("provider", ["sqlite", "file"])
 @pytest.mark.parametrize("lease_change", [None, "renew", "release"])
-def test_installed_core_recovers_confirmed_result_after_process_loss(core_python, task, lease_change):
-    workspace, runtime, registry, arguments = task
+def test_installed_core_recovers_confirmed_result_after_process_loss(
+    core_python, tmp_path, monkeypatch, provider, lease_change,
+):
+    workspace, runtime, registry, arguments = _prepare_task(
+        tmp_path, monkeypatch, core_python, provider=provider, claim=False,
+    )
     pause = workspace / "pause-validator"
     pause.touch()
     process = subprocess.Popen(_command(core_python, arguments), cwd=workspace,
