@@ -19,6 +19,16 @@
       "any_count": 22,
       "dict_any_count": 0
     },
+    "loopx/capabilities/benchmark_toolkit/experiment_board.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1088
+    },
+    "loopx/capabilities/benchmark_toolkit/study_projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1401
+    },
     "loopx/capabilities/catalog.py": {
       "any_count": 8,
       "dict_any_count": 0
