@@ -15,6 +15,7 @@ import {
   splitThinking,
   splitUserQuote,
   stepDurationLabel,
+  stepActive,
   stepStatusLabel,
   stepTitle,
   toMarkdown,
@@ -32,6 +33,81 @@ function ev(type: string, data: Record<string, any> = {}, turnId: string | null 
   seq += 1;
   return { threadId: 'th', seq, turnId, type, ts, data };
 }
+
+test('cancelled tools are ended-unconfirmed after replay and a later completed turn', () => {
+  for (const status of ['in_progress', 'pending']) {
+    const events = [ev('turn.started'), ev('tool.start', { id: 'live-command', kind: 'execute', status }),
+      ev('turn.done', { stopReason: 'cancelled' })];
+    const later = [ev('turn.started', {}, 't2'), ev('message.delta', { text: 'result' }, 't2'), ev('turn.done', {}, 't2')];
+    for (const history of [events, [...events, ...later]]) {
+      const timeline = buildTimeline(JSON.parse(JSON.stringify(history)));
+      const work = timeline.items.find(i => i.kind === 'work');
+      assert.ok(work?.kind === 'work');
+      assert.equal(timeline.running, false);
+      assert.equal(work.stopped, true);
+      assert.equal(work.steps[0].status, 'interrupted');
+      assert.equal(stepActive(work.steps[0]), false);
+      assert.equal(stepStatusLabel(work.steps[0]), '已结束');
+      assert.equal(work.steps[0].endedAt, undefined, 'the turn ending is not a tool end timestamp');
+      assert.equal(events[1].data.status, status, 'persisted source events stay unchanged');
+    }
+  }
+});
+
+test('a live tool stays active until the owning turn closes', () => {
+  for (const status of ['in_progress', 'pending']) {
+    const timeline = buildTimeline([ev('turn.started'), ev('tool.start', { id: 'live-command', status })]);
+    const work = timeline.items.find(i => i.kind === 'work');
+    assert.ok(work?.kind === 'work');
+    assert.equal(timeline.running, true);
+    assert.equal(stepActive(work.steps[0]), true);
+    assert.equal(stepStatusLabel(work.steps[0]), '运行中');
+  }
+});
+
+test('real tool endings retain their result and duration before or after cancellation', () => {
+  for (const status of ['completed', 'failed']) for (const late of [false, true]) {
+    const start = [ev('turn.started'), ev('tool.start', { id: 'live-command', status: 'in_progress' })];
+    const cancel = () => ev('turn.done', { stopReason: 'cancelled' }, 't1', late ? '2026-10-10T00:00:00.500Z' : '2026-10-10T00:00:01.000Z');
+    const end = () => ev('tool.end', { id: 'live-command', status, output: 'real result' }, 't1', '2026-10-10T00:00:00.900Z');
+    const work = buildTimeline([...start, ...(late ? [cancel(), end()] : [end(), cancel()])]).items.find(i => i.kind === 'work');
+    assert.ok(work?.kind === 'work');
+    assert.equal(work.steps[0].status, status);
+    assert.equal(work.steps[0].output, 'real result');
+    assert.equal(work.steps[0].endedAt, '2026-10-10T00:00:00.900Z');
+    assert.equal(stepActive(work.steps[0]), false);
+    assert.equal(stepStatusLabel(work.steps[0]), '0.9 秒');
+  }
+});
+
+test('every existing turn closure ends unconfirmed tools, including imported and orphan work', () => {
+  const cases = [
+    [ev('turn.started'), ev('tool.start', { id: 'tool' }), ev('turn.done')],
+    [ev('turn.started'), ev('tool.start', { id: 'tool' }), ev('turn.error', { code: 'interrupted' })],
+    [ev('turn.started'), ev('tool.start', { id: 'tool' }), ev('turn.started', {}, 'next')],
+    [ev('turn.started'), ev('tool.start', { id: 'tool' }), ev('history.handover', { target: 'next', done: false })],
+    [ev('turn.started', { imported: true }), ev('history.tool.start', { id: 'tool', status: 'pending' }), ev('turn.done', { imported: true })],
+    [ev('turn.started', { fromTerminal: true }), ev('tool.start', { id: 'tool' }), ev('turn.done', { fromTerminal: true })],
+    [ev('turn.started'), ev('turn.done'), ev('tool.start', { id: 'orphan' }), ev('turn.started', {}, 'next')],
+    [ev('tool.start', { id: 'orphan' }, ''), ev('turn.done', {}, '')],
+    [ev('turn.started'), ev('tool.start', { id: 'tool' }), ev('turn.done'), ev('tool.update', { id: 'tool', status: 'in_progress' })],
+  ];
+  for (const events of cases) {
+    const work = buildTimeline(events).items.find(i => i.kind === 'work');
+    assert.ok(work?.kind === 'work');
+    assert.equal(work.done, true);
+    assert.equal(stepActive(work.steps[0]), false);
+    assert.equal(stepStatusLabel(work.steps[0]), '已结束');
+  }
+});
+
+test('partial tool history without a closing boundary does not invent an interruption', () => {
+  const work = buildTimeline([ev('history.tool.start', { id: 'partial', status: 'in_progress' })]).items.find(i => i.kind === 'work');
+  assert.ok(work?.kind === 'work');
+  assert.equal(work.done, false);
+  assert.equal(work.turnId, '');
+  assert.equal(stepActive(work.steps[0]), true);
+});
 
 test('compaction is a chronological separator, deduplicated without adding tool steps', () => {
   const events = [ev('turn.started', { text: 'work' }),

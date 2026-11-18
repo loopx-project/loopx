@@ -944,6 +944,12 @@ export function buildTimeline(events: StoredEvent[], speech: readonly VoiceTrans
     }
   }
 
+  // Closing a turn ends activity, not proof that its tools completed. Project this after
+  // all updates so a late tool.end keeps its real result and timestamp.
+  for (const item of items) if (item.kind === 'work' && item.done) {
+    for (const step of item.steps) if (stepActive(step)) step.status = 'interrupted';
+  }
+
   // Acknowledgements and usage do not count as output; tool/approval/history rows do.
   if (running && waiting && !items.some(it => it.turnId === waiting!.turnId && it.kind !== 'user')) items.push(waiting);
   const withSummaries = addTurnSummaries(items, finished, stopped);
