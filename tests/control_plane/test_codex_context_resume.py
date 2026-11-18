@@ -678,3 +678,191 @@ def test_code_mode_retained_emissions_need_complete_native_read_coverage(tmp_pat
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)
     assert wire["mode"] == ("full" if lose_page else "delta")
+
+
+def _write_large_rollout_record(history: Path, kind: str, *, turn_id: str, mib: int = 17) -> None:
+    chunk = (b'x\\"\\\\\\u0041\xc3\xa9' * 6500)[:65536]  # exercises chunk-boundary escapes & UTF-8
+    repeat = (mib * 1024 * 1024) // len(chunk) + 1
+    if kind == "closed_output":
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "earlier-closed",
+            "name": "exec", "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        with history.open("ab") as stream:
+            stream.write(b'{"type":"response_item","payload":{"output":[{"type":"input_text","text":"')
+            for _ in range(repeat):
+                stream.write(chunk)
+            stream.write(b'"}],"call_id":"earlier-closed","type":"custom_tool_call_output"}}\n')
+    else:
+        with history.open("ab") as stream:
+            stream.write(b'{"type":"event_msg","payload":{"message":"')
+            for _ in range(repeat):
+                stream.write(chunk)
+            stream.write(b'","type":"background_event"}}\n')
+
+
+@pytest.mark.parametrize("same_turn", [False, True])
+@pytest.mark.parametrize("code_mode", [False, True])
+@pytest.mark.parametrize("record_kind", ["background_event", "closed_output"])
+def test_same_turn_large_earlier_record_preserves_native_full_resume(tmp_path, monkeypatch, same_turn, code_mode, record_kind):
+    import tracemalloc
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    if not same_turn:
+        append(history, "event_msg", {"type": "task_started", "turn_id": "prior-turn"})
+        _write_large_rollout_record(history, record_kind, turn_id="prior-turn")
+        append(history, "event_msg", {"type": "task_complete", "turn_id": "prior-turn"})
+    turn_id = "current-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    if same_turn:
+        _write_large_rollout_record(history, record_kind, turn_id=turn_id)
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1400},
+        "heartbeat_receipt": {"turn_instance_id": "first"}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first, size=2048)
+    assert len(pages) >= 15 and pages[-1]["eof"]
+    peak = 0
+    for i, page in enumerate(pages):
+        call = f"reader-{i}"
+        body = json.dumps(page)
+        if code_mode:
+            parent = f"parent-{i}"
+            append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+            append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+                "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+        else:
+            append(history, "response_item", {"type": "function_call_output", "call_id": call, "output": body})
+        if i == 0:
+            tracemalloc.start()
+            try:
+                context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+                    "tool_use_id": call, "tool_response": body})
+                _, hook_peak = tracemalloc.get_traced_memory()
+                peak = max(peak, hook_peak)
+            finally:
+                tracemalloc.stop()
+        else:
+            context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+                "tool_use_id": call, "tool_response": body})
+        if code_mode:
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+                "output": [{"type": "input_text", "text": body}]})
+    assert peak < 2 * 1024 * 1024
+    before = context._state(tmp_path)
+    assert before["candidate"]["native_resume"]["reads"]
+    append(history, "event_msg", {"type": "task_complete", "turn_id": turn_id})
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    assert "candidate" in context._state(tmp_path)
+    _, wire = project(tmp_path, "second", payload={**payload, "heartbeat_receipt": {"turn_instance_id": "second"}})
+    assert wire["mode"] == "delta" and wire["continuity_basis"] == "captured_file"
+
+
+@pytest.mark.parametrize("same_turn", [False, True])
+@pytest.mark.parametrize("code_mode", [False, True])
+def test_same_turn_large_earlier_record_preserves_native_selected_resume(tmp_path, monkeypatch, same_turn, code_mode):
+    from argparse import Namespace
+
+    from loopx.cli_commands.quota_capture import read_context_capture
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    if not same_turn:
+        append(history, "event_msg", {"type": "task_started", "turn_id": "prior-turn"})
+        _write_large_rollout_record(history, "background_event", turn_id="prior-turn")
+        append(history, "event_msg", {"type": "task_complete", "turn_id": "prior-turn"})
+    turn_id = "selection-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    if same_turn:
+        _write_large_rollout_record(history, "background_event", turn_id=turn_id)
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    narrative = "Preserve selection across large same-turn records. " * 280
+    payload = {"ok": True, "goal_id": "fixture", "selected_todo": {"todo_id": "todo_current"},
+        "goal_boundary": {"stop_condition": "Current boundary."},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+            "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+            }}]}}, "user_channel": {}, "cli_channel": {}}}
+    _, first = project(tmp_path, payload=payload)
+    selected = read_context_capture(Namespace(capture_file=first["recovery"]["path"],
+        capture_sha256=first["recovery"]["sha256"], select=[address], offset=0,
+        page_bytes=64000, max_page_output_bytes=64000, format="json"))
+    assert selected["ok"] and selected["eof"]
+    body = json.dumps(selected)
+    if code_mode:
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "parent-sel", "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": "reader-sel", "exit_code": 0}})
+    else:
+        append(history, "response_item", {"type": "function_call", "call_id": "reader-sel", "name": "exec_command"})
+        append(history, "response_item", {"type": "function_call_output", "call_id": "reader-sel", "output": body})
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+        "tool_use_id": "reader-sel", "tool_response": body})
+    if code_mode:
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": "parent-sel",
+            "output": [{"type": "input_text", "text": body}]})
+    assert "selected_resume" in context._state(tmp_path)
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    after = context._state(tmp_path)
+    assert address in after.get("consumed_pointers", {})
+    directory = tmp_path / "next"
+    directory.mkdir(mode=0o700)
+    prepared = context.prepare_codex_context(payload, directory=str(tmp_path), capture_directory=directory,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="next")
+    view = model_context_reference(native_context_capture_view(prepared.delivery, directory,
+        context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+    first_args = shlex.split(view["first_read_command"])
+    ref_file = first_args[first_args.index("--reference-file") + 1]
+    opening = read_context_capture(Namespace(reference_file=ref_file, offset=0,
+        page_bytes=12000, max_page_output_bytes=12000, format="json"))
+    assert opening["ok"] and address in opening.get("previously_delivered_fields", [])
+    assert narrative not in opening["content"]
+
+
+@pytest.mark.parametrize("failure_mode", ["ambiguous_open_parent", "malformed_large_record"])
+def test_same_turn_large_earlier_record_keeps_ambiguity_and_corruption_rejected(tmp_path, monkeypatch, failure_mode):
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    turn_id = "negative-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    if failure_mode == "ambiguous_open_parent":
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "earlier-still-open",
+            "name": "exec", "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        _write_large_rollout_record(history, "background_event", turn_id=turn_id)
+    else:
+        with history.open("ab") as stream:
+            stream.write(b'{"type":"event_msg","payload":{"message":"' + b"x" * (17 * 1024 * 1024) + b'\x01"}}\n')
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first)
+    for i, page in enumerate(pages):
+        body = json.dumps(page)
+        parent = f"current-open-{i}"
+        call = f"reader-{i}"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": call, "tool_response": body})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": body}]})
+    assert "native_resume" not in context._state(tmp_path)["candidate"]
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    assert "candidate" not in context._state(tmp_path)

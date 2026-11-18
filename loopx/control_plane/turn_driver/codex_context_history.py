@@ -9,12 +9,13 @@ This is not a scan of model inputs or a certificate from a session ID/journal.
 """
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
 import re
 import stat
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -31,10 +32,25 @@ _APPEND_EVENTS = {"task_started", "task_complete", "item_completed", "token_coun
 _IO_CHUNK_BYTES = 64 * 1024
 # Bound one decoded protocol record, not the history or the replay interval.
 _MAX_RECORD_BYTES = 16 * 1024 * 1024
+_MAX_HEADER_FIELD_BYTES = 16 * 1024
+_MAX_PRIMITIVE_BYTES = 1024
+_MAX_SKIP_DEPTH = 256
 _MAX_SELECTED_REPLAY_READS = 32
 _MAX_COMPLETE_REREADS = 32
 _SHELL_OUTPUT = re.compile(r"\AChunk ID: [^\r\n]+\nWall time: [0-9.]+ seconds\n"
     r"Process exited with code 0\n(?:Original token count: [0-9]+\n)?Output:\n(.*)\Z", re.DOTALL)
+_JSON_WS_STOP = re.compile(rb"[^ \t\r\n]")
+_JSON_STR_SPAN = re.compile(rb'(?:[^"\\\x00-\x1f]+|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})){1,64}')
+_JSON_TOKEN_STOP = re.compile(rb"[ \t\r\n,\}\]]")
+_PREFIX_PAYLOAD_SPEC: dict[str, Any] = {
+    "type": None,
+    "call_id": None,
+    "name": None,
+    "turn_id": None,
+    "item": {"type": None, "id": None, "exit_code": None},
+    "internal_chat_message_metadata_passthrough": {"turn_id": None},
+}
+_PREFIX_RECORD_SPEC: dict[str, Any] = {"type": None, "payload": _PREFIX_PAYLOAD_SPEC}
 _REPLAY_ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError)
 _SOURCE_IDENTITY_FIELDS = ("path", "device", "inode", "metadata_sha256", "model", "permission_mode")
 
@@ -110,21 +126,264 @@ def _region_digest(stream: BinaryIO, start: int, end: int) -> str:
     return digest.hexdigest()
 
 
-def _reader_tail(stream: BinaryIO, end: int) -> Iterator[tuple[int, dict[str, Any]]]:
-    """Walk backwards from the hook, one bounded record at a time."""
-    cursor, buffer = end, b""
-    while cursor:
-        start = max(0, cursor - _IO_CHUNK_BYTES)
+def _reader_spans(stream: BinaryIO, end: int) -> Iterator[tuple[int, int]]:
+    """Walk backwards from the hook one bounded chunk at a time, yielding line spans."""
+    if end <= 0:
+        return
+    stream.seek(end - 1)
+    if stream.read(1) != b"\n":
+        raise ValueError("incomplete native reader record")
+    line_end = end
+    cursor = end - 1
+    while cursor > 0:
+        chunk_start = max(0, cursor - _IO_CHUNK_BYTES)
+        stream.seek(chunk_start)
+        chunk = stream.read(cursor - chunk_start)
+        if len(chunk) != cursor - chunk_start:
+            raise ValueError("native reader interval was truncated")
+        pos = len(chunk)
+        while True:
+            split = chunk.rfind(b"\n", 0, pos)
+            if split < 0:
+                break
+            line_start = chunk_start + split + 1
+            if line_end > line_start:
+                yield line_start, line_end
+            line_end = line_start
+            pos = split
+        cursor = chunk_start
+    if line_end > 0:
+        yield 0, line_end
+
+
+def _reject_json_constant(token: str) -> Any:
+    raise ValueError(f"unsupported JSON constant: {token}")
+
+
+class _JsonSliceCursor:
+    """Chunked JSON validator and header extractor for oversized Turn-prefix records."""
+
+    def __init__(self, stream: BinaryIO, start: int, stop: int) -> None:
         stream.seek(start)
-        buffer = stream.read(cursor - start) + buffer
-        cursor = start
-        while (split := buffer.rstrip(b"\n").rfind(b"\n")) >= 0:
-            raw, buffer = buffer[split + 1:], buffer[:split + 1]
-            if len(raw) > _MAX_RECORD_BYTES:
-                raise ValueError("unsupported native reader record")
-            yield cursor + split + 1, json.loads(raw)
-        if len(buffer) > _MAX_RECORD_BYTES:
-            raise ValueError("unsupported native reader record")
+        self._stream = stream
+        self._cursor = start
+        self._stop = stop
+        self._buf = b""
+        self._pos = 0
+
+    def _ensure(self, n: int = 1) -> bool:
+        while len(self._buf) - self._pos < n and self._cursor < self._stop:
+            chunk = self._stream.read(min(_IO_CHUNK_BYTES, self._stop - self._cursor))
+            if not chunk:
+                raise ValueError("native reader interval was truncated")
+            self._cursor += len(chunk)
+            self._buf = self._buf[self._pos:] + chunk
+            self._pos = 0
+        return len(self._buf) - self._pos >= n
+
+    def skip_ws(self) -> int | None:
+        while True:
+            if self._pos >= len(self._buf) and not self._ensure(1):
+                return None
+            match = _JSON_WS_STOP.search(self._buf, self._pos)
+            if match is not None:
+                self._pos = match.start()
+                return self._buf[self._pos]
+            self._pos = len(self._buf)
+
+    def consume_byte(self, expected: int) -> None:
+        if not self._ensure(1) or self._buf[self._pos] != expected:
+            raise ValueError("malformed native JSON record")
+        self._pos += 1
+
+    def scan_string(self, *, capture_limit: int | None = None, allow_long_key: bool = False) -> str:
+        self.consume_byte(0x22)
+        decoder = codecs.getincrementaldecoder("utf-8")("strict")
+        raw: bytearray | None = bytearray(b'"') if capture_limit is not None else None
+
+        def _append_raw(data: bytes) -> bytearray | None:
+            if raw is None or capture_limit is None:
+                return None
+            if len(raw) + len(data) > capture_limit:
+                if not allow_long_key:
+                    raise ValueError("oversized JSON header field")
+                return None
+            raw.extend(data)
+            return raw
+
+        while True:
+            if self._pos >= len(self._buf) and not self._ensure(1):
+                raise ValueError("unterminated JSON string")
+            match = _JSON_STR_SPAN.match(self._buf, self._pos)
+            if match is not None:
+                seg = self._buf[self._pos:match.end()]
+                decoder.decode(seg, final=False)
+                raw = _append_raw(seg)
+                self._pos = match.end()
+                continue
+            ch = self._buf[self._pos]
+            if ch == 0x22:
+                decoder.decode(b"", final=True)
+                self._pos += 1
+                raw = _append_raw(b'"')
+                return "" if raw is None else str(json.loads(bytes(raw)))
+            if ch == 0x5c and len(self._buf) - self._pos < 6 and self._cursor < self._stop:
+                before = len(self._buf) - self._pos
+                self._ensure(6)
+                if len(self._buf) - self._pos > before:
+                    continue
+            raise ValueError("invalid JSON string")
+
+    def read_primitive(self) -> Any:
+        raw = bytearray()
+        while True:
+            if self._pos >= len(self._buf) and not self._ensure(1):
+                break
+            match = _JSON_TOKEN_STOP.search(self._buf, self._pos)
+            end = len(self._buf) if match is None else match.start()
+            seg = self._buf[self._pos:end]
+            if len(raw) + len(seg) > _MAX_PRIMITIVE_BYTES:
+                raise ValueError("oversized JSON primitive")
+            raw.extend(seg)
+            self._pos = end
+            if match is not None:
+                break
+        if not raw:
+            raise ValueError("expected JSON value")
+        return json.loads(bytes(raw), parse_constant=_reject_json_constant)
+
+    def skip_value(self) -> None:
+        stack: list[bool] = []  # True = object, False = array
+        state = 0  # 0=val, 1=val|arr_end, 2=arr_sep, 3=key|obj_end, 4=key, 5=colon, 6=obj_sep
+        while True:
+            ch = self.skip_ws()
+            if ch is None:
+                raise ValueError("unexpected EOF in JSON value")
+            if state in {3, 6}:
+                if ch == 0x7d:
+                    self._pos += 1
+                    stack.pop()
+                    if not stack:
+                        return
+                    state = 6 if stack[-1] else 2
+                    continue
+                if state == 6:
+                    if ch != 0x2c:
+                        raise ValueError("expected comma or end of JSON object")
+                    self._pos += 1
+                    state = 4
+                    continue
+                state = 4
+            if state == 4:
+                self.scan_string()
+                state = 5
+                continue
+            if state == 5:
+                if ch != 0x3a:
+                    raise ValueError("expected colon in JSON object")
+                self._pos += 1
+                state = 0
+                continue
+            if state == 2:
+                if ch == 0x5d:
+                    self._pos += 1
+                    stack.pop()
+                    if not stack:
+                        return
+                    state = 6 if stack[-1] else 2
+                    continue
+                if ch != 0x2c:
+                    raise ValueError("expected comma or end of JSON array")
+                self._pos += 1
+                state = 0
+                continue
+            if state == 1 and ch == 0x5d:
+                self._pos += 1
+                stack.pop()
+                if not stack:
+                    return
+                state = 6 if stack[-1] else 2
+                continue
+            if ch == 0x7b:
+                if len(stack) >= _MAX_SKIP_DEPTH:
+                    raise RecursionError("JSON nesting too deep")
+                self._pos += 1
+                stack.append(True)
+                state = 3
+            elif ch == 0x5b:
+                if len(stack) >= _MAX_SKIP_DEPTH:
+                    raise RecursionError("JSON nesting too deep")
+                self._pos += 1
+                stack.append(False)
+                state = 1
+            elif ch == 0x22:
+                self.scan_string()
+                if not stack:
+                    return
+                state = 6 if stack[-1] else 2
+            else:
+                self.read_primitive()
+                if not stack:
+                    return
+                state = 6 if stack[-1] else 2
+
+    def read_small_value(self) -> Any:
+        ch = self.skip_ws()
+        if ch is None:
+            raise ValueError("unexpected EOF in JSON value")
+        if ch == 0x22:
+            return self.scan_string(capture_limit=_MAX_HEADER_FIELD_BYTES)
+        if ch == 0x7b:
+            self.skip_value()
+            return {}
+        if ch == 0x5b:
+            self.skip_value()
+            return []
+        return self.read_primitive()
+
+
+def _scan_selected_object(cursor: _JsonSliceCursor, spec: Mapping[str, Any]) -> dict[str, Any]:
+    cursor.consume_byte(0x7b)
+    result: dict[str, Any] = {}
+    ch = cursor.skip_ws()
+    if ch == 0x7d:
+        cursor._pos += 1
+        return result
+    while True:
+        if ch != 0x22:
+            raise ValueError("expected JSON object key")
+        key = cursor.scan_string(capture_limit=128, allow_long_key=True)
+        if cursor.skip_ws() != 0x3a:
+            raise ValueError("expected colon in JSON object")
+        cursor._pos += 1
+        if key not in spec:
+            cursor.skip_value()
+        elif isinstance(spec[key], dict):
+            if cursor.skip_ws() == 0x7b:
+                result[key] = _scan_selected_object(cursor, spec[key])
+            else:
+                result[key] = cursor.read_small_value()
+        else:
+            result[key] = cursor.read_small_value()
+        ch = cursor.skip_ws()
+        if ch == 0x7d:
+            cursor._pos += 1
+            return result
+        if ch != 0x2c:
+            raise ValueError("expected comma or end of JSON object")
+        cursor._pos += 1
+        ch = cursor.skip_ws()
+
+
+def _scan_turn_prefix_record(stream: BinaryIO, start: int, stop: int) -> dict[str, Any]:
+    """Decode only Turn/parent metadata from a large earlier record in O(chunk) memory."""
+    cursor = _JsonSliceCursor(stream, start, stop)
+    if cursor.skip_ws() != 0x7b:
+        raise ValueError("native replay record must be a JSON object")
+    record = _scan_selected_object(cursor, _PREFIX_RECORD_SPEC)
+    if cursor.skip_ws() is not None:
+        raise ValueError("trailing data in native replay record")
+    return record
 
 
 def _turn_boundary(record: dict[str, Any]) -> bool:
@@ -136,8 +395,19 @@ def _native_reader(stream: BinaryIO, end: int, event: dict[str, Any]) -> tuple[i
     reader = event["tool_use_id"]
     completed = False
     closed_parents: set[str] = set()
-    parent = None
-    for offset, record in _reader_tail(stream, end):
+    parent: tuple[int, str] | None = None
+    for offset, stop in _reader_spans(stream, end):
+        raw_len = stop - offset - 1
+        if parent is None:
+            if raw_len > _MAX_RECORD_BYTES:
+                raise ValueError("unsupported native reader record")
+            stream.seek(offset)
+            record = json.loads(stream.read(stop - offset))
+        elif raw_len > _IO_CHUNK_BYTES:
+            record = _scan_turn_prefix_record(stream, offset, stop - 1)
+        else:
+            stream.seek(offset)
+            record = json.loads(stream.read(stop - offset))
         if _turn_boundary(record):
             break
         payload = record["payload"]
@@ -154,6 +424,11 @@ def _native_reader(stream: BinaryIO, end: int, event: dict[str, Any]) -> tuple[i
         if not isinstance(call, str) or not call:
             continue
         if call == reader and kind in {"function_call", "function_call_output"}:
+            if raw_len > _MAX_RECORD_BYTES:
+                return None
+            if parent is not None and raw_len > _IO_CHUNK_BYTES:
+                stream.seek(offset)
+                record = json.loads(stream.read(stop - offset))
             return offset, _digest(record)
         if kind == "custom_tool_call_output":
             closed_parents.add(call)
