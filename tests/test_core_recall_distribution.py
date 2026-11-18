@@ -31,7 +31,9 @@ RECALL_MODULES = {
 
 
 def test_recall_source_stages_only_the_optional_implementation(tmp_path):
-    staged = _prepare_module().prepare_turn_recall_source(tmp_path / "recall")
+    staged = _prepare_module().prepare_capability_source(
+        tmp_path / "recall", "loopx-capability-agent-turn-recall",
+    )
     assert {path.relative_to(staged).as_posix() for path in (staged / "loopx").rglob("*.py")} == RECALL_MODULES
     for path in RECALL_MODULES:
         assert (staged / path).read_bytes() == (REPOSITORY / path).read_bytes()

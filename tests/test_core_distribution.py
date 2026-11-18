@@ -70,6 +70,14 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
         assert not (recall / name).exists()
     for name in ("catalog_entry.py", "runtime.py"):
         assert (recall / name).is_file()
+    review = staged / "loopx/capabilities/pr_review_queue"
+    assert {path.name for path in review.iterdir()} == {
+        "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
+        "order.py", "scheduling.py", "README.md",
+    }
+    assert not (staged / "loopx/cli_commands/pr_review.py").exists()
+    assert not (staged / "loopx/pr_review.py").exists()
+    assert not (staged / "loopx/pr_review_merge_readiness.py").exists()
 
 
 @pytest.fixture

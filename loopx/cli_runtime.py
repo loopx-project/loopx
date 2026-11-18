@@ -938,6 +938,14 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 		result = handle_agent_turn_recall_command(
 			args, registry_path=registry_path, output_format=output_format, print_payload=print_payload,
 		)
+	elif args.command == "pr-review":
+		from .cli_commands.pr_review import handle_pr_review_command
+		from .paths import effective_runtime_root
+
+		result = handle_pr_review_command(
+			args, registry_path=registry_path, output_format=output_format, print_payload=print_payload,
+			runtime_root=effective_runtime_root(registry_path, args.runtime_root) if registry_path.exists() else None,
+		)
 	else:
 		result = dispatch_common_command(
 			args,
@@ -1017,15 +1025,22 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
-	if command == "agent-turn-recall" and _standalone_core():
-		from .capabilities.agent_turn_recall.catalog_entry import RECALL_INSTALL_HINT, agent_turn_recall_installed
-
+	if command in {"agent-turn-recall", "pr-review"} and _standalone_core():
 		parser, subparsers = build_cli_parser()
-		if not agent_turn_recall_installed():
-			parser.error(f"agent-turn-recall is unavailable in the standalone core. {RECALL_INSTALL_HINT}")
-		from .capabilities.agent_turn_recall.cli import register_agent_turn_recall_commands
+		if command == "agent-turn-recall":
+			from .capabilities.agent_turn_recall.catalog_entry import RECALL_INSTALL_HINT, agent_turn_recall_installed
 
-		register_agent_turn_recall_commands(subparsers, add_subcommand_format)
+			if not agent_turn_recall_installed(builtin_cli_present=False):
+				parser.error(f"agent-turn-recall is unavailable in the standalone core. {RECALL_INSTALL_HINT}")
+			from .capabilities.agent_turn_recall.cli import register_agent_turn_recall_commands as register
+		else:
+			from .capabilities.pr_review_queue.catalog_entry import PR_REVIEW_INSTALL_HINT, pull_request_review_installed
+
+			if not pull_request_review_installed(builtin_cli_present=False):
+				parser.error(f"pr-review is unavailable in the standalone core. {PR_REVIEW_INSTALL_HINT}")
+			from .cli_commands.pr_review import register_pr_review_command as register
+
+		register(subparsers, add_subcommand_format)
 		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
 	if command == "version":
 		version_exports = sys.modules.get("loopx.cli_commands")

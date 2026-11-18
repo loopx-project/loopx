@@ -15,6 +15,8 @@ on:
       - "packages/loopx-codex-provider-routing/**"
       - "loopx/capabilities/decision_context/extension_provider.py"
       - "loopx/extensions/runtime.py"
+      - "packages/loopx-capability-pull-request-review/**"
+      - "tests/test_core_pr_review_distribution.py"
   push:
     branches:
       - main
@@ -31,6 +33,8 @@ on:
       - "packages/loopx-codex-provider-routing/**"
       - "loopx/capabilities/decision_context/extension_provider.py"
       - "loopx/extensions/runtime.py"
+      - "packages/loopx-capability-pull-request-review/**"
+      - "tests/test_core_pr_review_distribution.py"
 
 permissions:
   contents: read
@@ -82,6 +86,19 @@ jobs:
           uv pip uninstall --python "$LOOPX_CORE_TEST_PYTHON" loopx-capability-agent-turn-recall
           uv run --extra test python -m pytest -q tests/test_core_distribution.py \
             -k 'reports_optional_turn_recall or completes_turn_with_configured_optional_recall'
+
+      - name: Qualify matched pull-request review installation, checkpoint and removal
+        env:
+          LOOPX_USAGE_PING: "0"
+        run: |
+          uv run --extra test python packages/loopx-core/prepare.py \
+            --distribution loopx-capability-pull-request-review --output "$RUNNER_TEMP/review-source"
+          uv build --wheel "$RUNNER_TEMP/review-source" --out-dir "$RUNNER_TEMP/review-dist"
+          uv pip install --python "$LOOPX_CORE_TEST_PYTHON" \
+            "$RUNNER_TEMP"/review-dist/loopx_capability_pull_request_review-*.whl
+          LOOPX_REVIEW_TEST_ENABLED=1 uv run --extra test python -m pytest -q tests/test_core_pr_review_distribution.py
+          uv pip uninstall --python "$LOOPX_CORE_TEST_PYTHON" loopx-capability-pull-request-review
+          uv run --extra test python -m pytest -q tests/test_core_pr_review_distribution.py -k discovers
 
   codex-provider-routing:
     name: loopx-codex-provider-routing

@@ -65,6 +65,11 @@ only with the existing explicit Goal/Agent configuration. When the implementatio
 is unavailable, an enabled Goal records that fact and continues the task.
 Outcome ingest uses its own configuration and recovery path.
 
+`capability show pull-request-review` reports whether the [matching PR review
+wheel](../loopx-capability-pull-request-review/README.md) is installed. Core
+retains its catalog and settings. The add-on provides the existing `pr-review`
+command on explicit use. Removing it preserves review settings and checkpoints.
+
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary
 installation by switching back to its environment; preserve task state and
