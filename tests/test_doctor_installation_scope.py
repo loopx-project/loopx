@@ -189,18 +189,26 @@ def test_installation_scope_uses_current_distribution_and_console_script(
 
 @pytest.mark.parametrize("module", ["cli.py", "entrypoint.py"])
 @pytest.mark.parametrize(
-    "launcher_record", ["owned", "missing", "missing_file", "ambiguous", "other_distribution", "source_manifest"],
+    "launcher_record",
+    ["owned", "missing", "missing_file", "redirected", "ambiguous", "other_distribution", "source_manifest"],
 )
 def test_both_doctors_keep_packaged_module_readback_on_its_python_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module: str, launcher_record: str,
 ) -> None:
     module_path = Path(doctor.__file__).resolve()
     owned_console = tmp_path / ("loopx.exe" if os.name == "nt" else "loopx")
-    if launcher_record != "missing_file":
+    if launcher_record not in {"missing_file", "redirected"}:
         owned_console.touch(mode=0o700)
     foreign_console = tmp_path / "other" / owned_console.name
     foreign_console.parent.mkdir()
     foreign_console.touch(mode=0o700)
+    if launcher_record == "redirected":
+        try:
+            owned_console.symlink_to(foreign_console)
+        except OSError:
+            if os.name != "nt":
+                raise
+            pytest.skip("console script symlinks unavailable")
     dist_info = tmp_path / "loopx.dist-info"
     dist_info.mkdir()
     (dist_info / "METADATA").write_text("Name: loopx\nVersion: 2.4.0\n", encoding="utf-8")
@@ -237,6 +245,7 @@ def test_both_doctors_keep_packaged_module_readback_on_its_python_environment(
         "owned": str(owned_console),
         "missing": None,
         "missing_file": None,
+        "redirected": None,
         "ambiguous": None,
         "other_distribution": str(foreign_console),
         "source_manifest": str(foreign_console),

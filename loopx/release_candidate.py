@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .command_invocation import command_argv
-from .python_install_owner import installed_loopx_distribution
+from .python_install_owner import (
+    distribution_record_path,
+    installed_loopx_distribution,
+    verified_distribution_console,
+)
 from .release_manifest import release_runtime_identity
 
 
@@ -131,14 +135,15 @@ def _distribution_command_summary(command_path: Path | None) -> dict[str, Any]:
             "error": "distribution_missing",
         }
 
-    recorded_commands: list[Path] = []
+    recorded_commands: set[Path] = set()
+    verified_commands: set[Path] = set()
     recorded_module = False
     resolved_command = command_path.resolve()
     standalone_core = getattr(installed, "name", None) == "loopx-core"
     for item in installed.files or ():
         if standalone_core and str(item) == "loopx/entrypoint.py":
             recorded_module = (
-                Path(item.locate()).resolve() == resolved_command
+                distribution_record_path(item).resolve() == resolved_command
                 == Path(__file__).with_name("entrypoint.py").resolve()
             )
         if Path(str(item)).name.lower() not in {
@@ -147,20 +152,16 @@ def _distribution_command_summary(command_path: Path | None) -> dict[str, Any]:
             "loopx-script.py",
         }:
             continue
-        try:
-            resolved_path = Path(item.locate()).resolve()
-        except OSError:
-            continue
-        if resolved_path not in recorded_commands:
-            recorded_commands.append(resolved_path)
-    recorded_commands.sort(key=str)
+        recorded = distribution_record_path(item)
+        verified = verified_distribution_console(recorded)
+        recorded_commands.add(verified if verified is not None else recorded)
+        if verified is not None:
+            verified_commands.add(verified)
     return {
-        "ok": resolved_command in recorded_commands or (
-            recorded_module and any(path.is_file() for path in recorded_commands)
-        ),
+        "ok": resolved_command in verified_commands or (recorded_module and bool(verified_commands)),
         **({"distribution_name": "loopx-core"} if getattr(installed, "name", None) == "loopx-core" else {}),
         "command": str(resolved_command),
-        "recorded_commands": [str(path) for path in recorded_commands],
+        "recorded_commands": sorted(str(path) for path in recorded_commands),
         "error": None if recorded_commands else "console_script_not_recorded",
     }
 
@@ -236,14 +237,15 @@ def collect_python_distribution_checks(
     """Validate a wheel/sdist install without requiring source-only wrappers."""
 
     distribution_command = _distribution_command_summary(command_path)
+    verified_command = Path(distribution_command["command"]) if distribution_command["ok"] else None
     standalone_core = distribution_command.get("distribution_name") == "loopx-core"
     imports = _import_summary(CORE_CLI_IMPORTS) if standalone_core else _import_summary()
-    if standalone_core and command_path == Path(__file__).with_name("entrypoint.py").resolve():
+    if standalone_core and verified_command == Path(__file__).with_name("entrypoint.py").resolve():
         commands = _command_summary(
-            command_path, invocation_argv=[sys.executable, "-I", "-m", "loopx.entrypoint"],
+            verified_command, invocation_argv=[sys.executable, "-I", "-m", "loopx.entrypoint"],
         )
     else:
-        commands = _command_summary(command_path)
+        commands = _command_summary(verified_command)
     package_paths = _package_path_summary(
         package_root,
         CORE_DISTRIBUTION_PATHS if standalone_core else REPRESENTATIVE_DISTRIBUTION_PATHS,

@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from datetime import datetime, timezone
 from functools import partial
-from importlib.metadata import Distribution, PackageNotFoundError, PackagePath, distribution
+from importlib.metadata import Distribution, PackageNotFoundError, distribution
 import json
 import os
 import re
@@ -28,9 +28,11 @@ from .install_contract import (
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
     PythonInstallOwner,
+    distribution_record_path,
     installed_loopx_distribution,
     python_distribution_upgrade_command,
     resolve_python_install_owner,
+    verified_distribution_console,
 )
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
@@ -153,13 +155,13 @@ def _current_invocation(*, inspect_distribution_launcher: bool) -> tuple[Path | 
     # distribution's console script even if the shell names a different CLI.
     script_name = "loopx.exe" if os.name == "nt" else "loopx"
     scripts = {
-        _distribution_record_path(item)
+        distribution_record_path(item)
         for item in installed.files or ()
         if Path(item.as_posix()).name.lower() == script_name
     }
     if len(scripts) == 1:
-        script = scripts.pop()
-        if script.is_file() and os.access(script, os.X_OK):
+        script = verified_distribution_console(scripts.pop())
+        if script is not None and os.access(script, os.X_OK):
             return script, True
     return None, True
 
@@ -174,13 +176,6 @@ def doctor_invocation_path() -> tuple[Path | None, bool]:
     return _current_invocation(inspect_distribution_launcher=True)
 
 
-def _distribution_record_path(item: PackagePath) -> Path:
-    # PackagePath uses POSIX components and can lose a Windows drive root on
-    # Python 3.11. Interpret absolute RECORD entries under native path rules.
-    path = Path(item.as_posix())
-    return (path if path.is_absolute() else Path(item.locate())).resolve()
-
-
 def _python_distribution_owning_module(module_path: Path) -> Distribution | None:
     try:
         installed = installed_loopx_distribution(distribution)
@@ -190,7 +185,7 @@ def _python_distribution_owning_module(module_path: Path) -> Distribution | None
     module_suffix = os.path.join("loopx", "doctor.py")
     for item in installed.files or ():
         entry = item.as_posix()
-        if os.path.normcase(entry).endswith(module_suffix) and _distribution_record_path(item) == expected:
+        if os.path.normcase(entry).endswith(module_suffix) and distribution_record_path(item).resolve() == expected:
             return installed
     return None
 
