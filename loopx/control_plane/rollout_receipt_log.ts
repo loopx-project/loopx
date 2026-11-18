@@ -273,20 +273,36 @@ function committedSuccessor(
       eventGoalRef.goal_instance_id === goalRef.goal_instance_id;
   };
 
-  // A member that shows a value of this scope keeps the row inside it.  Only a
-  // member whose every value is foreign proves the row unrelated, which is the
-  // one case where damage elsewhere may be tolerated without a successor.
+  const unreadableScope = new Set(
+    damaged.unreadable.filter(
+      (key) => (ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key),
+    ),
+  );
+  // A foreign value only proves the row is unrelated when every copy of that
+  // member is readable: the same member may be duplicated, and a damaged copy
+  // that could have named this scope leaves the row unreadable rather than
+  // unrelated.  Absence of proof here is not proof of absence.
   if (observed.has("schema_version") &&
-    !confirms("schema_version", ROLLOUT_EVENT_SCHEMA_VERSION)) return null;
+    !confirms("schema_version", ROLLOUT_EVENT_SCHEMA_VERSION)) {
+    return unreadableScope.has("schema_version") ? { kind: "unknown" } : null;
+  }
   if (observed.has("event_kind") &&
-    !confirms("event_kind", HEARTBEAT_RECEIPT_EVENT_KIND)) return null;
-  if (observed.has("goal_id") && !confirms("goal_id", goalId)) return null;
-  if (observed.has("agent_id") && !confirms("agent_id", agentId)) return null;
+    !confirms("event_kind", HEARTBEAT_RECEIPT_EVENT_KIND)) {
+    return unreadableScope.has("event_kind") ? { kind: "unknown" } : null;
+  }
+  if (observed.has("goal_id") && !confirms("goal_id", goalId)) {
+    return unreadableScope.has("goal_id") ? { kind: "unknown" } : null;
+  }
+  if (observed.has("agent_id") && !confirms("agent_id", agentId)) {
+    return unreadableScope.has("agent_id") ? { kind: "unknown" } : null;
+  }
   if (goalRef === null) {
-    if (observed.has("goal_ref")) return null;
+    if (observed.has("goal_ref")) {
+      return unreadableScope.has("goal_ref") ? { kind: "unknown" } : null;
+    }
   } else if (observed.has("goal_ref") &&
     !(observed.get("goal_ref") ?? []).some(goalRefMatches)) {
-    return null;
+    return unreadableScope.has("goal_ref") ? { kind: "unknown" } : null;
   }
 
   // Scope members whose bytes could not be read keep the row inside this

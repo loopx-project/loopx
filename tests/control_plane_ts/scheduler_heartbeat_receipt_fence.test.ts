@@ -384,6 +384,24 @@ test("a damaged quote inside details cannot hide a committed successor", async (
       stale: false,
       at: (line) => line.indexOf('"quota_command":"') + '"quota_command":'.length,
     },
+    {
+      // The first copy of the identity names somebody else, but its twin is
+      // unreadable and could have named this scope.  A foreign value may only
+      // exclude a row when every copy of that member is readable.
+      name: "foreign agent identity ahead of damaged local duplicate",
+      agentId: "other-agent",
+      duplicateAgentIds: [scope.agent_id],
+      stale: true,
+      at: (line) => line.lastIndexOf(JSON.stringify(scope.agent_id)) + 1,
+    },
+    {
+      // The readable copy names this scope while its damaged twin could
+      // equally have named it, so the row still proves a successor.
+      name: "local agent identity ahead of damaged foreign duplicate",
+      duplicateAgentIds: ["other-agent"],
+      stale: true,
+      at: (line) => line.lastIndexOf(JSON.stringify("other-agent")) + 1,
+    },
   ];
   for (const operation of OPERATIONS) {
     await t.test(operation, { timeout: 30_000 }, async (t) => {

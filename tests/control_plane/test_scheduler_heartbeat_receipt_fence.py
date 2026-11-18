@@ -631,6 +631,142 @@ def test_duplicate_scope_identity_does_not_hide_the_committed_successor(
     assert log_path.read_bytes() == before
 
 
+def _append_committed_agent_identity(path: Path, turn_id: str, value: str) -> None:
+    """Add one more top-level agent identity member to a committed row."""
+    lines = path.read_bytes().split(b"\n")
+    for index, line in enumerate(lines):
+        if turn_id.encode() not in line:
+            continue
+        close = line.rfind(b"}")
+        duplicate = b',"agent_id": ' + json.dumps(value, ensure_ascii=False).encode()
+        lines[index] = line[:close] + duplicate + line[close:]
+        path.write_bytes(b"\n".join(lines))
+        return
+    raise AssertionError("fixture receipt not found")
+
+
+def _set_committed_leading_agent_identity(
+    path: Path, turn_id: str, value: str
+) -> None:
+    """Rewrite the row's first top-level agent identity to another value."""
+    lines = path.read_bytes().split(b"\n")
+    marker = b'"agent_id":'
+    for index, line in enumerate(lines):
+        if turn_id.encode() not in line:
+            continue
+        at = line.find(marker)
+        if at < 0:
+            raise AssertionError("fixture receipt has no agent identity")
+        cursor = at + len(marker)
+        while line[cursor:cursor + 1] in (b" ", b"\t"):
+            cursor += 1
+        if line[cursor:cursor + 1] != b'"':
+            raise AssertionError("fixture receipt agent identity is not a string")
+        end = cursor + 1
+        while True:
+            end = line.find(b'"', end)
+            if end < 0:
+                raise AssertionError("fixture receipt agent identity is unterminated")
+            if line[end - 1:end] != b"\\":
+                break
+            end += 1
+        lines[index] = (
+            line[:cursor] + json.dumps(value, ensure_ascii=False).encode()
+            + line[end + 1:]
+        )
+        path.write_bytes(b"\n".join(lines))
+        return
+    raise AssertionError("fixture receipt not found")
+
+
+def _damage_committed_agent_member(path: Path, turn_id: str, value: str) -> None:
+    """Damage one byte inside the last copy of the named agent identity."""
+    lines = path.read_bytes().split(b"\n")
+    token = json.dumps(value, ensure_ascii=False).encode()
+    for index, line in enumerate(lines):
+        if turn_id.encode() not in line:
+            continue
+        at = line.rfind(token)
+        if at < 0:
+            raise AssertionError("fixture receipt has no such agent identity")
+        lines[index] = line[:at + 1] + b"\xff" + line[at + 2:]
+        path.write_bytes(b"\n".join(lines))
+        return
+    raise AssertionError("fixture receipt not found")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
+@pytest.mark.parametrize("order", ["foreign-first", "local-first"])
+def test_damaged_duplicate_agent_identity_still_supersedes_the_older_turn(
+    tmp_path: Path, provider: str, command: str, order: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-{order}-duplicate-agent",
+        scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    for turn_id in ("turn-1", "turn-2"):
+        code, guard = run_json_cli_result(
+            "quota",
+            "should-run",
+            "--goal-id",
+            goal_id,
+            "--agent-id",
+            SCOPED_AGENT_ID,
+            "--trae_app",
+            "--app-automation-current-rrule",
+            "FREQ=MINUTELY;INTERVAL=3",
+            "--turn-instance-id",
+            turn_id,
+            registry_path=registry,
+            runtime_root=runtime_root,
+            cwd=project,
+        )
+        assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    if order == "foreign-first":
+        # The row's first identity names another Agent while its trailing twin,
+        # which could have named this scope, is unreadable.
+        _duplicate_committed_identity(log_path, "turn-2")
+        _set_committed_leading_agent_identity(log_path, "turn-2", "another-agent")
+        _damage_committed_agent_member(log_path, "turn-2", SCOPED_AGENT_ID)
+    else:
+        # The readable identity names this scope while its foreign twin is
+        # unreadable; either way the row still proves an admitted successor.
+        _append_committed_agent_identity(log_path, "turn-2", "another-agent")
+        _damage_committed_agent_member(log_path, "turn-2", "another-agent")
+    before = log_path.read_bytes()
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        "turn-1",
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # A damaged duplicate cannot prove the row is unrelated, so the older
+    # return must not regain write authority.
+    assert code == 1, result
+    assert result["ok"] is False
+    assert result["status"] == "heartbeat_receipt_stale"
+    assert result["scheduler_state_mutated"] is False
+    assert log_path.read_bytes() == before
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize(
     "command", ["scheduler-ack-current", "scheduler-fail-current"],
