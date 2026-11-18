@@ -6,7 +6,10 @@ belongs to the provider. There is no second scheduler or assessment authority.
 """
 from urllib.parse import parse_qs, urlparse
 
-from ..capabilities.benchmark_toolkit import trajectory_assessment_store as store
+from ..capabilities.benchmark_toolkit.catalog_entry import (
+    BENCHMARK_TOOLKIT_INSTALL_HINT,
+    benchmark_toolkit_installed,
+)
 from ..feedback import validate_goal_id
 from ..control_plane.effect_runtime import EffectRuntimeRejected
 from .goal_source_routing import goal_source_catalog, linked_goal_source
@@ -15,6 +18,18 @@ RESEARCH_ANALYSIS_PATH = "/api/chat/research-analysis"
 
 
 class ResearchAnalysisRequestMixin:
+    def _research_analysis_store(self):
+        if not benchmark_toolkit_installed():
+            self._send_error(
+                BENCHMARK_TOOLKIT_INSTALL_HINT,
+                status=503,
+                error_code="research_analysis_unavailable",
+            )
+            return None
+        from ..capabilities.benchmark_toolkit import trajectory_assessment_store
+
+        return trajectory_assessment_store
+
     def _research_analysis_owner_goal(self, goal_id):
         linked = linked_goal_source(self.server, goal_id)
         return linked[1].source.goal_id if linked is not None else goal_id
@@ -31,7 +46,7 @@ class ResearchAnalysisRequestMixin:
             raise ValueError("Analysis source identity changed")
         return query
 
-    def _research_analysis_verify_source_goal(self, runtime, goal_id, pack_id, pack=None):
+    def _research_analysis_verify_source_goal(self, runtime, goal_id, pack_id, pack=None, *, store):
         linked = linked_goal_source(self.server, goal_id)
         if getattr(self.server, "analysis_source_namespace", None) is not None or linked is not None:
             owner_goal_id = self._research_analysis_owner_goal(goal_id)
@@ -66,6 +81,7 @@ class ResearchAnalysisRequestMixin:
         return self._goal_result_scope(goal_id)
 
     def _research_analysis_read(self):
+        store = None
         try:
             query = self._research_analysis_query()
             usage_turn = urlparse(self.path).path.endswith("/usage-turn")
@@ -84,6 +100,9 @@ class ResearchAnalysisRequestMixin:
             runtime = self._research_analysis_scope(goal_id)
             if runtime is None:
                 return
+            store = self._research_analysis_store()
+            if store is None:
+                return
             owner_goal_id = self._research_analysis_owner_goal(goal_id)
             if "compare_pack_id" in values:
                 if "pack_id" not in values:
@@ -92,15 +111,15 @@ class ResearchAnalysisRequestMixin:
                     pack_id=values["pack_id"], output_language=language)
                 right = store.inspect_pack(runtime_root=runtime, owner_goal_id=owner_goal_id,
                     pack_id=values["compare_pack_id"], output_language=language)
-                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"], left)
-                self._research_analysis_verify_source_goal(runtime, goal_id, values["compare_pack_id"], right)
+                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"], left, store=store)
+                self._research_analysis_verify_source_goal(runtime, goal_id, values["compare_pack_id"], right, store=store)
                 result = {"ok": True, "comparison": store.compare_captured_usage(left, right)}
             elif usage_turn:
-                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"])
+                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"], store=store)
                 result = store.read_usage_turn(runtime_root=runtime, owner_goal_id=owner_goal_id,
                     output_language=language, **values)
             elif citation:
-                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"])
+                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"], store=store)
                 first = int(values.pop("first_line"))
                 last = int(values.pop("last_line"))
                 if first < 1 or last < first:
@@ -112,21 +131,23 @@ class ResearchAnalysisRequestMixin:
                 pack_id = values.get("pack_id") or catalog["default_pack_id"]
                 pack = store.inspect_pack(runtime_root=runtime, owner_goal_id=owner_goal_id, pack_id=pack_id, output_language=language) if pack_id else None
                 if pack_id:
-                    self._research_analysis_verify_source_goal(runtime, goal_id, pack_id, pack)
+                    self._research_analysis_verify_source_goal(runtime, goal_id, pack_id, pack, store=store)
                 result = {"ok": True, "catalog": catalog, "pack": pack}
                 if hasattr(self.server, "analysis_execution_enabled"):
                     result["execution_enabled"] = self.server.analysis_execution_enabled
                 elif linked_goal_source(self.server, goal_id) is not None:
                     result["execution_enabled"] = True
             self._send_json(result)
-        except store.PackUnavailable as exc:
-            self._send_error("The registered analysis source is unavailable.", status=409, error_code=exc.reason_code)
-        except (ValueError, TypeError, KeyError, EffectRuntimeRejected):
-            self._send_error("Analysis needs a registered source in this Goal.", status=400, error_code="research_analysis_scope_invalid")
+        except (ValueError, TypeError, KeyError, EffectRuntimeRejected) as exc:
+            if store is not None and isinstance(exc, store.PackUnavailable):
+                self._send_error("The registered analysis source is unavailable.", status=409, error_code=exc.reason_code)
+            else:
+                self._send_error("Analysis needs a registered source in this Goal.", status=400, error_code="research_analysis_scope_invalid")
         except (OSError, RuntimeError):
             self._send_error("Analysis could not be read. Research history remains available.", status=503, error_code="research_analysis_unavailable")
 
     def _research_analysis_write(self):
+        store = None
         try:
             if getattr(self.server, "analysis_source_namespace", None) is not None and self._research_analysis_query():
                 raise ValueError("Only the bound analysis source selector is accepted")
@@ -148,17 +169,21 @@ class ResearchAnalysisRequestMixin:
             runtime = self._research_analysis_scope(body["goal_id"], cancel=cancel)
             if runtime is None:
                 return
+            store = self._research_analysis_store()
+            if store is None:
+                return
             args = dict(runtime_root=runtime, owner_goal_id=self._research_analysis_owner_goal(body["goal_id"]),
                 pack_id=body["pack_id"], analysis_key=body["analysis_key"], output_language=body.get("output_language"))
-            self._research_analysis_verify_source_goal(runtime, body["goal_id"], body["pack_id"])
+            self._research_analysis_verify_source_goal(runtime, body["goal_id"], body["pack_id"], store=store)
             # The server's existing threaded request is the asynchronous host.
             # Provider key/claim, source verification and cancellation
             # remain with benchmark-toolkit; nothing executes on GET.
             job = store.cancel_pack(**args) if cancel else store.execute_pack(**args, retry=body.get("retry", False))
             self._send_json({"ok": True, "job": job})
-        except store.PackUnavailable as exc:
-            self._send_error("Analysis source changed or is unavailable; refresh before retrying.", status=409, error_code=exc.reason_code)
-        except (ValueError, TypeError, KeyError, EffectRuntimeRejected):
-            self._send_error("Analysis request was not accepted. Refresh its source and retry.", status=400, error_code="research_analysis_request_invalid")
+        except (ValueError, TypeError, KeyError, EffectRuntimeRejected) as exc:
+            if store is not None and isinstance(exc, store.PackUnavailable):
+                self._send_error("Analysis source changed or is unavailable; refresh before retrying.", status=409, error_code=exc.reason_code)
+            else:
+                self._send_error("Analysis request was not accepted. Refresh its source and retry.", status=400, error_code="research_analysis_request_invalid")
         except (OSError, RuntimeError):
             self._send_error("Analysis did not complete. Read its status before retrying.", status=503, error_code="research_analysis_unavailable")

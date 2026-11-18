@@ -178,12 +178,13 @@ def test_installed_core_lists_benchmark_as_unavailable(core_python, tmp_path):
     detail = json.loads(_run(core_python, ["capability", "show", "benchmark-toolkit", "--format", "json"],
                             tmp_path).stdout)["capability"]
     unavailable = {"declared": True, "installed": False, "enabled": False, "ready": False}
-    assert records["issue-fix"]["provider_state"]["ready"] is True
+    assert records["decision-context"]["provider_state"]["ready"] is True
     for record in (records["benchmark-toolkit"], detail):
-        assert record["provider_id"] == "loopx"
+        assert record["provider_id"] == "loopx-capability-benchmark-toolkit"
         assert record["provider_state"] == unavailable
         assert "ordinary LoopX installation" in record["next_real_step"]
-    provider = next(provider for provider in catalog["providers"] if provider["id"] == "loopx")
+    provider = next(provider for provider in catalog["providers"]
+                    if provider["id"] == "loopx-capability-benchmark-toolkit")
     assert {key: provider[key] for key in unavailable} == unavailable
     refusal = _run(core_python, ["benchmark", "--help"], tmp_path, expected=2)
     assert "unavailable in the standalone core" in refusal.stderr

@@ -48,11 +48,11 @@ The installed-only qualification in
 exercises setup, independent result validation, process loss, replay and refusal.
 No model service, credentials or paid task execution is supplied by this wheel.
 
-Benchmark execution and the workspace research-analysis API require the ordinary
-LoopX installation. Core retains benchmark catalog metadata and the four-arm
-contract it references. `loopx capability list` and `loopx capability show
-benchmark-toolkit` report that the benchmark provider is unavailable and point
-to the ordinary installation. `loopx benchmark` is rejected before dispatch.
+Core keeps the benchmark catalog and the four-arm contract it references.
+Install the matching [Benchmark Toolkit wheel](../loopx-capability-benchmark-toolkit/README.md)
+to run `loopx benchmark` or use registered analysis packs in Workspace.
+`loopx capability show benchmark-toolkit` reports availability and installation
+guidance. Normal discovery leaves benchmark execution unloaded.
 
 Goal-start help and preview use issue-fix command metadata without importing
 its execution providers. An explicit `--capability-route issue-fix` retains
