@@ -1,0 +1,23 @@
+{
+  "name": "@calli/extension-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Public contract between LooChat and its extensions. Types only.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./index.d.ts" },
+    "./web": { "types": "./web.d.ts" }
+  },
+  "types": "./index.d.ts",
+  "files": ["*.d.ts"],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@types/react": "^18.3.12"
+  },
+  "peerDependenciesMeta": {
+    "@types/react": { "optional": true }
+  }
+}

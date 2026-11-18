@@ -19,10 +19,11 @@ PREMERGE_TIERS = {"quick", "standard", "deep"}
 
 # These paths need the existing exact-head visual/publication review. This is
 # local premerge coverage classification, not a public-boundary allowlist:
-# every matching file keeps the overall merge gate held, including image-only
+# every matching file keeps the overall merge gate held, including media-only
 # changes. SVG remains text-scanned. Unknown binary formats still fail closed.
 _VISUAL_REVIEW_SUFFIXES = frozenset({
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".avif",
+    ".mp4", ".webm", ".mov",
 })
 
 CONTROL_PLANE_TOKENS = (
@@ -162,12 +163,31 @@ def _empty_smoke_suite_run(
 
 
 def _visual_review_paths(changed_files: list[str], repo_root: Path) -> list[str]:
-    return [
-        path for path in _dedupe(changed_files)
-        if Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
-        and (repo_root / path).is_file()
-        and not (repo_root / path).is_symlink()
-    ]
+    visual_paths = []
+    for path in _dedupe(changed_files):
+        target = repo_root / path
+        suffix = target.suffix.lower()
+        if suffix not in _VISUAL_REVIEW_SUFFIXES or not target.is_file() or target.is_symlink():
+            continue
+        if suffix in {".mp4", ".mov", ".webm"}:
+            # Preserve image routing; new video types need a container header, not just a suffix.
+            try:
+                with target.open("rb") as stream:
+                    header = stream.read(16)
+                file_size = target.stat().st_size
+            except OSError:
+                continue  # Unreadable inputs stay in the fail-closed text scan.
+            if suffix == ".webm":
+                if not header.startswith(b"\x1a\x45\xdf\xa3"):
+                    continue
+            elif (
+                len(header) < 16
+                or header[4:8] != b"ftyp"
+                or not 16 <= int.from_bytes(header[:4], "big") <= file_size
+            ):
+                continue
+        visual_paths.append(path)
+    return visual_paths
 
 
 def _public_boundary_changed_files_run(
@@ -198,7 +218,7 @@ def _public_boundary_changed_files_run(
         "tier": "default",
         "command": " ".join(display_argv),
         "reason": (
-            "scans changed text for private material; binary images require visual review"
+            "scans changed text for private material; binary media require visual review"
             if visual_paths else "scans changed public-boundary files for private material"
         ),
         "normalized": {
@@ -217,7 +237,7 @@ def _public_boundary_changed_files_run(
                     "ok": True,
                     "duration_seconds": 0.0,
                     "stdout_tail": (
-                        "no changed text files; binary images require visual review"
+                        "no changed text files; binary media require visual review"
                         if visual_paths else "no existing changed public-boundary files to scan"
                     ),
                 }
@@ -267,7 +287,7 @@ def _public_boundary_changed_files_run(
         note=(
             "Premerge public-boundary validation scans the changed public text files "
             "directly. The full fresh-directory contract smoke remains available "
-            "through the canary catalog/profile suites. Binary images require the "
+            "through the canary catalog/profile suites. Binary media require the "
             "existing exact-head visual review; text success does not qualify them."
             if visual_paths else
             "Premerge public-boundary validation scans the changed public files "
@@ -359,7 +379,7 @@ def classify_premerge_surfaces(
             "kind": "visual_evidence",
             "path": path,
             "reason": (
-                f"{path}: binary image is outside text-scan coverage; inspect pixels, "
+                f"{path}: binary media is outside text-scan coverage; inspect content, "
                 "metadata and source for private material in the existing exact-head "
                 "PR review. This hold is not a passing privacy check or merge authority."
             ),
