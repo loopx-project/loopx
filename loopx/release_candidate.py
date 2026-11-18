@@ -311,10 +311,10 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
     """
     from .control_plane.effect_runtime import collect_effect_runtime_readiness
     from .command_invocation import resolve_command_path
-    from .doctor import current_script_invocation_path, python_distribution_install
+    from .doctor import doctor_invocation_path, python_distribution_install
 
-    invocation = current_script_invocation_path()
-    command = invocation or resolve_command_path("loopx")
+    invocation, module_owns_route = doctor_invocation_path()
+    command = invocation if module_owns_route else invocation or resolve_command_path("loopx")
     package_root = Path(__file__).resolve().parents[1]
     selected = os.environ.get("LOOPX_RELEASE_ROOT")
     runtime = collect_effect_runtime_readiness(deep=deep)

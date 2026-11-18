@@ -123,7 +123,7 @@ def command_release_root(command_realpath: Path | None) -> Path | None:
     return None
 
 
-def _current_invocation() -> tuple[Path | None, bool]:
+def _current_invocation(*, inspect_distribution_launcher: bool) -> tuple[Path | None, bool]:
     """Return the invocation path and whether a verified module owns the route."""
     if not sys.argv or not sys.argv[0]:
         return None, False
@@ -138,7 +138,7 @@ def _current_invocation() -> tuple[Path | None, bool]:
         return path, False
     module_path = Path(__file__).resolve()
     entrypoint = module_path.with_name("entrypoint.py")
-    if path not in {entrypoint, module_path.with_name("cli.py")}:
+    if path != entrypoint and (not inspect_distribution_launcher or path != module_path.with_name("cli.py")):
         return None, False
     installed = _python_distribution_owning_module(module_path)
     if installed is None:
@@ -146,7 +146,7 @@ def _current_invocation() -> tuple[Path | None, bool]:
     if installed.name == "loopx-core":
         return (path, True) if path == entrypoint else (None, False)
     # Source metadata can list the module without recording an installed script.
-    if installed.read_text("RECORD") is None:
+    if not inspect_distribution_launcher or installed.read_text("RECORD") is None:
         return None, False
 
     # The package updater invokes Doctor with its interpreter. Resolve that
@@ -165,8 +165,13 @@ def _current_invocation() -> tuple[Path | None, bool]:
 
 
 def current_script_invocation_path() -> Path | None:
-    """Return an active console script or installed standalone-core module."""
-    return _current_invocation()[0]
+    """Return the launcher eligible under the existing service activation policy."""
+    return _current_invocation(inspect_distribution_launcher=False)[0]
+
+
+def doctor_invocation_path() -> tuple[Path | None, bool]:
+    """Resolve Doctor's invocation while retaining ownership if its launcher is unavailable."""
+    return _current_invocation(inspect_distribution_launcher=True)
 
 
 def _distribution_record_path(item: PackagePath) -> Path:
@@ -764,7 +769,7 @@ def collect_doctor(
         else None
     )
     loopx_path = resolve_command_path("loopx")
-    invocation_path, module_owns_route = _current_invocation()
+    invocation_path, module_owns_route = doctor_invocation_path()
     loopx_canary_path = resolve_command_path("loopx-canary")
     command_path = invocation_path if module_owns_route else loopx_path or invocation_path
     if module_owns_route:
