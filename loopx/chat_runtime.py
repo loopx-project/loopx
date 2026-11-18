@@ -881,6 +881,21 @@ class ChatRuntimeController:
         if active and active.get("status") == "queued" and active_id == accepted_turn_id:
             check_route_configuration()
         selected_agent = model_allocation["executor_endpoint"] if quota_route else session["agent_id"]
+        executor_model = (alloc.manager_executor_model(model_allocation)
+            if model_allocation is not None else alloc.restored_executor_model(session))
+        last_model = session.get("agent_model_id")
+        requested_model = last_model
+        if session["agent_id"] == "codex":
+            # In a Steward binding the allocation supplies the default. Old
+            # observed settings are only a fallback for unallocated Sessions.
+            requested_model = session.get("requested_agent_model_id",
+                None if manager_runtime is not None and executor_model is not None else last_model)
+        agent_config = executor_model if quota_route else {
+            **(session.get("codex_chat_configuration") or {}),
+            **({"model": requested_model} if requested_model else {}),
+            **({"reasoning_effort": session["requested_agent_reasoning_effort"]}
+               if session.get("requested_agent_reasoning_effort") else {}),
+        }
         native_account_epoch = None
         if (selected_agent == "codex" and (
             active and active_id == accepted_turn_id and active.get("status") == "queued"
@@ -889,7 +904,8 @@ class ChatRuntimeController:
         )):
             from .capabilities.native_chat.codex_auth import conversation_account_epoch
             native_account_epoch = conversation_account_epoch(self.coordination_runtime_root, selected_codex_home,
-                **({"consumer": "steward", "model": (model_allocation or {}).get("model") or session.get("agent_model_id")}
+                **({"consumer": "steward", "model": (agent_config or {}).get("model")
+                    or (executor_model or {}).get("model") or last_model}
                    if manager_runtime is not None else {}))
         native_quota_refresh = bool(active and active_id == accepted_turn_id
             and active.get("status") == "queued" and active.get("origin") == "native_loopx"
@@ -1046,15 +1062,10 @@ class ChatRuntimeController:
                 project_coordination=conversation_scope(session)["kind"] == "owner_goal",
                 loopx_tools=session.get("loopx_tools") is True,
                 managed_read_default=session.get("managed_agent_id") is not None,
-                executor_model=(alloc.manager_executor_model(model_allocation)
-                    if model_allocation is not None else alloc.restored_executor_model(session)),
+                executor_model=executor_model,
                 manager_runtime=manager_runtime,
                 project_context=session.get("project_context"),
-                agent_config=(alloc.manager_executor_model(model_allocation) if quota_route else {**(session.get("codex_chat_configuration") or {}), **({"model": requested_model} if (requested_model := (
-                    session.get("requested_agent_model_id", session.get("agent_model_id"))
-                    if session.get("agent_id") == "codex" else session.get("agent_model_id")
-                )) else {}), **({"reasoning_effort": session["requested_agent_reasoning_effort"]}
-                               if session.get("requested_agent_reasoning_effort") else {})} or None),
+                agent_config=agent_config or None,
                 codex_home_override=selected_codex_home,
                 read_only_review=bool(recovery.get("read_only_review")),
                 metadata_review_context=session.get("steward_context") if metadata_fallback else None,
@@ -1064,9 +1075,13 @@ class ChatRuntimeController:
             )
             try:
                 # Recovery reads back the provider-restored configuration.
+                expected_model = session.get("requested_agent_model_id") if settings_changed else None
+                if (selected_agent == "codex" and not quota_route and model_allocation is not None
+                        and model_allocation.get("configured_model")):
+                    expected_model = (agent_config or {}).get("model") or model_allocation["model"]
                 observed_settings = self._observed_model_settings(adapter,
                     session.get("requested_agent_reasoning_effort") if settings_changed else None,
-                    session.get("requested_agent_model_id") if settings_changed else None)
+                    expected_model)
                 if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
                     if not isinstance(adapter, CodexAppServerAdapter):
                         raise CodexChatAgentError("Native Goal continuation requires a Codex adapter.", error_code="native_goal_adapter_mismatch", gate=None)
