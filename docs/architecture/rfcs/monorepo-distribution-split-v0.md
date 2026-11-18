@@ -413,14 +413,18 @@ packet cannot be treated as proof the executor has the prior context. Recover
 through the owning contract when continuity is unknown. Capability instructions
 are supplied when applicable; authority is never inferred from prompt text.
 
-The standalone Core artifact keeps the `agent-turn-recall` catalog and
-admission readback. The ordinary distribution supplies its command and
-execution code. Discovery reads the declaration without loading recall, and
-automatic recall loads its implementation after explicit opt-in. A Core Turn
-with that opt-in records the missing implementation and continues ordinary work.
-Independently enabled outcome ingest keeps its existing recovery path. This is
-one artifact boundary for a Standard capability. The complete Standard preset
-still needs package composition and installed qualification.
+The first Standard capability artifact is the release-coupled
+`loopx-capability-agent-turn-recall` wheel. It supplies the two existing built-in
+command and execution modules in the same environment as matching Core. Core's
+catalog and admission readback, the capability ID, and the original source-tree
+owner govern both installations. The wheels own disjoint files and use the exact
+Core release version for this built-in split. Independent provider packages use
+the public capability boundary described above. Discovery reads metadata without
+loading recall. Automatic recall loads its implementation only after the existing
+Goal/Agent opt-in. Core alone reports the missing implementation and continues
+ordinary work. Independently enabled outcome ingest retains its recovery path.
+The remaining Standard capabilities and the full preset need installed
+qualification.
 
 Optional observers consume committed events or bounded projections. Their
 latency must not enter admission/settlement transactions unless the existing

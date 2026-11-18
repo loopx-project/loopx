@@ -19,6 +19,7 @@ from ..reward_memory.experiment import (
 from .catalog_entry import (
     AGENT_TURN_RECALL_SCHEMA_VERSION,
     AGENT_TURN_RECALL_SURFACE_ID,
+    agent_turn_recall_installed,
 )
 
 if TYPE_CHECKING:
@@ -274,21 +275,15 @@ def run_configured_agent_turn_recall(
             )
         )
 
-    try:
-        from .core import (
-            build_agent_turn_recall_preview,
-            build_agent_turn_situation,
-            run_agent_turn_recall,
-        )
-    except ModuleNotFoundError as error:
-        if error.name != f"{__package__}.core":
-            raise
+    if not agent_turn_recall_installed():
         # Recall is optional in an installed Core. Its absence must not mask
         # the original configuration or suppress independent ingest recovery.
         return with_reconciliation(
             _unavailable_payload(goal_id=goal_id, agent_id=agent_id, status=experiment_status)
             | {"status": "runtime_unavailable", "reason_code": "automatic_recall_not_installed"}
         )
+
+    from .core import build_agent_turn_recall_preview, build_agent_turn_situation, run_agent_turn_recall
 
     identity = reward_memory_turn_identity_scope(config)
     situation = build_agent_turn_situation(

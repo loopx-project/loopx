@@ -323,9 +323,10 @@ def test_installed_core_reports_optional_turn_recall(core_python, tmp_path):
     assert record["provider_id"] == "loopx"
     assert record["default_enabled"] is False
     assert record["provider_state"] == {"declared": True, "installed": False, "enabled": False, "ready": False}
-    assert "ordinary LoopX installation" in record["next_real_step"]
+    assert "loopx-capability-agent-turn-recall" in record["next_real_step"]
     refusal = _run(core_python, ["agent-turn-recall", "--help"], tmp_path, expected=2)
     assert "unavailable in the standalone core" in refusal.stderr
+    assert "loopx-capability-agent-turn-recall" in refusal.stderr
     assert not list(tmp_path.iterdir())
 
 

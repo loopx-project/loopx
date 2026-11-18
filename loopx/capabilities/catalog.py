@@ -17,7 +17,9 @@ from .issue_fix.catalog_entry import ISSUE_FIX_CATALOG_ENTRY
 from .decision_context.catalog_entry import DECISION_CONTEXT_CATALOG_ENTRY
 from .project_skill_delivery.catalog_entry import PROJECT_SKILL_DELIVERY_CATALOG_ENTRY
 from .material_lifecycle.catalog_entry import MATERIAL_LIFECYCLE_CATALOG_ENTRY
-from .agent_turn_recall.catalog_entry import AGENT_TURN_RECALL_CATALOG_ENTRY
+from .agent_turn_recall.catalog_entry import (
+    AGENT_TURN_RECALL_CATALOG_ENTRY, RECALL_INSTALL_HINT, agent_turn_recall_installed,
+)
 from .semantic_preference.catalog_entry import SEMANTIC_PREFERENCE_CATALOG_ENTRY
 from .reward_memory.catalog_entry import REWARD_MEMORY_CATALOG_ENTRY
 from .periodic_report.catalog_entry import PERIODIC_REPORT_CATALOG_ENTRY
@@ -143,15 +145,15 @@ def _register_declared_implementation_providers(
 def _record_for_installed_recall(
     registry: CapabilityRegistry, record: Mapping[str, object],
 ) -> Mapping[str, object]:
-    if record is not AGENT_TURN_RECALL_CATALOG_ENTRY or find_spec(
-        "loopx.capabilities.agent_turn_recall.core"
-    ) is not None:
+    if record is not AGENT_TURN_RECALL_CATALOG_ENTRY or agent_turn_recall_installed(
+        builtin_cli_present=find_spec("loopx.cli") is not None,
+    ):
         return record
     if not any(provider["id"] == "loopx" for provider in registry.providers()):
         registry.register_provider({"id": "loopx", "origin": "builtin", "installed": False})
     return dict(record) | {
         "provider_id": "loopx",
-        "next_real_step": "Use the ordinary LoopX installation for agent-turn recall.",
+        "next_real_step": RECALL_INSTALL_HINT,
     }
 
 

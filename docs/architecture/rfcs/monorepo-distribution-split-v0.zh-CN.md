@@ -285,10 +285,12 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 不能因为 packet 更小，就认为 executor 已掌握前文。连续性未知时走所属契约的恢复路径。
 Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导。
 
-独立 Core 安装包保留 `agent-turn-recall` 的目录声明和准入回读，普通发行版提供命令和执行代码。
-发现能力时只读取声明，显式启用自动回忆后才加载执行实现。启用了自动回忆的 Core Turn 会回读
-实现缺失并继续普通任务。独立启用的结果入库沿用既有恢复路径。这为 Standard 的一项能力划出了
-安装包边界，完整的 Standard 预设仍需完成装配和安装态验收。
+Standard 的首个能力安装包是随 Core 同版本构建的 `loopx-capability-agent-turn-recall`。
+它把现有的命令与执行两个内置模块安装到同一个 Core 环境。两种安装组合复用 Core 的
+能力目录和准入回读、原能力 ID 与源码 owner。两个 wheel 拥有互不重叠的文件，此内置
+拆分精确绑定 Core 版本。独立 provider 包仍按上文公共能力边界接入。能力发现只读取元数据，
+按既有 Goal/Agent 配置显式启用后才加载自动回忆。只安装 Core 时会回读实现缺失并继续
+普通任务。独立启用的结果入库沿用既有恢复路径。其余 Standard 能力和完整预设仍需安装态验收。
 
 可选 observer 消费已提交事件或有界投影。除非现有契约明确要求它的 receipt，
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟

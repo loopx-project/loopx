@@ -1,10 +1,36 @@
 from __future__ import annotations
 
+from importlib.util import find_spec
 from typing import Any
 
 
 AGENT_TURN_RECALL_SCHEMA_VERSION = "agent_turn_recall_v0"
 AGENT_TURN_RECALL_SURFACE_ID = "agent_workflow.turn_admission"
+RECALL_DISTRIBUTION = "loopx-capability-agent-turn-recall"
+RECALL_INSTALL_HINT = f"Install the matching {RECALL_DISTRIBUTION} wheel in this Core environment."
+
+
+def agent_turn_recall_installed(*, builtin_cli_present: bool | None = None) -> bool:
+    """Observe the built-in deployment without loading its command or provider."""
+    specs = [find_spec(f"{__package__}.{name}") for name in ("cli", "core")]
+    if any(spec is None or spec.origin is None for spec in specs):
+        return False
+    if builtin_cli_present is None:
+        builtin_cli_present = find_spec("loopx.cli") is not None
+    if builtin_cli_present:
+        return True
+
+    from importlib.metadata import PackageNotFoundError, distribution
+    from pathlib import Path
+
+    try:
+        recall = distribution(RECALL_DISTRIBUTION)
+        if recall.version != distribution("loopx-core").version:
+            return False
+    except PackageNotFoundError:
+        return False
+    recorded = {Path(recall.locate_file(path)).resolve() for path in recall.files or ()}
+    return all(spec and spec.origin and Path(spec.origin).resolve() in recorded for spec in specs)
 
 
 AGENT_TURN_RECALL_CATALOG_ENTRY: dict[str, Any] = {
