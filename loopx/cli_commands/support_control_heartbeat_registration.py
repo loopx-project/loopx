@@ -173,11 +173,12 @@ def register_heartbeat_control_commands(
     turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
-        help="Explicitly use the short TurnEnvelope dispatcher; requires --decision-output-root. Capture alone keeps the ordinary full decision.",
+        help="Keep the compatibility spelling in the generated thin guard. Requires --decision-output-root. "
+             "Current quota guards return the complete v1 work contract by default.",
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="Explicitly consume complete v1 Turn context on the generated thin host-owned heartbeat guard. "
-             "Retains the existing legacy --turn-envelope protocol when unselected.")
+        help="Keep the explicit complete-turn spelling in the generated thin host-owned guard. "
+             "Current quota guards return the complete v1 work contract by default.")
 
     heartbeat_prompt_parser.add_argument(
         "--decision-handoff-socket",
