@@ -253,25 +253,13 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
     try:
         initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--todo-id", TODO,
-            "--decision-output-dir", str(capture), *delivery)
+            "--decision-output-dir", str(capture), "--context-delivery", "off")
+        assert initial["ok"]
         original = capture / "decision.json"
         raw = original.read_bytes()
         source = json.loads(raw)
         receipt = source["heartbeat_receipt"]
         authority = _authority(fixture)
-        review_command = review_for(read_pages(read_stage(shlex.split(initial["first_read_command"]))))
-        assert review_command[review_command.index("--decision-file") + 1] == str(original)
-        review = read_stage(review_command)
-        assert review["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
-        writer = read_stage(shlex.split(review["next"]["writeback"]))
-        assert writer["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
-        assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
-
-        explore_command = review_command.copy()
-        explore_command[explore_command.index("--replan-stage") + 1] = "explore"
-        explore = read_stage(explore_command)
-        assert explore["explore_basis"] is None
-        assert explore["source_hash"] == review["source_hash"]
 
         recovered_path = original.with_name("recovered.json")
         original.rename(recovered_path)
@@ -286,7 +274,27 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
         assert read_pages(read_stage(shlex.split(nav["first_read_command"])), 8192) == body
         recovered_review = review_for(body)
         assert recovered_review[recovered_review.index("--decision-file") + 1] == str(recovered_path)
-        assert read_stage(recovered_review)["source_hash"] == review["source_hash"]
+        assert recovered_review[recovered_review.index("--capture-sha256") + 1] == digest
+        recovered = read_stage(recovered_review)
+        assert recovered["source_hash"] == source["contract_binding"]["content_hash"]
+        assert recovered["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
+        recovered_writer = shlex.split(recovered["next"]["writeback"])
+        assert recovered_writer[recovered_writer.index("--capture-sha256") + 1] == digest
+        writer = read_stage(recovered_writer)
+        assert writer["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
+        assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
+        explore_command = recovered_review.copy()
+        explore_command[explore_command.index("--replan-stage") + 1] = "explore"
+        explore = read_stage(explore_command)
+        assert explore["explore_basis"] is None
+        assert explore["source_hash"] == recovered["source_hash"]
+        try:
+            # A different encoding of the same JSON keeps the semantic source hash.
+            recovered_path.write_bytes(raw + b"\n")
+            wrong_bytes = read_stage(recovered_review, status=1)
+            assert wrong_bytes["ok"] is False and "capture digest mismatch" in wrong_bytes["reason"]
+        finally:
+            recovered_path.write_bytes(raw)
         recovered_review[recovered_review.index("--source-hash") + 1] = "sha256:" + "0" * 64
         refused = read_stage(recovered_review, status=1)
         assert refused["ok"] is False and "matching source hash" in refused["reason"]
