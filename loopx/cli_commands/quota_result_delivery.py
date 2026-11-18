@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
-from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
     QuotaCommandValidationError,
     QuotaDecisionTransportError,
@@ -30,7 +28,6 @@ from .quota_capture import (
 )
 from .quota_presentation import (
     compose_quota_work_contract,
-    _project_native_cli_settlement,
     _project_quota_cli_payload,
     _quota_renderer,
     project_scheduler_observation,
@@ -84,9 +81,8 @@ def prepare_quota_result_context(
     *,
     registry_path: Path,
     heartbeat_turn_id: str | None,
-    capture_directory: Path | None,
 ) -> tuple[dict[str, object], dict[str, Any]]:
-    """Prepare current settlement and capability binding before publishing it."""
+    """Resolve presentation and attach recall before composing the work contract."""
     try:
         activation = native_context_activation(args)
     except QuotaCommandValidationError:
@@ -95,24 +91,6 @@ def prepare_quota_result_context(
         # Keep the original diagnostic on a refused guard.
         activation = {"progressive_enabled": False, "enabled": False}
     if args.quota_command == "should-run":
-        if (
-            args.format == "json"
-            and capture_directory is not None
-            and activation["progressive_enabled"]
-            and activation.get("scenario") == "codex_app_heartbeat"
-            and (
-                getenv("CODEX_THREAD_ID")
-                or getattr(args, "prepared_capture_reference", False)
-            )
-            and (
-                getattr(args, "codex_context_dir", None)
-                or getattr(args, "codex_context_root", None)
-            )
-            and payload.get("ok") is True
-            and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
-            and payload.get("normal_delivery_allowed") is True
-        ):
-            payload = _project_native_cli_settlement(payload)
         attach_reward_memory_recall_after_should_run(
             payload,
             quota_command=args.quota_command,
@@ -275,7 +253,6 @@ def _publish_quota_result(
             args,
             registry_path=registry_path,
             heartbeat_turn_id=heartbeat_turn_id,
-            capture_directory=capture_directory,
         )
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.

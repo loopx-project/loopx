@@ -181,6 +181,8 @@ class QuotaSettlementReadback:
     heartbeat_reentry_qualification: dict[str, Any] | None = None
     successor_replan_pending: bool = False
     replan_execution_pending: bool = False
+    admission_recorded_at: str | None = None
+    admission_event_id: str | None = None
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -313,6 +315,14 @@ def _optional_readback_record(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
     return dict(value)
+
+
+def _optional_readback_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
+    return value
 
 
 def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
@@ -570,4 +580,6 @@ def read_heartbeat_settlement(
             if replay_phase is not None
             else None
         ),
+        admission_recorded_at=_optional_readback_text(payload.get("admission_recorded_at")),
+        admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
     )

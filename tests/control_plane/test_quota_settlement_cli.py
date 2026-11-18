@@ -33,7 +33,11 @@ from loopx.control_plane.scheduler.state import (
 )
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.paths import shell_selected_global_registry
-from loopx.rollout_event_log import append_rollout_event, build_rollout_event
+from loopx.rollout_event_log import (
+    append_rollout_event,
+    build_rollout_event,
+    rollout_event_log_path,
+)
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture,
     read_fixture_todos,
@@ -9434,6 +9438,115 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     before = _spend_run_count(runtime)
     rc, written_payload = _run_generated_cli(writeback, registry_path=registry)
     assert rc == 0 and written_payload["ok"] is True and written_payload["appended"] is True, written_payload
+    assert _spend_run_count(runtime) == before
+    rc, spent = _run_generated_cli(spend, registry_path=registry)
+    assert rc == 0 and spent["ok"] is True, spent
+    assert _spend_run_count(runtime) == before + 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_same_turn_receipt_upgrade_keeps_historical_ack_admission(
+    tmp_path: Path, provider: str,
+) -> None:
+    """A same-Turn review upgrade must not move the historical ACK admission clock.
+
+    Turn A is admitted at T0 on one settlement identity. Turn B accepts that
+    review after T0. A review_guard_upgrade then appends another
+    quota_should_run for A at T2, after the ACK, caused by the original
+    receipt. The upgrade stays the effective receipt. The ACK still settles
+    against the original admission.
+    """
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    original_turn = "turn-historical-ack-after-upgrade"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
+    original_identity = admitted["heartbeat_receipt"]["settlement_identity"]
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    recorded = datetime.fromisoformat(
+        admitted["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00")
+    )
+    ack_at = (recorded + timedelta(seconds=30)).isoformat()
+    upgrade_at = (
+        (recorded + timedelta(hours=1))
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    assert datetime.fromisoformat(upgrade_at.replace("Z", "+00:00")) > datetime.fromisoformat(ack_at)
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "turn_instance_id": "later-accepted-upgrade",
+        "generated_at": ack_at,
+        "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "source": "refresh_state",
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0",
+                "accepted": True, "obligation_id": obligation,
+                "outcomes": ["fresh_vision_path_outcome"],
+                "satisfying_outcomes": ["fresh_vision_path_outcome"],
+            },
+        },
+    }
+    source = runs_dir / "later-accepted-upgrade.json"
+    source.write_text(json.dumps(run))
+    markdown = source.with_suffix(".md")
+    markdown.write_text("# Accepted independent historical review\n")
+    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            **run, "json_path": str(source), "markdown_path": str(markdown),
+        }) + "\n")
+    receipts = _heartbeat_receipt_events(runtime, original_turn)
+    assert len(receipts) == 1
+    original_event = receipts[0]
+    upgrade = json.loads(json.dumps(original_event))
+    upgrade["event_id"] = f"upgrade-{original_event['event_id']}"
+    upgrade["recorded_at"] = upgrade_at
+    upgrade["summary"] = "same-Turn review guard upgraded without rebinding"
+    upgrade["causality"] = {
+        "source_event_id": original_event["event_id"],
+        "caused_by": original_event["event_id"],
+    }
+    upgrade["details"] = {
+        **upgrade["details"],
+        "settlement_receipt_revision": "review_guard_upgrade",
+    }
+    append_rollout_event(rollout_event_log_path(runtime, GOAL_ID), upgrade)
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID,
+    )
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    decision = (recovery.get("replan_action_packet") or {}).get("decision")
+    assert rc == 0, {
+        "reason": recovery.get("reason"),
+        "error_code": recovery.get("error_code"),
+        "decision": decision,
+        "effective_action": recovery.get("effective_action"),
+    }
+    assert recovery["heartbeat_receipt"]["settlement_identity"] == original_identity
+    assert recovery["heartbeat_receipt"]["event_id"] == upgrade["event_id"]
+    assert recovery["heartbeat_receipt"]["recorded_at"] == upgrade_at
+    assert decision == "historical_ack_recorded", {
+        "decision": decision,
+        "error": recovery.get("error"),
+        "error_code": recovery.get("error_code"),
+        "effective_action": recovery.get("effective_action"),
+    }
+    actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    writeback = next(command for command in actions if "refresh-state" in command)
+    spend = next(command for command in actions if "spend-slot" in command)
+    before = _spend_run_count(runtime)
+    rc, written = _run_generated_cli(writeback, registry_path=registry)
+    assert rc == 0 and written["ok"] is True and written["appended"] is True, written
+    assert written["settlement_identity"] == original_identity
     assert _spend_run_count(runtime) == before
     rc, spent = _run_generated_cli(spend, registry_path=registry)
     assert rc == 0 and spent["ok"] is True, spent

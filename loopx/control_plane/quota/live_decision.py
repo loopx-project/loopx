@@ -67,12 +67,16 @@ def _receipt_bound_guard_fields(
         obligation_id and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
         and guard.get("selected_obligation_id") == obligation_id
     )
+    # The effective receipt stays the latest content. The admission clock is the
+    # first bound receipt already selected by the GoalRef-filtered readback.
+    admission_recorded_at = getattr(readback, "admission_recorded_at", None)
     return {
         "receipt_bound_replan_guard_scoped": guard_scoped,
         "receipt_bound_replan_execution_pending": bool(
             guard_scoped and readback and readback.replan_execution_pending
         ),
-        "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
+        "receipt_bound_guard_recorded_at": admission_recorded_at or receipt.get("recorded_at"),
+        "receipt_bound_admission_event_id": getattr(readback, "admission_event_id", None),
         "receipt_bound_guard_turn_instance_id": identity.turn_instance_id if identity is not None else None,
         "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
         "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
@@ -788,6 +792,7 @@ def build_live_quota_should_run_decision(
     receipt_bound_guard_fields = _receipt_bound_guard_fields(
         settlement_readback, receipt_bound_replan_obligation_id,
     )
+    admission_event_id = receipt_bound_guard_fields.pop("receipt_bound_admission_event_id")
     if (
         receipt_bound_guard_fields["receipt_bound_replan_guard_scoped"]
         and receipt_bound_replay_phase is ReceiptBoundReplayPhase.OPEN
@@ -799,7 +804,8 @@ def build_live_quota_should_run_decision(
             runtime_root, goal_id=goal_id, agent_id=agent_id,
             obligation_id=receipt_bound_replan_obligation_id,
             guard_recorded_at=receipt_bound_guard_fields["receipt_bound_guard_recorded_at"],
-            guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"])
+            guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"],
+            admission_event_id=admission_event_id)
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )

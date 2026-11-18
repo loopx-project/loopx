@@ -281,6 +281,29 @@ main 运行时发布器在任何远端写入前，将下载的安装资格与源
 证据缺失、失败或不匹配时，保留已有发布及渠道。此工程资格不证明模型结果、完整成本收益
 或 C1 默认采用资格。
 
+New runtime descriptors carry the supported `default_contract`. Qualification
+observes the installed candidate's ordinary quota writer in an isolated original
+Goal with context delivery off; the publisher requires that observation to match
+the immutable descriptor. Desktop packaging observes its actual archived source
+through the same probe and support validator. Runtime updates reject an unsupported
+declared contract before downloading or activating it, and bind the archive's
+contract identity to its metadata. Historical v1 descriptors remain readable.
+The current supported distribution scope is the existing `quota_packet` writer;
+the complete-contract default cutover stays unqualified until the original RFC §9
+matched single-session outcome/full-cost and supported-profile adoption gate is
+met. Installation checks or a new boolean cannot extend that scope. Explicit
+complete-contract opt-in, context-delivery configuration and historical recovery
+retain their existing owners; this boundary does not switch an installed writer.
+
+新 runtime 描述符携带支持的 `default_contract`。资格检查在隔离的原始 Goal 中，关闭
+上下文传输后观察安装候选的普通 quota writer；发布器要求该观察与不可变描述符一致。
+桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
+未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
+当前分发范围是已有 `quota_packet` writer；完整契约默认切换在满足原 RFC §9 同单会话
+匹配成果、完整成本及支持 profile 的采用门之前保持未资格化。安装检查或新增布尔值不能
+扩大该范围。显式完整契约 opt-in、上下文传输配置及历史恢复继续由原 owner 处理，此边界
+不切换已安装 writer。
+
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,

@@ -133,7 +133,7 @@ function singleCodePoint(value: string): string | null {
 
 type GlobToken =
   | {kind: "literal"; folded: string}
-  | {kind: "star"}
+  | {kind: "star"; directories?: true}
   | {kind: "question"}
   | {kind: "class"; body: string; negated: boolean; members?: CharacterClass};
 
@@ -149,6 +149,14 @@ function globTokens(pattern: string, fold = true): GlobToken[] {
     const character = pattern[index];
     if (character === "*") {
       flushLiteral();
+      // Lease overlap reads a whole-segment `**/` as zero or more directories,
+      // so `src/**/*.py` also reaches `src/a.py`. The case-sensitive coverage
+      // view (fold === false) keeps plain fnmatch stars.
+      if (fold && pattern.startsWith("**/", index) && (index === 0 || pattern[index - 1] === "/")) {
+        tokens.push({kind: "star", directories: true});
+        index += 2;
+        continue;
+      }
       tokens.push({kind: "star"});
       continue;
     }
@@ -390,7 +398,12 @@ function fnmatchcase(value: string, pattern: string, descendants = false, fold =
       result = valueIndex === symbols.length;
     } else {
       const token = tokens[tokenIndex];
-      if (token.kind === "star") {
+      if (token.kind === "star" && token.directories) {
+        result = match(valueIndex, tokenIndex + 1);
+        for (let end = valueIndex + 1; !result && end <= symbols.length; end += 1) {
+          result = symbols[end - 1] === "/" && match(end, tokenIndex + 1);
+        }
+      } else if (token.kind === "star") {
         result = match(valueIndex, tokenIndex + 1) ||
           (valueIndex < symbols.length && match(valueIndex + 1, tokenIndex));
       } else if (valueIndex === symbols.length) {

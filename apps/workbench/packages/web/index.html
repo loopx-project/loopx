@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- No interactive-widget=resizes-content: on iOS 26 Safari the layout viewport then resizes
+         for the keyboard while visualViewport.height subtracts the keyboard again, so the app sized
+         to --vvh shrinks twice and the page background shows below the composer. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>LoopX</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="application-name" content="LoopX" />
+    <meta name="apple-mobile-web-app-title" content="LoopX" />
+    <link rel="icon" href="/favicon-32.png?v=loo-1" type="image/png" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg?v=loo-1" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=loo-1" />
+    <!-- The look chosen on this device, put on the page before the first paint so it never opens
+         in the wrong colours. src/hooks.ts (useAppearance) takes over from here and checks the values. -->
+    <script>
+      try {
+        var saved = JSON.parse(localStorage.getItem('calli.appearance') || '{}');
+        var dark = saved.mode === 'dark' || (saved.mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        // A saved palette is honoured as-is; nothing saved opens on the default, which is spelled
+        // here because this runs before the bundle (it must match DEFAULT_APPEARANCE.palette).
+        if (typeof saved.palette === 'string') document.documentElement.setAttribute('data-palette', saved.palette);
+        else document.documentElement.setAttribute('data-palette', 'codex');
+      } catch (e) {}
+      // A login link carries its token in the query, in the fragment's own query (this app routes
+      // by hash), or bare in the fragment (which never reaches a server). Keep it where the app
+      // keeps its credential and scrub the address bar before anything renders, so the token stays
+      // out of history, bookmarks and copied links. An empty token changes nothing.
+      try {
+        (function () {
+          var u = new URL(location.href);
+          var token = u.searchParams.get('token') || '';
+          u.searchParams.delete('token');
+          var rawHash = u.hash.charAt(0) === '#' ? u.hash.slice(1) : u.hash;
+          var at = rawHash.indexOf('?');
+          var route = at === -1 ? rawHash : rawHash.slice(0, at);
+          var bare = at === -1 && route.indexOf('token=') === 0;
+          var params = new URLSearchParams(bare ? rawHash : at === -1 ? '' : rawHash.slice(at + 1));
+          if (params.has('token')) { token = token || params.get('token') || ''; params.delete('token'); }
+          var kept = bare ? params.toString() : route + (params.toString() ? '?' + params.toString() : '');
+          if (!token) return;
+          localStorage.setItem('calli.token', token);
+          var rest = u.pathname + u.search + (kept ? '#' + kept : '');
+          history.replaceState(null, '', rest || location.pathname);
+        })();
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

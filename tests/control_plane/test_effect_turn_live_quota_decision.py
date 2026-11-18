@@ -55,6 +55,18 @@ def test_receipt_guard_fields_use_the_typed_identity_and_guard(
     assert fields["receipt_bound_replan_execution_pending"] is expected_pending
     assert fields["receipt_bound_guard_turn_instance_id"] == "original-turn"
     assert fields["receipt_bound_guard_recorded_at"] == "2026-08-01T00:00:00Z"
+    assert fields["receipt_bound_admission_event_id"] is None
+    upgraded = _receipt_bound_guard_fields(SimpleNamespace(
+        semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": selected},
+        identity=SimpleNamespace(value=SimpleNamespace(turn_instance_id="original-turn")),
+        heartbeat_receipt={"recorded_at": "2026-08-01T02:00:00Z"},
+        admission_recorded_at="2026-08-01T00:00:00Z",
+        admission_event_id="evt-admission",
+        successor_replan_pending=False,
+        replan_execution_pending=execution_pending,
+    ), obligation)
+    assert upgraded["receipt_bound_guard_recorded_at"] == "2026-08-01T00:00:00Z"
+    assert upgraded["receipt_bound_admission_event_id"] == "evt-admission"
 
 
 @pytest.mark.parametrize("binding", ["todo", "autonomous_replan", "unbound"])

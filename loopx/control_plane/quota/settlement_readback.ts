@@ -61,6 +61,7 @@ import {
   normalizeHeartbeatReplanObligationId as normalizeReplanObligationId,
   normalizeHeartbeatTodoId as normalizeTodoId,
   optionalHeartbeatString as optionalString,
+  selectAdmissionHeartbeatReceipt,
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
   type HeartbeatReceiptFact,
@@ -763,6 +764,24 @@ function effectiveHeartbeatReceipt(
     : selectEffectiveHeartbeatReceipt(identity.goal_id, identity.agent_id, entries);
 }
 
+/** First bound receipt in the same already filtered Turn list. */
+function admissionHeartbeatReceipt(
+  events: readonly JsonObject[],
+  identity: Pick<SettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id">,
+): JsonObject | null {
+  const entries: { fact: HeartbeatReceiptFact; value: JsonObject }[] = [];
+  for (const event of events) {
+    if (event.event_kind !== "quota_should_run") continue;
+    if (optionalString(event.goal_id) !== identity.goal_id) continue;
+    if (optionalString(event.agent_id) !== identity.agent_id) continue;
+    if (optionalString(event.run_id) !== identity.turn_instance_id) continue;
+    entries.push({ fact: heartbeatReceiptFactFromEvent(event), value: event });
+  }
+  return entries.length === 0
+    ? null
+    : selectAdmissionHeartbeatReceipt(identity.goal_id, identity.agent_id, entries);
+}
+
 function writebackResult(
   identity: SettlementIdentity,
   run: JsonObject | null,
@@ -1395,6 +1414,7 @@ function readQuotaSettlementFromRequest(
     quotaOwnerOwnsProjection(request.owner, run.goal_ref)
   );
   const heartbeatReceipt = effectiveHeartbeatReceipt(events, identity);
+  const admissionReceipt = admissionHeartbeatReceipt(events, identity);
   if (heartbeatReceipt === null) {
     return failedReadback(
       failedIdentity(
@@ -1552,6 +1572,10 @@ function readQuotaSettlementFromRequest(
     ),
     spend_run: includeRecords ? spendRun : null,
     heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    admission_recorded_at: typeof admissionReceipt?.recorded_at === "string"
+      && admissionReceipt.recorded_at.trim() ? admissionReceipt.recorded_at : null,
+    admission_event_id: typeof admissionReceipt?.event_id === "string"
+      && admissionReceipt.event_id.trim() ? admissionReceipt.event_id : null,
     writeback_event: includeRecords ? writebackEvent : null,
     spend_event: includeRecords ? spendEvent : null,
     completion_event: includeRecords ? completionEvent : null,

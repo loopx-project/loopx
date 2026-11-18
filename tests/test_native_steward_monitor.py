@@ -505,11 +505,15 @@ def stopped_watch(steward, tmp_path, monkeypatch, provider, audience):
     with monkeypatch.context() as stopped_worker:
         stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
         original_turn = pump_steward_monitors(runtime)[0]
-    store.update_turn(sid, original_turn["turn_id"], status="failed", error_code="server_restarted",
-        error="The original host stopped before observation.", response=None, upstream_turn_id=None)
-    store.append_event(sid, original_turn["turn_id"], kind="turn.failed", payload={"error_code": "server_restarted"})
-    store.update_session(sid, active_turn_id=None, status="ready")
+    interrupt_unstarted_watch(store, sid, original_turn)
     return sid, actor, todo_id, original_turn
+
+
+def interrupt_unstarted_watch(store, sid, turn):
+    store.update_turn(sid, turn["turn_id"], status="failed", error_code="server_restarted",
+        error="The original host stopped before observation.", response=None, upstream_turn_id=None)
+    store.append_event(sid, turn["turn_id"], kind="turn.failed", payload={"error_code": "server_restarted"})
+    store.update_session(sid, active_turn_id=None, status="ready")
 
 
 def scope_refused_watch(steward, tmp_path, monkeypatch, provider):
@@ -719,7 +723,10 @@ def test_scope_refusal_retains_unknown_effects_and_current_authority(steward, tm
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("audience", ["steward", "managed"])
 @pytest.mark.parametrize("released_original_lease", [False, True])
-def test_restart_before_observation_recovers_the_original_due_watch_once(steward, tmp_path, monkeypatch, provider, audience, released_original_lease):
+@pytest.mark.parametrize("stop_recovery", [False, True], ids=["single-restart", "repeated-restart"])
+def test_restart_before_observation_recovers_the_original_due_watch_once(
+    steward, tmp_path, monkeypatch, provider, audience, released_original_lease, stop_recovery,
+):
     import json
     store, runtime, _, transport, _, capture, _ = steward
     sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
@@ -732,10 +739,21 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(steward
         monitor._release(actor, watch, old_lease)
     retained = store.load_turn(sid, original_turn["turn_id"])
     watch = local_watch_row(runtime, actor, todo_id)
+    stopped_recovery = None
+    if stop_recovery:
+        runtime._steward_monitor_next_check.clear()
+        with monkeypatch.context() as stopped_worker:
+            stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
+            first_recovery, = pump_steward_monitors(runtime)
+        interrupt_unstarted_watch(store, sid, first_recovery)
+        stopped_recovery = store.load_turn(sid, first_recovery["turn_id"])
+        assert local_watch_row(runtime, actor, todo_id) == watch
     runtime._steward_monitor_next_check.clear()
     recovered = pump_steward_monitors(runtime)
     assert len(recovered) == 1, "a proven pre-observation restart must not strand a due watch"
     assert recovered[0]["turn_id"] != retained["turn_id"]
+    if stopped_recovery is not None:
+        assert recovered[0]["turn_id"] != stopped_recovery["turn_id"]
     assert recovered[0]["loopx_request"]["turn_instance_id"] == retained["loopx_request"]["turn_instance_id"]
     completed = finish(runtime, recovered[0])
     assert completed["status"] == "completed", completed
@@ -743,6 +761,8 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(steward
     after = local_watch_row(runtime, actor, todo_id)
     assert after["next_due_at"] != watch["next_due_at"] and after.get("result_hash")
     assert store.load_turn(sid, retained["turn_id"]) == retained
+    if stopped_recovery is not None:
+        assert store.load_turn(sid, stopped_recovery["turn_id"]) == stopped_recovery
     runtime._steward_monitor_next_check.clear()
     assert not pump_steward_monitors(runtime)
     transport.reconcile()
@@ -766,7 +786,7 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(steward
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("audience", ["steward", "managed"])
 @pytest.mark.parametrize("fault", ["unknown_error", "native_started", "delta", "unknown_event", "broken_history",
-    "pending_poll", "legacy_poll", "queued", "worker_busy", "active_lease", "retry_fails"])
+    "pending_poll", "legacy_poll", "queued", "worker_busy", "active_lease", "retry_fails", "recovery_native_started"])
 def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_attempt(steward, tmp_path, monkeypatch, provider, audience, fault):
     from contextlib import nullcontext
     from loopx.control_plane.quota.monitor_poll import _monitor_poll_effect_id, _monitor_poll_receipt_path
@@ -775,6 +795,14 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
     sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
     request = original_turn["loopx_request"]
     root = runtime.coordination_runtime_root
+    stopped_recovery = None
+    if fault == "recovery_native_started":
+        runtime._steward_monitor_next_check.clear()
+        with monkeypatch.context() as stopped_worker:
+            stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
+            first_recovery, = pump_steward_monitors(runtime)
+        interrupt_unstarted_watch(store, sid, first_recovery)
+        stopped_recovery = store.update_turn(sid, first_recovery["turn_id"], upstream_turn_id="unknown-native-turn")
     if fault in {"unknown_error", "native_started", "delta"}:
         changes = {"unknown_error": {"error_code": "runtime_error"},
             "native_started": {"upstream_turn_id": "unknown-native-turn"}, "delta": {"delta_count": 1}}[fault]
@@ -817,6 +845,8 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
         assert recovered == []
     assert store.load_turn(sid, original_turn["turn_id"]) == original
     assert local_watch_row(runtime, actor, todo_id) == watch
+    if stopped_recovery is not None:
+        assert store.load_turn(sid, stopped_recovery["turn_id"]) == stopped_recovery
     transport.reconcile()
     assert capture.read_bytes() == calls and steward[2].writes == writes
 

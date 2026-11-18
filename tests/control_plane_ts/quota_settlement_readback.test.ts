@@ -626,6 +626,55 @@ test("pending closeout recovers positively admitted replan work without creating
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test("receipt upgrade admission stays on the admitted Goal instance", async () => {
+  const currentRef = {goal_id: goalId, goal_instance_id: instanceA};
+  const root = await fixture({goalRef: currentRef});
+  try {
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const current = JSON.parse((await readFile(log, "utf8")).trim()) as Record<string, unknown>;
+    const details = current.details as Record<string, unknown>;
+    const retiredTodo = "todo_retired_instance";
+    const retiredIdentity = settlementIdentity({
+      goal_id: goalId, agent_id: agentId, todo_id: retiredTodo, turn_instance_id: turnId,
+    });
+    const retired = {
+      ...current, event_id: "event-retired", recorded_at: "2026-01-01T00:00:00Z",
+      goal_ref: {goal_id: goalId, goal_instance_id: instanceB},
+      details: {todo_id: retiredTodo, settlement_effect_id: retiredIdentity.effect_id},
+    };
+    const admitted = {
+      ...current, event_id: "event-admitted", recorded_at: "2026-02-01T00:00:00Z",
+    };
+    const upgraded = {
+      ...current, event_id: "event-upgraded", recorded_at: "2026-02-01T02:00:00Z",
+      causality: {source_event_id: "event-admitted", caused_by: "event-admitted"},
+      details: {...details, settlement_receipt_revision: "review_guard_upgrade"},
+    };
+    await writeFile(log, [retired, admitted, upgraded].map(event => JSON.stringify(event)).join("\n") + "\n");
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      const result = await readQuotaSettlement(request(root, binding));
+      assert.equal(result.found, true);
+      assert.equal(result.admission_recorded_at, "2026-02-01T00:00:00Z");
+      assert.equal(result.admission_event_id, "event-admitted");
+      const receipt = result.heartbeat_receipt as {event_id: string, recorded_at: string};
+      assert.equal(receipt.event_id, "event-upgraded");
+      assert.equal(receipt.recorded_at, "2026-02-01T02:00:00Z");
+    });
+    const sameBinding = {
+      ...retired,
+      details: {todo_id: todoId, settlement_effect_id: identity.effect_id},
+    };
+    await writeFile(log, [sameBinding, admitted, upgraded].map(event => JSON.stringify(event)).join("\n") + "\n");
+    await withSourceAdmission(root, instanceA, instanceA, async binding => {
+      const result = await readQuotaSettlement(request(root, binding));
+      assert.equal(result.admission_recorded_at, admitted.recorded_at);
+      assert.equal(result.admission_event_id, "event-admitted");
+    });
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("pending closeout cannot adopt another Goal instance's receipts", async () => {
   const root = await fixture({goalRef: {goal_id: goalId, goal_instance_id: instanceA}});
   try {

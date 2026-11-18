@@ -1,0 +1,43 @@
+{
+  "ok": true,
+  "goal_filter": "plugin-probe",
+  "attention_queue": {
+    "items": [
+      {
+        "goal_id": "plugin-probe",
+        "status": "connected_without_run",
+        "recommended_action": "[P1] Check the shared projection",
+        "goal_channel_projection": {
+          "display_name": "plugin-probe"
+        },
+        "agent_todos": {
+          "total_count": 1,
+          "items": [
+            {
+              "archive_state": "active",
+              "created_by": null,
+              "done": false,
+              "last_actor_agent_id": null,
+              "priority": "P1",
+              "role": "agent",
+              "schema_version": "todo_item_v0",
+              "status": "open",
+              "task_class": "advancement_task",
+              "text": "[P1] Check the shared projection",
+              "title": "Check the shared projection",
+              "todo_id": "todo_4ee3b35b7eccc7697078edb6",
+              "updated_at": "2026-10-18T04:26:34Z",
+              "source_section": "Agent Todo",
+              "index": 1,
+              "content_revision": "sha256:test-revision-hash"
+            }
+          ]
+        },
+        "user_todos": {
+          "total_count": 0,
+          "items": []
+        }
+      }
+    ]
+  }
+}

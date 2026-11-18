@@ -38,6 +38,15 @@ diagnostics stay intact. The crowded regression's pretty JSON changes from
 the new full carrier. Wire/page limits and the terminal actor's ten-call budget
 do not change. Frozen raw/v0 model comparison controls remain separate.
 
+The benchmark worker checks an explicit historical Short request before
+starting a planning or execution model. It previews the pinned CLI's quota
+response without admission and records the expected and observed source versions
+and eligibility in the wake receipt. A v1 or unavailable response refuses the
+Short treatment. A fresh-replan checkpoint preloads a different input and cannot
+qualify as direct Short. Current ordinary and Complete requests continue through
+the shared C1 producer. Historical experiments retain their recorded sources
+and receipts.
+
 Todo completion, replan-successor return and blocked-completion recovery use the
 existing TypeScript settlement composer for their current continuation plans.
 They retain the original identity, route and supplied lease proof. JSON and

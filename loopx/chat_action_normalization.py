@@ -547,6 +547,7 @@ class ChatActionNormalizationMixin:
                     "initial_todos",
                     "native_token_budget",
                     "start_execution",
+                    "open_session",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -559,6 +560,13 @@ class ChatActionNormalizationMixin:
                 "goal_id": goal_id,
                 "title": _text(values.get("title"), field="title", limit=200),
             }
+            if "open_session" in values:
+                # Only the explicit opt-out is retained: a caller that owns its own
+                # conversation layer opens the first Session itself.
+                if type(values["open_session"]) is not bool:
+                    raise ValueError("open_session must be true or false")
+                if values["open_session"] is False:
+                    result["open_session"] = False
             if values.get("native_token_budget") is not None:
                 budget = values["native_token_budget"]
                 if type(budget) is not int or not 1 <= budget <= 999_999_999:
@@ -577,6 +585,10 @@ class ChatActionNormalizationMixin:
             if "permission" in values or "start_execution" in values:
                 from .control_plane.effect_runtime import effect_runtime_result
                 result.update(effect_runtime_result("goal.creation.execution.normalize", values))
+            if result.get("open_session") is False and result.get("start_execution"):
+                # start_execution queues the original task as the first Turn of the Session the
+                # core opens; with open_session=false there is no such Session to carry it.
+                raise ValueError("start_execution cannot be combined with open_session=false")
             for field in ("agent_id", "workspace_ref"):
                 if values.get(field):
                     result[field] = _opaque(values[field], field=field)
