@@ -252,6 +252,73 @@ def test_exact_task_cli_http_preserve_full_current_and_retained_request(tmp_path
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_task_read_with_conflicting_defaults(tmp_path, monkeypatch, capsys, provider):
+    from loopx import paths
+    from loopx.cli import main
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime,
+        promoted_create_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    defaults = (tmp_path / "current", tmp_path / "legacy")
+    for root in defaults:
+        root.mkdir()
+        (root / "machine.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", defaults[0])
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", defaults[1])
+
+    registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
+    registration = json.loads(registry.read_text(encoding="utf-8"))
+    del registration["common_runtime_root"]
+    registry.write_text(json.dumps(registration), encoding="utf-8")
+    initial_state = state.read_bytes()
+
+    def cli(*args, explicit=True):
+        override = ["--runtime-root", str(runtime)] if explicit else []
+        code = main(["--registry", str(registry), *override, "--format", "json",
+                     "todo", *args, "--goal-id", "goal-a"])
+        return code, json.loads(capsys.readouterr().out)
+
+    body = "[P1] Read the committed task when both machine roots contain state."
+    code, created = cli("add", "--role", "agent", "--text", body)
+    assert code == 0 and created["ok"], created
+    todo_id = created["todo_id"]
+    assert created["projection_delivery"] == "pending"
+    assert created["projection_outbox"]["retry_business_mutation"] is False
+    canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+
+    code, refused = cli("list", "--todo-id", todo_id, explicit=False)
+    assert code == 1 and not refused["ok"]
+    assert "Both default LoopX runtime roots contain state" in refused["error"]
+
+    code, listed = cli("list", "--todo-id", todo_id)
+    assert code == 0 and listed["todo"]["text"] == body, listed
+    assert listed["authority_read"]["provider_revision"] == canonical["provider_revision"]
+
+    with ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler) as server:
+        server.registry_path, server.runtime_root_override, server.verbose = registry, str(runtime), False
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        url = (f"http://127.0.0.1:{server.server_port}/api/chat/todo/detail"
+               f"?goal_id=goal-a&todo_id={todo_id}")
+        try:
+            with urlopen(url, timeout=30) as response:
+                detail = json.load(response)
+            assert detail["todo_id"] == todo_id and detail["text"] == body
+            assert detail["review_basis"]["provider_revision"] == canonical["provider_revision"]
+        finally:
+            server.shutdown()
+            worker.join()
+
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == canonical
+    assert state.read_bytes() == initial_state
+    for root in defaults:
+        assert list(root.iterdir()) == [root / "machine.json"]
+        assert (root / "machine.json").read_text(encoding="utf-8") == "{}"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_source_bound_requirements_use_real_canonical_writer(tmp_path, monkeypatch, provider):
     monkeypatch.syspath_prepend(str(Path(__file__).parent / "control_plane"))
     from canonical_authority_fixture import promoted_create_fixture, isolate_sqlite_runtime

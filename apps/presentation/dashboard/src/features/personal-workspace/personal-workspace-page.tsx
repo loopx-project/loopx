@@ -688,6 +688,9 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
     : "";
   const operationFrame = reviewPlan.operationFrame;
   const decision = reviewPlan.decisionFrame?.decision;
+  const retryGate = reviewPlan.retryOriginal && proposal.gate?.kind === "canonical_authority_required"
+    ? [proposal.gate.summary, proposal.gate.next_action].filter(value => typeof value === "string").join(" ")
+    : "";
   const operationTitle = operationFrame?.content.title ?? proposal.summary;
   const localizedSummary = proposal.action_kind === "operation.execute"
     ? operationTitle
@@ -729,7 +732,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         || proposal.status === "applied"
         || ["objective", "completion_criteria", "execution_boundary", "permission", "workspace_ref"].includes(field.key)),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
-    impact: reviewPlan.retryOriginal ? t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
+    impact: reviewPlan.retryOriginal ? retryGate || t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
       ? operationFrame?.kind === "inactive" ? t(`actionReview.${operationFrame.reason}`)
         : operationFrame?.kind === "pending" && operationFrame.executionState
         ? t(operationFrame.executionState === "consumed_outcome_pending"
@@ -2122,6 +2125,7 @@ export function PersonalWorkspacePage({
     if (proposal.reviewPlan && !proposal.reviewPlan.canApply) return proposal;
     if (proposal.actionKind === "team.plan" && proposal.status === "error"
       && !proposal.reviewPlan?.retryOriginal) return proposal;
+    const isTodoCreation = proposal.actionKind === "todo.create" || proposal.actionKind === "monitor.create";
     const matchesTodoTarget = (observed: TypedActionProposal) => proposal.actionKind !== "todo.update" || (
       observed.normalized_parameters.goal_id === proposal.goalId
       && (!proposal.sourceRequest || observed.normalized_parameters.todo_id === proposal.sourceRequest.normalizedParameters.todo_id)
@@ -2179,6 +2183,7 @@ export function PersonalWorkspacePage({
       if (result.proposal.proposal_id !== proposal.previewId
         || result.proposal.action_kind !== proposal.actionKind
         || !matchesTodoTarget(result.proposal)
+        || (isTodoCreation && result.proposal.normalized_parameters.goal_id !== proposal.goalId)
         || (proposal.actionKind === "goal.lifecycle" && (
           result.proposal.normalized_parameters.goal_id !== proposal.goalId
           || lifecycleOperationFor(result.proposal) !== proposal.lifecycleOperation
@@ -2206,7 +2211,7 @@ export function PersonalWorkspacePage({
       setActionFeedback(completedActionFeedback(applied, t));
       // Keep the success receipt visible for reviewed actions. Direct actions
       // surface the same result through the persistent feedback receipt.
-      if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create") {
+      if (isTodoCreation || applied.actionKind === "goal.create") {
         await callbacks.onRefresh?.();
       }
       if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {
@@ -2230,17 +2235,23 @@ export function PersonalWorkspacePage({
         const observed = returned.success && returned.data.proposal_id === proposal.previewId
           && returned.data.action_kind === proposal.actionKind && returned.data.normalized_parameters.goal_id === proposal.goalId
           ? workspaceProposal(returned.data, t) : proposal;
+        const retryOriginal = returned.success && returned.data.status === "gated"
+          && observed !== proposal && observed.reviewPlan?.retryOriginal === true
+          && observed.reviewPlan.sourceFingerprint === proposal.reviewPlan?.sourceFingerprint;
+        if (retryOriginal) await actionReadback.acceptProposal(returned.data);
         const gated = {
           ...observed,
-          reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: "gated" as const, reason: "authority_gate" as const, canApply: false as const } : undefined,
-          impact: proposal.reviewPlan?.retryOriginal ? "" : proposal.impact,
-          primaryLabel: proposal.reviewPlan?.retryOriginal ? undefined : proposal.primaryLabel,
+          ...(retryOriginal ? {} : {
+            reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: "gated" as const, reason: "authority_gate" as const, canApply: false as const } : undefined,
+            impact: proposal.reviewPlan?.retryOriginal ? "" : proposal.impact,
+            primaryLabel: proposal.reviewPlan?.retryOriginal ? undefined : proposal.primaryLabel,
+            status: "gated" as const,
+          }),
           gate: {
             kind: String(gate.kind ?? "protected_action"),
             nextAction: typeof gate.next_action === "string" ? gate.next_action : undefined,
             summary: String(gate.summary ?? error.message),
           },
-          status: "gated" as const,
         };
         setProposals((current) => ({ ...current, [proposal.previewId]: gated }));
         // A newly discovered authority gate always deserves review. Preserve
@@ -2260,7 +2271,7 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      const scopedReadback = ["team.plan", "goal.create", "todo.update", "todo.create"].includes(proposal.actionKind);
+      const scopedReadback = isTodoCreation || ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind);
       if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
@@ -2278,12 +2289,14 @@ export function PersonalWorkspacePage({
         if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
           : observed.reviewPlan?.interaction === "completed" ? completedActionFeedback(observed, t)
+          : observed.reviewPlan?.retryOriginal ? t(`actionReview.${observed.reviewPlan.reason}`)
+          : isTodoCreation ? t("actionReview.readback_unverified")
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
         return reconciled;
       }
       const failed = {
         ...proposal,
-        reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: stale ? "refresh" as const : "repair" as const, reason: readbackMismatch ? "readback_unverified" as const : stale ? "stale_proposal" as const : "apply_failed" as const, canApply: false as const } : undefined,
+        reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: stale ? "refresh" as const : "repair" as const, reason: readbackMismatch || (isTodoCreation && !stale) ? "readback_unverified" as const : stale ? "stale_proposal" as const : "apply_failed" as const, canApply: false as const } : undefined,
         impact: proposal.reviewPlan?.retryOriginal ? "" : proposal.impact,
         primaryLabel: proposal.reviewPlan?.retryOriginal ? undefined : proposal.primaryLabel,
         errorMessage: error instanceof Error ? error.message : String(error),
@@ -2291,7 +2304,7 @@ export function PersonalWorkspacePage({
       };
       setProposals((current) => ({ ...current, [proposal.previewId]: failed }));
       if (options.presentation !== "inline") selectReceipt(failed);
-      setActionFeedback(t("feedback.executionFailed", { error: failed.errorMessage }));
+      setActionFeedback(isTodoCreation && !stale ? t("actionReview.readback_unverified") : t("feedback.executionFailed", { error: failed.errorMessage }));
       return failed;
     }
   }
