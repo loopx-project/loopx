@@ -976,6 +976,83 @@ def test_uncommitted_original_row_is_not_a_receipt_before_or_after_repair(
 @pytest.mark.parametrize(
     "command", ["scheduler-ack-current", "scheduler-fail-current"],
 )
+def test_real_unterminated_should_run_never_becomes_a_settlement_receipt(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-real-unterminated-original",
+        scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    code, guard = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--app-automation-current-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--turn-instance-id",
+        "turn-1",
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert code == 0, guard
+
+    # Start from the receipt the normal admission path just wrote.  Keep its
+    # complete JSON bytes but remove only the writer's committing newline.
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    committed = log_path.read_bytes()
+    assert committed.endswith(b"\n")
+    log_path.write_bytes(committed[:-1])
+    torn = log_path.read_bytes()
+    assert torn == committed[:-1]
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+
+    def run() -> tuple[int, dict[str, object]]:
+        return run_json_cli_result(
+            "quota",
+            command,
+            "--goal-id",
+            goal_id,
+            "--agent-id",
+            SCOPED_AGENT_ID,
+            "--trae_app",
+            "--turn-instance-id",
+            "turn-1",
+            "--execute",
+            *operation_args,
+            registry_path=registry,
+            runtime_root=runtime_root,
+            cwd=project,
+        )
+
+    code, result = run()
+    assert code == 1, result
+    assert result["status"] == "heartbeat_receipt_missing"
+    assert result["scheduler_state_mutated"] is False
+    assert log_path.read_bytes() == torn
+
+    # The ordinary append drops the unfinished tail.  The same admission
+    # receipt has not become a settlement fact merely because it vanished.
+    append_rollout_event(
+        log_path,
+        build_rollout_event(goal_id=goal_id, event_kind="todo_complete"),
+    )
+    code, result = run()
+    assert code == 1, result
+    assert result["status"] == "heartbeat_receipt_missing"
+    assert result["scheduler_state_mutated"] is False
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
 def test_foreign_audit_row_with_damaged_event_kind_is_tolerated(
     tmp_path: Path, provider: str, command: str
 ) -> None:

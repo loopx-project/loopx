@@ -814,6 +814,32 @@ test("only the tolerant readback route survives a damaged audit row", async () =
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
+test("tolerant settlement readback ignores an unterminated receipt", async () => {
+  const root = await fixture();
+  try {
+    const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const committed = await readQuotaSettlement(request(root));
+    assert.equal(committed.found, true);
+    const committedBytes = await readFile(path);
+    assert.ok(committedBytes.at(-1) === 0x0a);
+    await writeFile(path, committedBytes.subarray(0, -1));
+    const strictUncommitted = await readQuotaSettlement(request(root));
+    const tolerantUncommitted = await readQuotaSettlement(request(root, {
+      tolerate_malformed_history: true,
+    }));
+    assert.deepEqual(tolerantUncommitted, strictUncommitted,
+      "both reads ignore a receipt whose writer did not reach the newline");
+    await appendFile(path, "\n");
+    const strictCommitted = await readQuotaSettlement(request(root));
+    const tolerantCommitted = await readQuotaSettlement(request(root, {
+      tolerate_malformed_history: true,
+    }));
+    assert.deepEqual(tolerantCommitted, strictCommitted);
+    assert.deepEqual(strictCommitted, committed,
+      "the ordinary append commit exposes the receipt again");
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
 test("settlement progress requires both effects and exact receipts", async t => {
   const cases = [
     { guard: false, state: "identity_required", next: "validation" },
@@ -2438,6 +2464,48 @@ test("agent cadence does not interpret another agent's malformed semantic receip
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test("tolerant replan history ignores an unterminated settlement receipt", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const root = await fixture({writeback: true, spend: true, completion: true});
+  const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+  const request = {
+    schema_version: "replan_history_request_v0", operation: "periodic",
+    agent_id: agentId, monitor_agent_id: agentId, neutral_classifications: [],
+    stall_threshold: 2, periodic_threshold: 1, monitor_threshold: 6,
+    streak_threshold: 5, monitor_schema: "dead_monitor_repeat_v0",
+    todos: {monitors: [], advancements: [], resume: null},
+    settlement_source: {runtime_root: root, goal_id: goalId,
+      tolerate_malformed_history: true},
+    runs: [{agent_id: agentId, public_agent_id: agentId,
+      monitor_agent_id: agentId, turn_id: turnId,
+      classification: "state_refreshed", generated_at: "2026-01-01T00:00:00Z",
+      observed_at: 1, accepted_ack: false, progress: null, monitor: {}}],
+  };
+  try {
+    const committed = await projectSettledReplanHistory(request);
+    assert.equal(requireJsonObject(committed.trigger, "trigger").run_count, 1);
+    const committedBytes = await readFile(path);
+    assert.ok(committedBytes.at(-1) === 0x0a);
+    await appendFile(path, Buffer.concat([
+      Buffer.from('{"schema_version":"loopx_rollout_event_v0","event_kind":"quota_should_run","goal_id":"'),
+      Buffer.from(goalId),
+      Buffer.from('","agent_id":"unrelated","run_id":"later-turn","summary":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}\n'),
+    ]));
+    assert.deepEqual(await projectSettledReplanHistory(request), committed,
+      "a damaged unrelated record stays outside the committed receipt view");
+    await writeFile(path, committedBytes.subarray(0, -1));
+    const uncommitted = await projectSettledReplanHistory(request);
+    assert.equal(uncommitted.trigger, null,
+      "an unterminated spend receipt cannot qualify settlement history");
+    await appendFile(path, "\n");
+    assert.deepEqual(await projectSettledReplanHistory(request), committed,
+      "the append commit restores the same settlement history");
+  } finally { await rm(root, {recursive: true, force: true}); }
 });
 
 test("effective cadence skips settlement read without a matching should-run receipt", async () => {

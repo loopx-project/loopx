@@ -7,7 +7,11 @@ import {
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   validateQuotaSettlementScope,
 } from "../quota/settlement_readback.ts";
-import { readGoalRolloutEventSnapshot, strictGoalRolloutEvents } from "../rollout_receipt_log.ts";
+import {
+  committedGoalRolloutEvents,
+  readGoalRolloutEventSnapshot,
+  strictGoalRolloutEvents,
+} from "../rollout_receipt_log.ts";
 import { parseQuotaAccountingOwner, withQuotaAccountingOwner,
   withBorrowedQuotaAccountingOwner, quotaOwnerOwnsProjection } from "../quota/source_admission.ts";
 import { projectReplanHistory } from "./replan_history.ts";
@@ -39,9 +43,9 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
     const rolloutSnapshot = await readGoalRolloutEventSnapshot(runtimeRoot, goalId);
     // Scheduler writeback returns only need the receipts they can read; a
     // damaged row is never a receipt. Settlement-authority callers keep the
-    // strict view.
+    // strict view. Neither view reads an unterminated row the next append drops.
     const events = tolerateMalformedHistory === true
-      ? rolloutSnapshot?.events ?? []
+      ? committedGoalRolloutEvents(rolloutSnapshot)
       : strictGoalRolloutEvents(rolloutSnapshot);
     const receiptKeys = new Set(events.filter(event =>
       event.event_kind === "quota_should_run" && event.goal_id === goalId &&

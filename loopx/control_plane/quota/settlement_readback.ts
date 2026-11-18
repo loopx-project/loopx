@@ -3,6 +3,7 @@ import { isAbsolute, join } from "node:path";
 
 import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
 import {
+  committedGoalRolloutEvents,
   heartbeatReceiptsFromEvents,
   readGoalRolloutEventSnapshot,
   strictGoalRolloutEvents,
@@ -445,11 +446,13 @@ export async function readQuotaSettlementSnapshot(
   // Settlement-authority callers keep failing closed on the first damaged row.
   // The scheduler follow-up route only needs the receipts it can actually read,
   // so it opts into the same tolerant view the heartbeat reader already uses.
+  // Both views still ignore an unterminated row: the append owner will drop it
+  // before writing the next record.
   return indexSettlementSnapshot(
     runtimeRoot,
     goalId,
     tolerateMalformedHistory
-      ? snapshot?.events ?? []
+      ? committedGoalRolloutEvents(snapshot)
       : strictGoalRolloutEvents(snapshot),
     runs,
   );
