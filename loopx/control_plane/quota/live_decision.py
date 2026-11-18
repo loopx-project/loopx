@@ -669,11 +669,18 @@ def _project_unbound_work_fields(payload: dict[str, Any]) -> None:
 def _restore_replan_obligation_without_foreign_acks(
     status_payload: dict[str, Any], *, goal_id: str, agent_id: str,
     goal_ref: Mapping[str, Any] | None,
+    registry_goal: Mapping[str, Any] | None,
+    registry_path: Path,
+    runtime_root: Path,
 ) -> None:
     """Recompute the open review after removing another instance's ACK rows."""
-    from ...status import autonomous_replan_obligation_from_runs
+    from ...status import (
+        autonomous_replan_obligation_from_runs,
+        external_progress_review_context,
+    )
     from ..work_items.autonomous_replan_ack import drop_unowned_recorded_replan_acks
     from ..work_items.project_asset import attach_active_state_project_asset_fields
+    from ..work_items.replan_history_codec import effective_turn_cadence_context
 
     run_history = status_payload.get("run_history")
     goals = run_history.get("goals") if isinstance(run_history, dict) else None
@@ -726,9 +733,20 @@ def _restore_replan_obligation_without_foreign_acks(
         target.pop("autonomous_replan_obligation", None)
         target.pop("autonomous_replan_obligations_by_agent", None)
         target.pop("autonomous_replan_ack", None)
+    source_goal = dict(registry_goal) if isinstance(registry_goal, Mapping) else {"id": goal_id}
+    source_goal.setdefault("id", goal_id)
+    review = external_progress_review_context(source_goal, runtime_root)
+    cadence_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
     attach_active_state_project_asset_fields(
         item, latest_runs=filtered,
         autonomous_replan_obligation_from_runs=autonomous_replan_obligation_from_runs,
+        external_progress_review=review,
+        effective_turn_cadence=effective_turn_cadence_context(
+            source_goal, runtime_root, registry_path=registry_path,
+            goal_ref=cadence_goal_ref if all(
+                isinstance(value, str) for value in (cadence_goal_ref or {}).values()
+            ) else None,
+        ),
         agent_lane_id=agent_id,
     )
 
@@ -868,6 +886,7 @@ def build_live_quota_should_run_decision(
             goal_ref=goal_ref)
         _restore_replan_obligation_without_foreign_acks(
             decision_status_payload, goal_id=goal_id, agent_id=agent_id, goal_ref=goal_ref,
+            registry_goal=registered_goal, registry_path=registry_path, runtime_root=runtime_root,
         )
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch

@@ -9575,3 +9575,119 @@ def test_only_retired_instance_ack_keeps_the_original_replan(
     assert refresh_rc == 0, refreshed
     assert refreshed.get("appended") is True
     assert refreshed.get("error_code") != "heartbeat_receipt_identity_conflict"
+
+
+def test_progress_review_reentry_keeps_the_admitted_obligation_beside_a_retired_ack(
+    tmp_path: Path,
+) -> None:
+    """Recomputing the review must keep the assist context status already used.
+
+    A retired instance ACK forces that recompute. The admitted progress-review
+    obligation stays the same on the next should-run for this Turn.
+    """
+    from loopx.capabilities.progress_review.receipt import write_progress_review_receipt
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    pin = hashlib.sha256(b"contract-1").hexdigest()
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    goal = registry["goals"][0]
+    goal["status"] = "active"
+    goal["control_plane"] = {
+        "progress_review": {
+            "mode": "assist",
+            "signal": "noul",
+            "drift_threshold": 2,
+            "contract_revision": pin,
+        },
+    }
+    registry_path.write_text(json.dumps(registry, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="file")
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    for sequence, turn in ((2, "review-turn-2"), (1, "review-turn-1")):
+        row = {
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "turn_instance_id": turn,
+            "generated_at": f"2026-09-21T00:00:{sequence:02d}Z",
+            "classification": "bounded_delivery",
+            "progress_observation": {
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "advanced",
+                "hypothesis_id": f"hypothesis-{sequence}",
+            },
+        }
+        source = runs_dir / f"{turn}.json"
+        source.write_text(json.dumps(row), encoding="utf-8")
+        with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({**row, "json_path": str(source), "markdown_path": str(source.with_suffix(".md"))}) + "\n")
+        source.with_suffix(".md").write_text("# Reviewed delivery\n", encoding="utf-8")
+        write_progress_review_receipt(runtime, GOAL_ID, {
+            "receipt_id": hashlib.sha256(f"event-{sequence}".encode()).hexdigest(),
+            "event_id": hashlib.sha256(f"event-{sequence}".encode()).hexdigest(),
+            "evidence_id": hashlib.sha256(f"evidence-{sequence}".encode()).hexdigest(),
+            "contract_revision": pin,
+            "sequence": sequence,
+            "status": "completed",
+            "goal_id": GOAL_ID,
+            "schema_version": "progress_review_receipt_v0",
+            "signal_rule_version": "progress_review_signal_rule_v1",
+            "question_version": "scoped-progress-sentinel-v2",
+            "model": "fixture-v1",
+            "run": {
+                "turn_instance_id": turn,
+                "generated_at": f"2026-09-21T00:00:{sequence:02d}Z",
+                "agent_id": AGENT_ID,
+            },
+            "judgments": {
+                "choice": {"relation": "off_goal", "increment": "no_new_evidence"},
+                "noul": {"behavior_change": 0.05, "serves_acceptance": 0.04, "evidence_increment": 0.1},
+            },
+            "drift_signal": {"noul": True, "choice": True},
+            "label_probability_threshold": 0.6,
+            "recorded_at": float(sequence),
+        })
+    turn = "turn-progress-review-reentry"
+    guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--todo-id", TODO_ID,
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard)
+    assert first_rc == 0, first
+    assert first["decision"] == "autonomous_replan_required", first.get("decision")
+    kinds = [
+        trigger.get("kind")
+        for trigger in (first.get("autonomous_replan_obligation") or {}).get("triggers") or []
+        if isinstance(trigger, dict)
+    ]
+    assert kinds == ["external_progress_review_drift"], kinds
+    obligation = first["replan_action_packet"]["obligation_id"]
+    retired = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "turn_instance_id": "retired-review-ack",
+        "generated_at": "2026-09-21T00:00:05Z",
+        "classification": "bounded_replan_progress",
+        "goal_ref": {"goal_id": GOAL_ID, "goal_instance_id": INSTANCE_A},
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0", "accepted": True,
+                "obligation_id": obligation,
+                "outcomes": ["fresh_vision_path_outcome"],
+                "satisfying_outcomes": ["fresh_vision_path_outcome"],
+            },
+        },
+    }
+    source = runs_dir / "retired-review-ack.json"
+    source.write_text(json.dumps(retired), encoding="utf-8")
+    source.with_suffix(".md").write_text("# Retired review\n", encoding="utf-8")
+    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            **retired, "json_path": str(source), "markdown_path": str(source.with_suffix(".md")),
+        }) + "\n")
+    second_rc, second = _run_cli(registry_path, runtime, *guard)
+    assert second_rc == 0, second
+    assert second["decision"] == "autonomous_replan_required"
+    assert second["replan_action_packet"]["obligation_id"] == obligation
+    assert second.get("error_code") != "heartbeat_receipt_identity_conflict"
