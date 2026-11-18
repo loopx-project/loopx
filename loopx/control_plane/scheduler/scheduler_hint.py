@@ -49,11 +49,26 @@ SCHEDULER_IDENTITY_KEYS = (
 )
 
 
+def _scheduler_host_followup_goal_ref(
+    goal_ref: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
+    """Carry one exact Goal instance as transport data, never as an authority claim."""
+
+    if not isinstance(goal_ref, Mapping):
+        return None
+    goal_id = str(goal_ref.get("goal_id") or "").strip()
+    goal_instance_id = str(goal_ref.get("goal_instance_id") or "").strip()
+    if not goal_id or not goal_instance_id:
+        return None
+    return {"goal_id": goal_id, "goal_instance_id": goal_instance_id}
+
+
 def _scheduler_host_followup_transport_args(
     scheduler_host_facts: Mapping[str, Any] | None,
     *,
     before: Mapping[str, Any] | None,
     use_current_hint: bool,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> list[str]:
     """Encode a bounded, transport-only native scheduler follow-up hint."""
 
@@ -63,6 +78,7 @@ def _scheduler_host_followup_transport_args(
         "schema_version": "loopx_scheduler_host_followup_hint_v0",
         "before": compact_quota_decision(dict(before or {})),
         "use_current_hint": use_current_hint,
+        "goal_ref": _scheduler_host_followup_goal_ref(goal_ref),
         "host_facts": dict(scheduler_host_facts),
     }
     raw = json.dumps(
@@ -100,7 +116,9 @@ def _bounded_scheduler_followup_cli_args(
 
 
 def _encode_followup_args(
-    packet: dict[str, Any], before: Mapping[str, Any] | None
+    packet: dict[str, Any],
+    before: Mapping[str, Any] | None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if "cli_args" not in packet:
         return packet
@@ -121,6 +139,7 @@ def _encode_followup_args(
                 argument["host_facts"],
                 before=before,
                 use_current_hint=argument["use_current_hint"],
+                goal_ref=goal_ref,
             )
             args.extend(encoded)
             native_args.extend(encoded)
@@ -137,9 +156,11 @@ def _encode_followup_args(
 
 
 def _finish_transport(
-    packet: dict[str, Any], before: Mapping[str, Any] | None
+    packet: dict[str, Any],
+    before: Mapping[str, Any] | None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    completed = _encode_followup_args(packet, before)
+    completed = _encode_followup_args(packet, before, goal_ref)
     # Source metadata can also contain cli_args. Only these owned wire slots are executable hints.
     for view in ("app_automation", "codex_app"):
         app = completed.get(view)
@@ -149,13 +170,19 @@ def _finish_transport(
         for followup in ("ack_hint", "failure_hint"):
             command = app.get(followup)
             if isinstance(command, dict):
-                encoded_app[followup] = _encode_followup_args(command, before)
+                encoded_app[followup] = _encode_followup_args(
+                    command, before, goal_ref
+                )
         completed[view] = encoded_app
     return completed
 
 
 def _project_hint(
-    operation: str, params: dict[str, Any], before: Mapping[str, Any] | None = None
+    operation: str,
+    params: dict[str, Any],
+    before: Mapping[str, Any] | None = None,
+    *,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     request = {"operation": operation, **params}
     large_snapshot = (
@@ -173,7 +200,7 @@ def _project_hint(
         or not isinstance(projected.get("hint"), dict)
     ):
         raise RuntimeError("TypeScript scheduler hint projection shape mismatch")
-    return _finish_transport(projected["hint"], before)
+    return _finish_transport(projected["hint"], before, goal_ref)
 
 
 def _identity_json(payload: dict[str, Any]) -> dict[str, str]:
@@ -344,11 +371,12 @@ def build_scheduler_hint(
             current_time,
         ),
     }
-    return _project_hint("hint", params, payload)
+    return _project_hint("hint", params, payload, goal_ref=payload.get("goal_ref"))
 
 
 def _followup(operation: str, kwargs: dict[str, Any]) -> dict[str, Any]:
     before = kwargs.pop("scheduler_before", None)
+    goal_ref = kwargs.pop("goal_ref", None)
     if "available_capabilities" in kwargs:
         kwargs["available_capabilities"] = _capability_values(
             kwargs["available_capabilities"]
@@ -368,7 +396,7 @@ def _followup(operation: str, kwargs: dict[str, Any]) -> dict[str, Any]:
             kwargs[field] = str(kwargs[field] or "").strip()
     if "host_match_observed" in kwargs:
         kwargs["host_match_observed"] = bool(kwargs["host_match_observed"])
-    return _project_hint(operation, kwargs, before)
+    return _project_hint(operation, kwargs, before, goal_ref=goal_ref)
 
 
 def build_app_automation_scheduler_ack_hint(
@@ -385,6 +413,7 @@ def build_app_automation_scheduler_ack_hint(
     state_key: str = APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
     scheduler_host_facts: Mapping[str, Any] | None = None,
     scheduler_before: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _followup("ack", dict(locals()))
 
@@ -400,6 +429,7 @@ def build_app_automation_scheduler_failure_hint(
     scheduler_before: Mapping[str, Any] | None = None,
     surface: str = CODEX_APP_SURFACE,
     state_key: str = APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _followup("failure", dict(locals()))
 
