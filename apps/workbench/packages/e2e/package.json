@@ -7,7 +7,7 @@
     "test": "node run.mjs",
     "test:loopx": "uv run --project ../../../.. --extra test python -m pytest test/loopx-join-registry.py test/loopx-goal-journey.py",
     "test:restart": "node --test test/restart-idle.spec.mjs",
-    "test:runner": "node --test runner.test.mjs test/restart-idle.spec.mjs test/install.spec.mjs",
+    "test:runner": "node --test runner.test.mjs test/restart-idle.spec.mjs test/install.spec.mjs test/update-node.spec.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

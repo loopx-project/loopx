@@ -4,23 +4,72 @@ set -u
 service=$1 socket=$2 repo=$3 dry=$4 poll=$5
 say() { echo "[$(date '+%H:%M:%S')] $*"; }
 fail() { echo "fail $*"; exit 0; }
-case "$repo" in '~'*) repo="$HOME/${repo#\~/}" ;; esac
+case "$repo" in
+  '')
+    repo="$HOME/code/loochat"
+    for candidate in "${XDG_DATA_HOME:-$HOME/.local/share}/loochat" "$HOME/.local/share/loochat" "$HOME/code/loochat"; do
+      if [ -d "$candidate/.git" ]; then repo="$candidate"; break; fi
+    done
+    ;;
+  '~'*) repo="$HOME/${repo#\~/}" ;;
+esac
 case "$socket" in '~'*) socket="$HOME/${socket#\~/}" ;; esac
 
 unit="$(systemctl --user show -p FragmentPath --value "$service" 2>/dev/null || true)"
 [ -n "$unit" ] && [ -f "$unit" ] || fail "no $service user service on this machine"
 workdir="$(systemctl --user show -p WorkingDirectory --value "$service")"
-[ -d "$repo/.git" ] || fail "no clone at $repo (set \"repo\" in the hub's hosts.json)"
-cd "$repo" || fail "cannot enter $repo"
 
-git fetch --quiet origin 2>/dev/null || fail "git fetch from origin failed (offline?)"
-upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo origin/main)"
-if ! git merge-base --is-ancestor "$upstream" HEAD; then
-  git merge --ff-only --quiet "$upstream" 2>/dev/null || fail "the clone has moved away from $upstream; it needs a person"
+git_root=''
+if [ -d "$repo/.git" ]; then
+  git_root="$(cd "$repo" 2>/dev/null && pwd -P || true)"
+elif [ -d "$repo" ]; then
+  top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$top" ] && [ -d "$top/.git" ] && [ -d "$top/apps/workbench" ] \
+    && [ "$(cd "$repo" && pwd -P)" = "$(cd "$top/apps/workbench" && pwd -P)" ]; then
+    git_root="$(cd "$top" && pwd -P)"
+  fi
+fi
+[ -n "$git_root" ] || fail "no clone at $repo (set \"repo\" in the hub's hosts.json)"
+cd "$git_root" || fail "cannot enter $git_root"
+
+running_rev=''
+if [ -n "$workdir" ] && [ -f "$workdir/.loochat-release" ]; then
+  running_rev="$(cat "$workdir/.loochat-release")"
+fi
+
+[ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] \
+  || fail "the clone has local changes; it needs a person"
+head_branch="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
+if [ -n "$head_branch" ]; then
+  git fetch --quiet origin 2>/dev/null || fail "git fetch from origin failed (offline?)"
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "origin/$head_branch")"
+  if ! git merge-base --is-ancestor "$upstream" HEAD; then
+    git merge --ff-only --quiet "$upstream" 2>/dev/null || fail "the clone has moved away from $upstream; it needs a person"
+  fi
+elif [ -f .git/loochat-installed-revision ]; then
+  [ "$(git rev-parse HEAD)" = "$(cat .git/loochat-installed-revision)" ] \
+    || fail "the clone has local commits; it needs a person"
+  git fetch --quiet --depth 1 origin main 2>/dev/null || fail "git fetch from origin failed (offline?)"
+  git checkout --detach --quiet FETCH_HEAD 2>/dev/null || fail "cannot advance detached install checkout"
+  git rev-parse HEAD >.git/loochat-installed-revision
+else
+  git fetch --quiet origin 2>/dev/null || fail "git fetch from origin failed (offline?)"
+  upstream="origin/main"
+  if ! git merge-base --is-ancestor "$upstream" HEAD; then
+    git merge --ff-only --quiet "$upstream" 2>/dev/null || fail "the clone has moved away from $upstream; it needs a person"
+  fi
 fi
 new="$(git rev-parse --short HEAD)"
 
-if [ "$(basename "$workdir")" = "loochat-$new" ]; then
+if [ -f "$git_root/apps/workbench/package.json" ]; then
+  app_src="$git_root/apps/workbench"
+elif [ -f "$git_root/package.json" ]; then
+  app_src="$git_root"
+else
+  fail "no workbench package in $git_root"
+fi
+
+if [ "$(basename "$workdir")" = "loochat-$new" ] || [ "$running_rev" = "$new" ]; then
   echo "current: the service already runs loochat-$new"
   exit 0
 fi
@@ -35,7 +84,7 @@ snap="$HOME/.local/share/loochat-$new"
 if [ ! -d "$snap" ]; then
   say "copying the tree into ${snap##*/}"
   mkdir -p "$snap"
-  tar --exclude=./.git --exclude=./.worktrees --exclude=./shots -cf - . | tar -C "$snap" -xf -
+  ( cd "$app_src" && tar --exclude=./.git --exclude=./.worktrees --exclude=./shots -cf - . ) | tar -C "$snap" -xf -
 fi
 say "building ${snap##*/}"
 if ! ( cd "$snap" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 ); then

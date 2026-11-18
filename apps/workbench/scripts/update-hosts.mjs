@@ -47,7 +47,7 @@ for (const machine of machines) {
     const job = `loochat-update-${randomUUID()}`;
     const folder = `/tmp/${job}`;
     const entry = entries.find(entry => entry.id === machine.id);
-    const params = ['loochat', '~/.local/state/loochat/daemon.sock', entry?.repo ?? '~/code/loochat', dry ? '1' : '0', '5'].map(quote).join(' ');
+    const params = ['loochat', '~/.local/state/loochat/daemon.sock', entry?.repo ?? '', dry ? '1' : '0', '5'].map(quote).join(' ');
     // A separate unit survives restarting the node daemon. Tokens never enter the node's script.
     await exec(machine.id, `umask 077; mkdir ${quote(folder)} && cat > ${quote(`${folder}/run.sh`)} && systemd-run --user --quiet --collect --unit=${quote(job)} /bin/sh -c ${quote(`/bin/sh ${quote(`${folder}/run.sh`)} ${params} > ${quote(`${folder}/log`)} 2>&1; echo $? > ${quote(`${folder}/status`)}`)}`, script);
     let done = false;

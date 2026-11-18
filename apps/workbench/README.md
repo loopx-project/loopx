@@ -176,7 +176,7 @@ GitHub Pages 通过 `.github/workflows/pages.yml` 发布：推送到 `main` 后�
 
 私有 socket 由本机用户文件权限保护。hub token 能操作登记的节点；节点令牌只能领取自己的 relay 任务。移除机器会撤销令牌，不删除节点线程和文件。
 
-`scripts/update-hosts.sh [机器ID] [--check]` 可经 relay 更新在线节点。节点需要 systemd 用户服务与仓库克隆（默认 `~/code/loochat`，hosts.json 的 `repo` 可覆盖）。更新任务独立于节点服务运行，构建快照、等待空闲后切换、失败回滚；hub 在重连后读取结果。`--check` 会 fetch 并快进克隆，但不构建或切换服务。真实 systemd 更新与跨网络部署仍待验收，机制和限制见 [多机管理设计](docs/multi-host-design.md)。
+`scripts/update-hosts.sh [机器ID] [--check]` 可经 relay 更新在线节点。节点需要 systemd 用户服务与仓库克隆（默认优先使用 `install.sh` 的 `~/.local/share/loochat`，否则回退 `~/code/loochat`；hosts.json 的 `repo` 可设为仓库根或 `apps/workbench` 子目录）。更新任务独立于节点服务运行，构建快照、等待空闲后切换、失败回滚；hub 在重连后读取结果。`--check` 会 fetch 并快进克隆，但不构建或切换服务。真实 systemd 更新与跨网络部署仍待验收，机制和限制见 [多机管理设计](docs/multi-host-design.md)。
 
 ## 开机自启
 
