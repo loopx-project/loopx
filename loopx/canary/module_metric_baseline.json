@@ -53,6 +53,11 @@
       "any_count": 107,
       "dict_any_count": 0
     },
+    "loopx/control_plane/agents/management_projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 826
+    },
     "loopx/control_plane/goals/goal_frontier/__init__.py": {
       "any_count": 115,
       "dict_any_count": 0
