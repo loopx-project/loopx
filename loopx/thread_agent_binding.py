@@ -25,6 +25,7 @@ CODEX_THREAD_HOST_SURFACES = frozenset(
         "codex-cli-tui",
     }
 )
+ANTIGRAVITY_THREAD_HOST_SURFACES = frozenset({"agy", "antigravity-app"})
 _CODEX_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 AGENT_BINDING_ROUTE_SCHEMA_VERSION = "loopx_agent_binding_route_v0"
@@ -173,6 +174,7 @@ def resolve_thread_agent_binding(
     *,
     host_surface: str,
     thread_id: str | None,
+    exact_surface: bool = False,
 ) -> dict[str, Any]:
     """Resolve a thread binding without guessing from registry order."""
 
@@ -188,10 +190,15 @@ def resolve_thread_agent_binding(
     }
     if not normalized_thread_id:
         return base
+    allowed_surfaces = (
+        ANTIGRAVITY_THREAD_HOST_SURFACES
+        if not exact_surface and normalized_surface in ANTIGRAVITY_THREAD_HOST_SURFACES
+        else frozenset({normalized_surface})
+    )
     matches = [
         item
         for item in _bindings_for_goal(goal or {})
-        if item["host_surface"] == normalized_surface
+        if item["host_surface"] in allowed_surfaces
         and item["thread_id"] == normalized_thread_id
     ]
     base["matches"] = matches
@@ -312,7 +319,9 @@ def _registry_thread_binding_request(
     if normalized_thread_id is None:
         raise ValueError("thread_id is required")
     candidate_surfaces = (
-        (normalized_surface,)
+        tuple(sorted(ANTIGRAVITY_THREAD_HOST_SURFACES))
+        if normalized_surface in ANTIGRAVITY_THREAD_HOST_SURFACES
+        else (normalized_surface,)
         if normalized_surface is not None
         else tuple(sorted(CODEX_THREAD_HOST_SURFACES))
     )
@@ -343,6 +352,7 @@ def _goal_registry_binding_matches(
             goal,
             host_surface=candidate_surface,
             thread_id=thread_id,
+            exact_surface=True,
         )
         if binding["status"] == "conflict":
             agent_ids = [item["agent_id"] for item in binding["matches"]]
@@ -480,6 +490,7 @@ def _binding_context(
     host_surface: str,
     thread_id: str,
     agent_id: str,
+    exact_surface: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, str]], dict[str, Any]]:
     goal = find_registry_goal(payload, goal_id)
     if goal is None:
@@ -500,6 +511,7 @@ def _binding_context(
         goal,
         host_surface=host_surface,
         thread_id=thread_id,
+        exact_surface=exact_surface,
     )
     return goal, current, existing
 
@@ -583,6 +595,7 @@ def _prepare_unbinding(
         host_surface=host_surface,
         thread_id=thread_id,
         agent_id=agent_id,
+        exact_surface=True,
     )
     result: dict[str, Any] = {
         "ok": True,

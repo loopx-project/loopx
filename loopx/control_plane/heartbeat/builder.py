@@ -18,6 +18,7 @@ from ..quota.spend_sources import (
     VISIBLE_GOAL_SLOT_SPEND_SOURCE,
 )
 from ..scheduler.execution_context import (
+    HostSurface,
     SchedulerRuntimeProfile,
     render_scheduler_execution_args,
 )
@@ -544,6 +545,14 @@ def build_heartbeat_prompt(
         native_goal_host=native_goal_host,
         ark_managed_agent_goal=ark_managed_agent_goal,
     )
+    is_antigravity_app = (
+        runtime_profile == SchedulerRuntimeProfile.ANTIGRAVITY_APP.value
+        or (
+            isinstance(scheduler_execution_context, dict)
+            and scheduler_execution_context.get("host_surface")
+            == HostSurface.ANTIGRAVITY_APP.value
+        )
+    )
     task_body = task_body_renderer(
         goal_id=goal_id,
         active_state=active_state_text,
@@ -564,6 +573,11 @@ def build_heartbeat_prompt(
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
         **({"captured_context": True} if native_goal_host and effective_context_delivery == "on" else {}),
+        **(
+            {"antigravity_app": True}
+            if is_antigravity_app and not (traex_visible_goal or ark_managed_agent_goal or native_goal_host)
+            else {}
+        ),
         **reward_memory_rule_kwargs,
     )
     task_body = bind_exact_turn_settlement_task_body(

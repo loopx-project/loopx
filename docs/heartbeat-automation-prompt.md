@@ -62,6 +62,17 @@ transport-neutral goal prompt and lets the goal runtime own inner iteration;
 see the host integration protocol instead of adapting this recurring
 automation contract.
 
+Antigravity App (`--runtime-profile antigravity_app` or `--antigravity_app`)
+keeps a fixed resident session patrolling in place rather than relying on
+Codex's `automation_update`: bind the conversation's `Conversation ID` /
+`ANTIGRAVITY_CONVERSATION_ID` with `bind-agent-thread --with-agy-hooks --execute`
+and `sync-global`, perform repository work and `quota should-run` in an isolated
+`.worktrees/` git worktree (leaving the primary checkout clean for
+`workspace_guard`), and suspend between wakes via in-session
+`schedule(DurationSeconds=max(180, interval * 60), TimerCondition="any", Prompt=...)`
+(`180`s minimum floor; `3 -> 6 -> 10` minute unchanged backoff; no shell `sleep`,
+and no `new-conversation` `sidecar.json` unless explicitly requested).
+
 ### Native Goal bootstrap and live execution instructions
 
 Full, compact and brief automation use the same fully qualified notification/execution rule

@@ -6,6 +6,9 @@ from typing import Any
 
 from ...project_prompt import render_turn_bootstrap
 from .rules import (
+    ANTIGRAVITY_SCHEDULER_HINT_APPLICATION_RULE,
+    ANTIGRAVITY_SCHEDULER_HINT_COMPACT_RULE,
+    ANTIGRAVITY_SCHEDULER_HINT_THIN_RULE,
     CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE,
     DEFAULT_MATERIAL_QUEUE_RULE,
     DEFAULT_PERMISSION_RULE,
@@ -99,6 +102,7 @@ def render_heartbeat_task_body(
     brief_prompt_command: str,
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_RULE,
+    antigravity_app: bool = False,
 ) -> str:
     scope_block = f"\n{agent_scope_instruction}\n" if agent_scope_instruction else ""
     pr_review_pre_quota_block = (
@@ -106,6 +110,11 @@ def render_heartbeat_task_body(
     )
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule, permission_rule=permission_rule,
+    )
+    scheduler_rule = (
+        ANTIGRAVITY_SCHEDULER_HINT_APPLICATION_RULE
+        if antigravity_app
+        else SCHEDULER_HINT_APPLICATION_RULE
     )
     return f"""Advance `{goal_id}` using `{active_state}`.
 
@@ -127,7 +136,7 @@ If that preflight still fails: no work/spend; quiet `DONT_NOTIFY`.
 {USER_TODO_FINAL_MESSAGE_RULE}
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
-{SCHEDULER_HINT_APPLICATION_RULE} Scheduling grants no delivery permission.
+{scheduler_rule} Scheduling grants no delivery permission.
 
 If the result says `should_run=false`:
 
@@ -266,6 +275,7 @@ def render_brief_heartbeat_task_body(
     brief_prompt_command: str,
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_COMPACT_RULE,
+    antigravity_app: bool = False,
 ) -> str:
     scope_block = f"\n{agent_scope_instruction}\n" if agent_scope_instruction else ""
     pr_review_pre_quota_block = (
@@ -274,6 +284,11 @@ def render_brief_heartbeat_task_body(
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule,
         permission_rule=permission_rule,
+    )
+    scheduler_rule = (
+        ANTIGRAVITY_SCHEDULER_HINT_THIN_RULE
+        if antigravity_app
+        else SCHEDULER_HINT_THIN_RULE
     )
     return f"""Advance `{goal_id}` from `{active_state}`.
 
@@ -294,7 +309,7 @@ Fail:quiet.
 {HEARTBEAT_NOTIFICATION_RULE_SHORT}
 {SCOPE_BOUNDED_WORK_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
-{SCHEDULER_HINT_THIN_RULE}
+{scheduler_rule}
 
 `should_run=false`: follow user channel; `monitor_quiet_skip` records
 receipt/stall. Wait: one allowed read-only poll; use current monitor/auxiliary
@@ -336,6 +351,7 @@ def render_compact_heartbeat_task_body(
     brief_prompt_command: str,
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_COMPACT_RULE,
+    antigravity_app: bool = False,
 ) -> str:
     scope_block = f"\n{agent_scope_instruction}\n" if agent_scope_instruction else ""
     pr_review_pre_quota_block = (
@@ -343,6 +359,11 @@ def render_compact_heartbeat_task_body(
     )
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule, permission_rule=permission_rule,
+    )
+    scheduler_rule = (
+        ANTIGRAVITY_SCHEDULER_HINT_COMPACT_RULE
+        if antigravity_app
+        else SCHEDULER_HINT_COMPACT_RULE
     )
     return f"""Advance `{goal_id}` using `{active_state}`.
 
@@ -359,7 +380,7 @@ Detail: `{expanded_prompt_command}`.
 
 Preflight fail: quiet; no work/spend.
 
-{SCHEDULER_HINT_COMPACT_RULE}
+{scheduler_rule}
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
 {OPERATOR_LANGUAGE_RULE}
@@ -665,6 +686,7 @@ def render_thin_heartbeat_task_body(
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_COMPACT_RULE,
     captured_envelope: bool = False,
+    antigravity_app: bool = False,
 ) -> str:
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule,
@@ -676,7 +698,20 @@ def render_thin_heartbeat_task_body(
         if pr_review_pre_quota_command
         else ""
     )
+    scheduler_rule = (
+        ANTIGRAVITY_SCHEDULER_HINT_THIN_RULE
+        if antigravity_app
+        else SCHEDULER_HINT_THIN_RULE
+    )
     if captured_envelope:
+        envelope_scheduler_rule = (
+            ANTIGRAVITY_SCHEDULER_HINT_THIN_RULE
+            if antigravity_app
+            else (
+                "Apply `scheduler` as projected using inline ACK argv. Read saved scheduler detail\n"
+                "only for a needed missing/truncated/referenced command; failure argv only after host update failure."
+            )
+        )
         return f"""Advance `{goal_id}` from {active_state}.
 
 {HOST_LOOP_SAFETY_RULE}
@@ -700,8 +735,7 @@ After a workspace or state change, re-enter the guard before continuing work.
 ```
 {SCOPE_BOUNDED_WORK_RULE}
 Observed capabilities -> --available-capability, never a user gate.
-Apply `scheduler` as projected using inline ACK argv. Read saved scheduler detail
-only for a needed missing/truncated/referenced command; failure argv only after host update failure.
+{envelope_scheduler_rule}
 Exact monitor settlement=no refresh/spend; auxiliary poll continues work.
 Validate work; execute `writeback.settlement_plan` and `writeback.next_cli_actions` with
 their exact identity. Do not guess commands from abbreviated previews.
@@ -731,7 +765,7 @@ P0 blocked -> admitted P1/P2; quiet polls do not spend.
 {HEARTBEAT_NOTIFICATION_RULE_SHORT}
 {SCOPE_BOUNDED_WORK_RULE}
 {RUNTIME_CAPABILITY_PROJECTION_THIN_RULE}
-{SCHEDULER_HINT_THIN_RULE}
+{scheduler_rule}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
 {HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE}
 `agent_read_required`: drain/read/triage before work; settle/ACK.

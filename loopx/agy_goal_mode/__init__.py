@@ -19,6 +19,7 @@ from ..command_invocation import loopx_cli_argv
 AGY_INSTALL_SURFACE = "agy"
 ANTIGRAVITY_APP_INSTALL_SURFACE = "antigravity-app"
 ANTIGRAVITY_APP_AGENT_TYPE = "antigravity-app"
+ANTIGRAVITY_CONVERSATION_ID_ENV = "ANTIGRAVITY_CONVERSATION_ID"
 
 # Every token normalize_agent_type and the slash-commands installer accept for
 # the Antigravity CLI surface.
@@ -59,17 +60,22 @@ AGY_NATIVE_WAKE_FACTS: tuple[str, ...] = (
     "`IsDaemon`, `ExactTiming`) that delivers its `Prompt` as a high-priority "
     "wakeup notification when it fires; `manage_task` lists or kills active "
     "schedules.",
-    "When a LoopX turn enters `waiting_external` (for example CI checks or PR "
-    "review waits), call `schedule(DurationSeconds=<poll_after_seconds>, "
-    "Prompt=...)` and end the turn immediately so the host wakes the session "
-    "reactively instead of running shell sleep polling loops.",
+    "In an Antigravity App fixed resident session (`antigravity-app`), arm "
+    "`schedule(DurationSeconds=max(180, recommended_interval_minutes * 60), "
+    "TimerCondition=\"any\", Prompt=...)` (3-minute / 180s minimum floor; "
+    "unchanged-wait backoff `3 -> 6 -> 10` minutes) before ending every patrol "
+    "turn (including `waiting_external`, CI/PR waits, settled turns, or quiet "
+    "no-ops) unless `scheduler_hint.action=stop_until_explicit_resume`, so the "
+    "host wakes the same conversation reactively instead of running shell sleep "
+    "polling loops or spawning `new-conversation` sidecars.",
     "Background `run_command` tasks and `invoke_subagent` runs also resume the "
     "session reactively on completion or message arrival, so the agent does "
     "not need a polling loop inside a turn.",
-    "All native wakes live inside the running Antigravity process; for "
-    "background periodic heartbeats in Antigravity 2.0 (`antigravity-app`), "
-    "configure `sidecar.json` and optional `hooks.json` bound Stop recovery in "
-    "`~/.gemini/config`.",
+    "For fixed in-session patrols, bind the current `<user_information>` "
+    "`Conversation ID` (or `$ANTIGRAVITY_CONVERSATION_ID`) via `bind-agent-thread` "
+    "+ `sync-global` and configure bound `hooks.json` `Stop` recovery in "
+    "`~/.gemini/config` without creating a `new-conversation` `sidecar.json`; "
+    "use `sidecar.json` only when explicitly requesting detached fresh-conversation ticks.",
 )
 
 # Native goal primitive (built into the agy binary; live-verified on 1.1.18 in
@@ -97,8 +103,8 @@ ANTIGRAVITY_SIDECAR_CONFIG_LABEL = (
 ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY: dict[str, Any] = {
     "display_name": "Antigravity App",
     "host_loop": (
-        "Antigravity App native schedule timer closed loop + optional background "
-        "sidecar.json heartbeat and hooks.json bound Stop recovery"
+        "Antigravity App fixed-session in-place schedule timer closed loop + "
+        "hooks.json bound Stop recovery (or optional detached sidecar.json)"
     ),
     "entry": (
         f"the LoopX skill installed in {ANTIGRAVITY_SKILLS_ROOT_LABEL} "
@@ -262,7 +268,7 @@ def build_antigravity_hooks_template(
     resolve_local_executable: bool = True,
 ) -> dict[str, Any]:
     """Native Stop hook; installation alone never binds an arbitrary chat."""
-    conversation_id = conversation_id or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+    conversation_id = conversation_id or os.environ.get(ANTIGRAVITY_CONVERSATION_ID_ENV)
     args = _antigravity_provider_args(
         "stop-hook",
         cli_bin=cli_bin,
@@ -392,30 +398,51 @@ def antigravity_app_activation_extras(
                     "Prompt": wake_prompt,
                     "TimerCondition": "any",
                 },
+                "min_duration_seconds": 180,
+                "backoff_progression_minutes": [3, 6, 10],
                 "when_to_use": (
-                    "Call `schedule(DurationSeconds=..., Prompt=...)` and end the turn "
-                    "whenever `waiting_external`, CI checks, or PR review gates block "
-                    "immediate completion; never use shell sleep loops."
+                    "Before ending every fixed-session patrol turn (after settlement, "
+                    "on `waiting_external`/CI/PR review waits, or when idle/no-op) "
+                    "unless `scheduler_hint.action=stop_until_explicit_resume`, call "
+                    "`schedule(DurationSeconds=max(180, recommended_interval_minutes * 60), "
+                    "TimerCondition=\"any\", Prompt=...)` (`3 -> 6 -> 10` minute "
+                    "unchanged backoff) and end the turn; never use shell sleep loops."
                 ),
+            },
+            "fixed_session_patrol_contract": {
+                "mode": "in_place_resident_session",
+                "conversation_id_sources": [
+                    "<user_information> Conversation ID",
+                    ANTIGRAVITY_CONVERSATION_ID_ENV,
+                ],
+                "bind_and_hooks_sync_supported": True,
+                "detached_sidecar_required": False,
+                "isolated_worktree_root": ".worktrees/",
+                "min_duration_seconds": 180,
+                "backoff_progression_minutes": [3, 6, 10],
             },
             "sidecar_template": sidecar_template,
             "hooks_template": hooks_template,
             "missing_host_tool_gate": (
-                "Antigravity App in-session `schedule(DurationSeconds=...)` timers fire "
-                "while the app session is active; for unattended background ticks, "
-                f"configure `sidecar.json` in `{ANTIGRAVITY_SIDECAR_CONFIG_LABEL}` "
-                f"and optional `hooks.json` in `{ANTIGRAVITY_HOOKS_CONFIG_LABEL}`."
+                "Antigravity App in-session `schedule(DurationSeconds>=180, "
+                "TimerCondition=\"any\", Prompt=...)` wakes this exact resident "
+                "conversation while the app session is active (with bound "
+                f"`{ANTIGRAVITY_HOOKS_CONFIG_LABEL}` `Stop` recovery for network EOFs); "
+                "only configure detached `sidecar.json` in "
+                f"`{ANTIGRAVITY_SIDECAR_CONFIG_LABEL}` when explicitly asked for "
+                "new-conversation background ticks."
             ),
         },
         "extra_activation_steps": [
             f"Install or refresh the Antigravity skill and optional MCP/hooks surface (`{cli_bin} slash-commands --install --surface antigravity-app --with-agy-mcp --with-agy-hooks` and `{cli_bin} workflow-skills --install --host-surface antigravity-app`).",
-            "When a turn enters `waiting_external` or waits on CI/review checks, suspend directly with the native `schedule(DurationSeconds=<poll_after_seconds>, Prompt=...)` tool and end the turn instead of polling in a shell loop.",
-            f"For background periodic heartbeats, write only `sidecar_template.sidecar_json` to `{ANTIGRAVITY_SIDECAR_CONFIG_LABEL}`. Preserve its existing id, model, permissions and host enable choice. Each fresh native heartbeat loads Core admission before work; do not persist an expanded execution body. Apply the bound `hooks_template` at the top level of hooks.json for bounded transport-error recovery; never wrap it in a `hooks` object.",
+            "For a fixed resident session, read `<user_information>` `Conversation ID` (or `$ANTIGRAVITY_CONVERSATION_ID`), bind it via `bind-agent-thread --with-agy-hooks --execute` (plus `sync-global`) so `~/.gemini/config/hooks.json` carries the active `loopx` CLI and `--conversation-id`, run peer edits and `quota should-run` inside an isolated `.worktrees/` git worktree, and before ending every turn call `schedule(DurationSeconds=max(180, recommended_interval_minutes * 60), TimerCondition=\"any\", Prompt=...)` (`3 -> 6 -> 10`m backoff; no shell sleep or `new-conversation` sidecar).",
+            f"Only when explicitly requesting detached new-conversation ticks instead of fixed in-session patrol, write `sidecar_template.sidecar_json` to `{ANTIGRAVITY_SIDECAR_CONFIG_LABEL}` preserving its existing id, model, permissions and host enable choice. Apply bound `hooks_template` at the top level of hooks.json; never wrap it in a `hooks` object.",
         ],
         "host_scheduler_note": (
-            "use the native `schedule(DurationSeconds=..., Prompt=...)` tool to suspend "
-            "and wake on `waiting_external` / CI waits, or configure `sidecar.json` for "
-            "background periodic heartbeats."
+            "for fixed in-session patrol, call `schedule(DurationSeconds>=180, "
+            "TimerCondition=\"any\", Prompt=...)` (`3 -> 6 -> 10`m backoff) before "
+            "ending every turn unless stopped; use `sidecar.json` only for explicit "
+            "detached new-conversation heartbeats."
         ),
     }
 

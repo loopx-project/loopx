@@ -91,6 +91,9 @@ def _isolated_default_runtime_routes(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    # Prevent an active Antigravity host conversation from leaking ambient
+    # thread identity into hermetic start-goal / hook template tests.
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
     # Tests opt into provider selection; isolate the operator's Chat route.
     monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
     for module_name, attribute, parts in _DEFAULT_ROUTE_REFERENCES:
