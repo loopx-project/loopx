@@ -442,6 +442,129 @@ def test_oversized_portfolio_retains_recoverable_owner_decisions(tmp_path, monke
     assert tool.read(TOOL_NAME, reference)["rows"][0]["title"] in expected
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_oversized_exact_todo_is_unknown_without_exposing_private_detail(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    text = "[P0] Review the proposal before proceeding."
+    note = 'Preserve "accepted" decisions. 中文🧭\n\\ Stop. ' * 900 + "Final stop condition."
+    created = add_goal_todo(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+        role="user", text=text, note=note, task_class="user_gate",
+        operation_id="oversized-exact-decision-fixture",
+    )
+    assert created["ok"], created
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    todo_id = before["todos"][0]["todo_id"]
+    records = []
+    tool = ManagerInspection(
+        context={"goals": [{"goal_id": "goal-a"}]}, registry_path=registry,
+        runtime_root=runtime, owner_scope=True, scope_valid=lambda: True,
+        record=records.append,
+    )
+    overview = tool.read(TOOL_NAME, {"view": "todos", "goal_id": "goal-a"})
+    assert overview["unknown"] is False and overview["rows"][0]["content_truncated"] is True
+    exact = {"view": "todos", "goal_id": "goal-a", "todo_id": todo_id}
+    result = tool.read(TOOL_NAME, exact)
+    assert result["ok"] and result["matched"] == 1
+    assert result["rows"][0]["status"] == "oversized_record"
+    assert result["oversized_rows"] == [0] and result["next_offset"] is None
+    assert result["unknown"] is True
+    assert note not in json.dumps(result) and len(json.dumps(result)) < 24000
+    # The transport must expose every permitted character, including escaping,
+    # without raising its encoded page budget or requiring cached state.
+    expected = details.read_manager_goal_details(
+        registry, runtime, "goal-a", owner_scope=True, todo_id=todo_id,
+    )["todos"][0]
+    reference = result["rows"][0]["read_reference"]
+    revision = reference["expected_source_revision"]
+    fragments = []
+    cursor = 0
+    while reference:
+        fresh = ManagerInspection(
+            context=tool.context, registry_path=registry, runtime_root=runtime,
+            owner_scope=True, scope_valid=lambda: True, record=lambda _: None,
+        )
+        part = fresh.read(CONTEXT_TOOL_NAME, reference)
+        assert part["ok"], part
+        fragment = part["detail_page"]
+        assert fragment["offset"] == cursor
+        assert fragment["source_revision"] == revision
+        assert len(json.dumps(fragment, ensure_ascii=False)) <= 24000
+        fragments.append(fragment["text"])
+        cursor += len(fragment["text"])
+        reference = fragment["next_read"]
+        assert fragment["next_offset"] == (cursor if reference else None)
+        assert fragment["eof"] == (reference is None)
+    assert len(fragments) > 1
+    assert cursor == fragment["total_characters"]
+    assert json.loads("".join(fragments)) == expected
+    assert expected["continuation"].endswith("Final stop condition.")
+    tool.owner_scope = False
+    external = tool.read(CONTEXT_TOOL_NAME, exact)
+    assert external["unknown"] is False and external["rows"][0]["title"] == text
+    assert "continuation" not in external["rows"][0]
+    assert external["oversized_rows"] == []
+    assert tool.read(CONTEXT_TOOL_NAME, result["rows"][0]["read_reference"]) == {
+        "ok": False, "error": "todo_detail_revision_mismatch"}
+    assert len(records) == 3
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+
+
+def test_todo_detail_rechecks_revision_scope_and_encoded_bounds(tmp_path, monkeypatch):
+    row = {"todo_id": "todo_report", "status": "open", "text": "Review",
+           "note": "A decision. " * 3000}
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([row]))
+    tool, records = inspector(tmp_path)
+    tool.owner_scope = True
+    exact = {"view": "todos", "goal_id": "alpha", "todo_id": "todo_report"}
+    reference = tool.read(TOOL_NAME, exact)["rows"][0]["read_reference"]
+    first = tool.read(TOOL_NAME, reference)["detail_page"]
+    following = first["next_read"]
+    assert following
+    row["note"] += " Do not publish."
+    count = len(records)
+    assert tool.read(TOOL_NAME, following) == {"ok": False, "error": "todo_detail_revision_mismatch"}
+    assert len(records) == count
+    reference = tool.read(TOOL_NAME, exact)["rows"][0]["read_reference"]
+    assert tool.read(TOOL_NAME, reference)["ok"]
+    assert tool.read(TOOL_NAME, {**reference, "offset": 10**9}) == {
+        "ok": False, "error": "todo_detail_offset_out_of_range"}
+    # Revocation during the canonical read withholds all fragments and logs.
+    grants = iter([True, False])
+    tool.scope_valid = lambda: next(grants)
+    count = len(records)
+    assert tool.read(TOOL_NAME, reference) == {"ok": False, "error": "authorization_changed"}
+    assert len(records) == count
+    tool.scope_valid = lambda: True
+    row["status"] = "done"
+    reference = tool.read(TOOL_NAME, exact)["rows"][0]["read_reference"]
+    assert tool.read(TOOL_NAME, reference)["ok"]  # Read, never resume completed work.
+    monkeypatch.setattr(details, "list_goal_todos", lambda **_: {"ok": False})
+    assert tool.read(TOOL_NAME, reference) == {"ok": False, "error": "todo_detail_unavailable"}
+
+
+@pytest.mark.parametrize("changes", [
+    {"offset": True}, {"offset": -1}, {"offset": 0.5},
+    {"query": "other"}, {"source_id": "ssh:other"}, {"view": "portfolio"},
+    {"todo_id": None}, {"expected_source_revision": "bad"},
+    {"expected_source_revision": None},
+])
+def test_invalid_todo_detail_does_not_read_core(tmp_path, monkeypatch, changes):
+    monkeypatch.setattr(details, "list_goal_todos", lambda **_: pytest.fail("No source read"))
+    tool, records = inspector(tmp_path)
+    args = {"view": "todos", "goal_id": "alpha", "todo_id": "todo_report",
+            "offset": 0, "expected_source_revision": "sha256:" + "a" * 64, **changes}
+    assert tool.read(TOOL_NAME, args)["error"] == "invalid_arguments"
+    assert not records
+
+
 def test_agent_work_summary_bounds_content_without_inventing_execution():
     summary = agent_work_summary({"agent_id": "worker", "source_verified": True,
                                   "todos": [{"todo_id": "todo_1", "title": "x" * 25000,
@@ -826,7 +949,7 @@ def test_dynamic_requests_are_not_mistaken_for_client_responses(tmp_path):
         )
 
 
-@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "agents", "agent_route", "deliveries_window", "report_source"])
+@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "todos_paged", "agents", "agent_route", "deliveries_window", "report_source"])
 def test_manager_runtime_installs_tool_and_records_real_subprocess_read(
     monkeypatch, tmp_path, read_view
 ):
@@ -890,6 +1013,30 @@ for line in sys.stdin:
             "'view':'todos','goal_id':'alpha'", "'view':'todos','goal_id':'alpha','todo_id':'todo_sample'").replace(
             "evidence['rows'][0]['title'] == 'Check the sample result'",
             "evidence['rows'][0]['continuation'].endswith('Keep this a draft; do not publish.')"))
+    if read_view == "todos_paged":
+        fake.write_text(fake.read_text().replace(
+            "import json, sys", "import json, sys\nfragments = []\nrevision = None").replace(
+            "'view':'todos','goal_id':'alpha'", "'view':'todos','goal_id':'alpha','todo_id':'todo_sample'").replace(
+            "        assert evidence['rows'][0]['title'] == 'Check the sample result'",
+            """        if 'detail_page' in evidence:
+            part = evidence['detail_page']
+            assert part['offset'] == sum(map(len, fragments))
+            assert revision == part['source_revision']
+            fragments.append(part['text'])
+            reference = part['next_read']
+        else:
+            assert evidence['unknown']
+            reference = evidence['rows'][0]['read_reference']
+            revision = reference['expected_source_revision']
+        if reference:
+            print(json.dumps({'id':900,'method':'item/tool/call','params':{
+                'threadId':'fixture-thread','turnId':'fixture-turn','tool':'loopx_manager_read',
+                'arguments':reference}}), flush=True)
+            continue
+        assert len(fragments) > 1
+        task = json.loads(''.join(fragments))
+        assert task['continuation'].endswith('Keep this a draft; do not publish.')
+        assert len(task['continuation']) > 30000"""))
     if read_view == "deliveries_window":
         fake.write_text(fake.read_text().replace(
             "'view':'todos','goal_id':'alpha'",
@@ -921,7 +1068,7 @@ for line in sys.stdin:
                     "todo_id": "todo_sample",
                     "text": "Check the sample result",
                     "status": "open",
-                    "note": "Public background. " * 30 + "Keep this a draft; do not publish.",
+                    "note": "Public background. " * (1800 if read_view == "todos_paged" else 30) + "Keep this a draft; do not publish.",
                 },
             ]),
     )
@@ -976,6 +1123,10 @@ for line in sys.stdin:
             assert len(reads) == 1
             assert reads[0]["payload"]["reason"] == "no_binding"
             assert reads[0]["payload"]["authority"] == "locator_only"
+        elif read_view == "todos_paged":
+            assert reads[0]["payload"]["rows"][0]["status"] == "oversized_record"
+            assert len(reads) > 2
+            assert reads[-1]["payload"]["detail_page"]["eof"] is True
         else:
             assert len(reads) == 1
             assert reads[0]["payload"]["rows"][0]["agent_id" if read_view == "agents" else "todo_id"] == ("review-worker" if read_view == "agents" else "todo_sample")
