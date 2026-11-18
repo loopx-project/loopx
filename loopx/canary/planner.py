@@ -1000,9 +1000,9 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "reason": "guards Codex App heartbeat identity, scheduler hints, and no-spend cadence behavior",
             },
             {
-                "command": "python3 examples/codex-cli-tui-bootstrap-smoke-bundle-smoke.py",
+                "command": "python3 examples/codex-cli-bootstrap-message-smoke.py",
                 "tier": "default",
-                "reason": "checks Codex CLI TUI bootstrap bundle and scoped LoopX command contract",
+                "reason": "checks Codex CLI TUI bootstrap message and scoped LoopX command contract",
             },
             {
                 "command": "python3 examples/claude-goalmode-lifecycle-smoke.py",

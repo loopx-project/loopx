@@ -30,7 +30,7 @@ from loopx.help_surface import (  # noqa: E402
 )
 
 
-LONG_TAIL_COMMAND = "codex-cli-visible-first-response-capture-plan"
+LONG_TAIL_COMMAND = "configuration-backup"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:

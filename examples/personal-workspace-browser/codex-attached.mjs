@@ -371,7 +371,13 @@ async function runConversation(browser, uncertain) {
       await panel.getByText('来源：cursor。此宿主的工作记录与回复尚未接入。',{exact:true}).waitFor();
       assert.equal(await live.count(),0,'Changing the Agent removes the old live records');
       assert.equal(await recordedModel.count(),0,'Changing the Agent removes the old model observation');
-      await page.waitForFunction(async () => (await (await fetch('/fixture/following')).json()).events.at(-1) === false);
+      const readFollowEvents = async () => (await (await page.request.get(new URL('/fixture/following',url).href)).json()).events;
+      // Await the backend read itself: an async waitForFunction predicate is a
+      // truthy Promise, so it can finish before the old follower has stopped.
+      for (let attempt = 0; attempt < 100 && (await readFollowEvents()).at(-1) !== false; attempt++) {
+        await page.waitForTimeout(50);
+      }
+      assert.equal((await readFollowEvents()).at(-1),false,'Changing the Agent stops the old native follower before measuring the new one');
       await panel.getByRole('combobox',{name:'查看 Agent'}).selectOption('worker');
       await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).waitFor();
       assert.equal(await live.locator('article').count(),2,'A new baseline does not duplicate old live rows');
@@ -383,11 +389,10 @@ async function runConversation(browser, uncertain) {
       await page.request.post(new URL('/fixture/live-update',url).href);
       await panel.getByText('正在回看历史 · 有新活动',{exact:true}).waitFor();
       assert.equal(await live.getByText('原宿主实时草稿，已持续更新 2。',{exact:true}).count(),0,'History reading freezes the newer live draft');
-      const followEvents = async () => (await (await page.request.get(new URL('/fixture/following',url).href)).json()).events.length;
-      const followsBefore = await followEvents();
+      const followsBefore = (await readFollowEvents()).length;
       await scrollHistory(page, panel, 1);
       await live.getByText('原宿主实时草稿，已持续更新 2。',{exact:true}).waitFor({timeout: 3000});
-      assert.equal(await followEvents(),followsBefore,'Returning to the tail publishes the buffer instead of waiting for a new subscription');
+      assert.equal((await readFollowEvents()).length,followsBefore,'Returning to the tail publishes the buffer instead of waiting for a new subscription');
       assert.equal(await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).count(),0,'Returning to the tail replaces the stale draft');
       assert.equal(await inputCount(),0,'Observation never submits native input');
       await page.request.post(new URL('/fixture/live-finish',url).href);

@@ -49,13 +49,6 @@
       "dict_any_count": 0,
       "lines": 2058
     },
-    "loopx/chat_store.py": {
-      "lines": 2180
-    },
-    "loopx/codex_cli_probe.py": {
-      "any_count": 37,
-      "dict_any_count": 0
-    },
     "loopx/control_plane/agents/agent_scope.py": {
       "any_count": 107,
       "dict_any_count": 0

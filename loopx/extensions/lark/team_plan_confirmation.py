@@ -63,6 +63,7 @@ from .presentation.team_plan import (
     build_team_plan_review_card,
 )
 from .private_steward_triage import TRIAGE_CARD_ACTION, profile_supports_cards
+from .goal_channel_operation import OPERATION_CARD_ACTION_SCHEMA_VERSION
 
 
 TEAM_PLAN_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_team_plan_callback_receipt_v0"
@@ -269,12 +270,14 @@ def start_team_plan_review_callback_stream(
     chat_filter = " or ".join(
         f".chat_id == {json.dumps(chat_id)}" for chat_id in chat_ids
     )
-    # Private cards match a locally recorded message and chat. This source
-    # only forwards the Steward action shape alongside existing group chats.
+    # The App has one callback subscription. Each private/operation handler
+    # independently verifies its own recorded message, chat and authority.
     if private_steward:
         steward_filter = (
             "((.action_value | if type == \"string\" then (fromjson? // {}) else . end "
-            f"| .schema_version) == {json.dumps(TRIAGE_CARD_ACTION)})"
+            "| if type == \"object\" then .schema_version else null end) as $schema | "
+            f"($schema == {json.dumps(TRIAGE_CARD_ACTION)} or "
+            f"$schema == {json.dumps(OPERATION_CARD_ACTION_SCHEMA_VERSION)}))"
         )
         chat_filter = f"{chat_filter} or {steward_filter}" if chat_filter else steward_filter
 
@@ -289,6 +292,10 @@ def start_team_plan_review_callback_stream(
         schema = action.get("schema_version")
         if schema == TRIAGE_CARD_ACTION:
             if not private_steward:
+                return
+            callback_event = {**callback_event, "action_value": action}
+        elif schema == OPERATION_CARD_ACTION_SCHEMA_VERSION:
+            if not private_steward and callback_event.get("chat_id") not in chat_ids:
                 return
             callback_event = {**callback_event, "action_value": action}
         elif schema != TEAM_PLAN_CARD_ACTION_SCHEMA_VERSION or callback_event.get("chat_id") not in chat_ids:

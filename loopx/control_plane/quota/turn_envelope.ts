@@ -14,7 +14,6 @@ import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
-import {prepareCompactionMemory} from "./compaction_memory.ts";
 import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
   contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -2774,7 +2773,6 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
   }
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
-  if (operation === "compaction_memory") return prepareCompactionMemory(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(

@@ -427,10 +427,17 @@ export function reduceCoordinationProjection(
   const nextTodos = sortedIds(todos.keys()).map((todoId) => todos.get(todoId)!);
   const readModel = previous && coordinationTodoReadModel(nextTodos, previous.readModel.schema_version);
   const historicalContract = previous?.historicalContract;
-  // Ordinary writes should keep a released declaration readable by its
-  // original consumer. A write that uses newer fields needs the current one.
-  if (readModel && historicalContract && !usesFieldsOutsideTodoContract(nextTodos, historicalContract)) {
-    readModel.contract_fields = [...historicalContract.fields];
+  // Advance to the earliest released declaration that covers the records.
+  // An ordinary write keeps its existing declaration, including after removal.
+  if (readModel && historicalContract) {
+    const fields = readModel.schema_version === TODO_DOMAIN_READ_RECORD_SCHEMA
+      ? TODO_DOMAIN_RECORD_CONTRACT.fields : TODO_CANONICAL_READ_RECORD_FIELDS;
+    const compatible = usesFieldsOutsideTodoContract(nextTodos, historicalContract)
+      ? historicalTodoContracts(fields).slice().reverse().find((contract) =>
+        contract.fields.length > historicalContract.fields.length
+        && !usesFieldsOutsideTodoContract(nextTodos, contract))
+      : historicalContract;
+    if (compatible) readModel.contract_fields = [...compatible.fields];
   }
   const reduced = canonicalAuthorityObject({
     ...value,

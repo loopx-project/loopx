@@ -20,12 +20,8 @@ from ..host_loop_activation import (
 )
 from ..project_prompt import (
     build_codex_cli_bootstrap_message,
-    build_codex_cli_exec_handoff,
-    build_codex_cli_tui_bootstrap_smoke_bundle,
     build_new_project_prompt,
     render_codex_cli_bootstrap_message_markdown,
-    render_codex_cli_exec_handoff_markdown,
-    render_codex_cli_tui_bootstrap_smoke_bundle_markdown,
     render_new_project_prompt_markdown,
 )
 from ._host_thread import current_host_thread_id
@@ -134,35 +130,6 @@ def handle_codex_cli_bootstrap_message_command(
     return 0
 
 
-def handle_codex_cli_tui_bootstrap_smoke_bundle_command(
-    args: argparse.Namespace,
-    print_payload: PrintPayload,
-) -> int:
-    payload = build_codex_cli_tui_bootstrap_smoke_bundle(
-        project=Path(args.project),
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        cli_bin=args.cli_bin,
-    )
-    print_payload(payload, args.format, render_codex_cli_tui_bootstrap_smoke_bundle_markdown)
-    return 0
-
-
-def handle_codex_cli_exec_handoff_command(
-    args: argparse.Namespace,
-    print_payload: PrintPayload,
-) -> int:
-    payload = build_codex_cli_exec_handoff(
-        project=Path(args.project),
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        cli_bin=args.cli_bin,
-        codex_bin=args.codex_bin,
-    )
-    print_payload(payload, args.format, render_codex_cli_exec_handoff_markdown)
-    return 0 if payload.get("ok") else 1
-
-
 def handle_starter_bootstrap_command(
     args: argparse.Namespace,
     print_payload: PrintPayload,
@@ -173,8 +140,6 @@ def handle_starter_bootstrap_command(
         "start-goal": handle_start_goal_command,
         "new-project-prompt": handle_new_project_prompt_command,
         "codex-cli-bootstrap-message": handle_codex_cli_bootstrap_message_command,
-        "codex-cli-tui-bootstrap-smoke-bundle": handle_codex_cli_tui_bootstrap_smoke_bundle_command,
-        "codex-cli-exec-handoff": handle_codex_cli_exec_handoff_command,
     }
     handler = handlers.get(str(getattr(args, "command", "")))
     if handler is None:

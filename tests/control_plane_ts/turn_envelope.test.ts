@@ -1545,12 +1545,14 @@ test("signature document fails closed to the canonical signed dimensions", () =>
 });
 
 test("unsupported facade operation is rejected", () => {
-  assert.throws(
-    () => evaluateTurnEnvelope({ operation: "leaf_helper" }),
-    (error: unknown) =>
-      error instanceof EffectRuntimeRequestError &&
-      error.message === "turn envelope operation is unsupported",
-  );
+  for (const operation of ["leaf_helper", "compaction_memory"]) {
+    assert.throws(
+      () => evaluateTurnEnvelope({ operation }),
+      (error: unknown) =>
+        error instanceof EffectRuntimeRequestError &&
+        error.message === "turn envelope operation is unsupported",
+    );
+  }
 });
 
 test("transaction boundary rejects malformed prepared facts", () => {
