@@ -236,6 +236,8 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--sender-id", help="For configuring a new delivery source: its independently verified sender.")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--request-id", help="For read: inspect this exact current or concluded request instead of the pending inbox.")
+    parser.add_argument("--attention-only", action="store_true",
+                        help="For read: supply incoming briefs requiring before-work attention and retain the full agenda.")
     parser.add_argument(
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
@@ -260,6 +262,9 @@ def handle_manager_inbox(args, registry_path, runtime_root):
     try:
         remainder = getattr(args, "remaining_work", None)
         resume = getattr(args, "resume_when", None)
+        attention_only = getattr(args, "attention_only", False)
+        if attention_only and (args.manager_inbox_action != "read" or getattr(args, "request_id", None) is not None):
+            raise ValueError("--attention-only requires read without --request-id")
         if remainder is not None or resume is not None:
             if args.manager_inbox_action != "report" or remainder is None or resume is None:
                 raise ValueError("--remaining-work and --resume-when require report and each other")
@@ -453,7 +458,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             request_id = getattr(args, "request_id", None)
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor,
-                                request_id=request_id)
+                                request_id=request_id, attention_only=attention_only)
             result["instruction"] += " " + collaboration_answer_instruction()
             if request_id is None:
                 result["followthrough"] += (

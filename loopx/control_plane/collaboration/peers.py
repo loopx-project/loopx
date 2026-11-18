@@ -606,6 +606,7 @@ def read_inbox(
     operation_cursor=None,
     request_id=None,
     caller_goal_ref=None,
+    attention_only=False,
 ):
     from .inbox import _pending_result
     from .inbox import read_inbox_transaction
@@ -617,6 +618,8 @@ def read_inbox(
 
     read_command = delegation_read_command(root, registry, goal_id, agent_id)
     read_arguments = {"cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id}
+    if attention_only:
+        read_arguments["attention_only"] = True
     with collaboration_goal_scope(
         registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref,
     ) as goal_scope:

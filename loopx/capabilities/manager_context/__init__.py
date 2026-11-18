@@ -292,6 +292,7 @@ def turn_start_hook(
             str(runtime_root),
             "manager-inbox",
             "read",
+            "--attention-only",
             *(["--format", "markdown"] if model_read else []),
             "--goal-id",
             goal_id,

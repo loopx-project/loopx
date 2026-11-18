@@ -250,6 +250,10 @@ for (const profile of ["legacy", "exact"] as const) {
     const original = sourceBytes(replies);
     const pending = (await f.call("pending")).result as JsonObject;
     assert.deepEqual((pending.items as JsonObject[])[0].remaining_work, remaining_work);
+    const attention = (await f.call("receiver_read", {attention_only: true})).result as JsonObject;
+    assert.deepEqual(attention.items, []);
+    assert.equal(attention.has_more, false);
+    assert.equal(readdirSync(f.base).includes("reads"), false);
     const agenda = (await f.call("turn_context")).unfinished_delegations as JsonObject;
     assert.equal(agenda.incoming_count, 1);
     assert.equal((agenda.items as JsonObject[])[0].step, "review_request_work");
@@ -259,7 +263,7 @@ for (const profile of ["legacy", "exact"] as const) {
     const corrupt = JSON.parse(bytes);
     corrupt.previous_result_key = "conclusion";
     writeFileSync(damaged, JSON.stringify(corrupt));
-    const failed = (await f.call("pending")).result as JsonObject;
+    const failed = (await f.call("pending", {attention_only: true})).result as JsonObject;
     assert.equal((failed.items as JsonObject[])[0].inbox_state, "receipt_unavailable");
     const unavailable = (await f.call("turn_context")).unfinished_delegations as JsonObject;
     assert.equal((unavailable.items as JsonObject[])[0].step, "recover_evidence");
@@ -272,5 +276,12 @@ for (const profile of ["legacy", "exact"] as const) {
     assert.equal((queued.items as JsonObject[])[0].step, "await_return_delivery");
     writeFileSync(join(replies, key(4) + ".delivery.json"), JSON.stringify({status: "delivered"}));
     assert.deepEqual(((await f.call("turn_context")).unfinished_delegations as JsonObject).items, []);
+    for (let n = 2; n <= 22; n++) f.publish(n);
+    const first = (await f.call("pending", {attention_only: true})).result as JsonObject;
+    assert.equal(first.has_more, true);
+    await assert.rejects(f.call("pending", {cursor: first.next_cursor}), /pending request cursor scope mismatch/);
+    const last = (await f.call("pending", {attention_only: true, cursor: first.next_cursor})).result as JsonObject;
+    assert.equal(last.has_more, false);
+    assert.equal((last.items as JsonObject[])[0].request_id, f.row(22).request_id);
   });
 }

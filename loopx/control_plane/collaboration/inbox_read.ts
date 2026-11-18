@@ -201,7 +201,27 @@ function inboxItem(row: JsonObject, state: JsonObject): JsonObject {
   else if (view) item.next_action = view.receiver_instruction;
   return item;
 }
+function hasDeliveredRemainder(source: InboxSource, row: JsonObject, state: JsonObject): boolean {
+  if (state.kind !== "awaiting_conclusion" || !state.remaining_work) return false;
+  const control = jsonObject(state.request_control_view);
+  const read = jsonObject(jsonObject(state.readback)?.read);
+  if (control?.active_reservation != null || read?.status === "unavailable"
+      || linksReceipt(source.root, row).unavailable) return false;
+  try {
+    const revision = control?.revision ?? 1;
+    const latest = agendaResults(source.root, row).filter(result => result.request_revision === revision).at(-1);
+    return latest?.status === "delivered";
+  } catch (error) {
+    if (!recordFailure(error)) throw error;
+    return false;
+  }
+}
+
 async function pendingPage(source: InboxSource, params: JsonObject): Promise<JsonObject> {
+  const attentionOnly = params.attention_only === true;
+  if (attentionOnly && (source.recipient || params.request_id != null)) {
+    fail("attention-only Inbox reads require a Goal inbox without an exact request selector");
+  }
   if (params.request_id != null) {
     if (params.cursor != null || params.operation_cursor != null) fail("an exact request read cannot use inbox cursors");
     let row: JsonObject;
@@ -212,8 +232,9 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     return {ok: true, request_id: params.request_id, items: [inboxItem(row, receiptState(source.root, row))],
       has_more: false, next_cursor: null, instruction: TRIAGE + " This is an exact source read, including concluded requests; it does not reopen their work."};
   }
-  const scope = digest(source.exact ? ["pending_requests_v1", params.runtime_root, target(source)]
-    : ["pending_requests_v1", params.runtime_root, source.goal, source.agent]);
+  const cursorKind = attentionOnly ? "pending_attention_v1" : "pending_requests_v1";
+  const scope = digest(source.exact ? [cursorKind, params.runtime_root, target(source)]
+    : [cursorKind, params.runtime_root, source.goal, source.agent]);
   let after = "";
   if (params.cursor != null) {
     if (typeof params.cursor !== "string" || !/^1:[a-f0-9]{64}:[a-f0-9]{64}$/.test(params.cursor)) fail("invalid pending request cursor");
@@ -228,13 +249,16 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     const row = pendingEntry(source, join(folder, name)), state = receiptState(source.root, row);
     if (state.kind === "settled" && !(source.recipient && params.include_settled === true)
         || !lifecycle(source, "inbox_observe", row)) continue;
+    if (attentionOnly && hasDeliveredRemainder(source, row, state)) continue;
     items.push(inboxItem(row, state));
     if (items.length === 21) break;
   }
   return {ok: true, items: items.slice(0, 20), has_more: items.length > 20,
     next_cursor: items.length > 20 ? `1:${scope}:${items[19].request_id}` : null, _cursor_scope: scope,
-    instruction: TRIAGE + " Follow next_cursor to read later pending requests. Restart without a cursor " +
-      "to discover new requests before it. The end of a page sequence is not work completion."};
+    instruction: TRIAGE + (attentionOnly ? " These incoming briefs need attention before work. " +
+      "Other open requests remain on the agenda. Use its unfiltered read command and --request-id for their full current brief before working on or returning them." : "") +
+      " Follow next_cursor to read later pending requests. Restart without a cursor to discover new " +
+      "requests before it. The end of a page sequence is not work completion."};
 }
 function inspectResult(root: string, row: JsonObject, key: string, reply: JsonObject,
     observations?: JsonObject[]): JsonObject | null {
