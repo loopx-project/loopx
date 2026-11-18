@@ -28,6 +28,7 @@ const RESULT_KEY = /^(?:decision|conclusion)(?:-[0-9]{8})?$/;
 const TURN_INSTANCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 type InboxSource = Readonly<{root: string; goal: string; agent: string; scope: JsonObject; exact: boolean; recipient?: JsonObject}>;
 type ReturnDelivery = Readonly<{key: string; request: JsonObject; reply: JsonObject}>;
+type PeerReturnPage = Readonly<{scope: string; afterOperation: string; afterResult: string}>;
 
 function fail(message: string): never { throw new EffectRuntimeRequestError(message); }
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException)?.code === "ENOENT"; }
@@ -279,13 +280,31 @@ function outgoingEntry(source: InboxSource, operation: JsonObject): JsonObject {
       || conversation && !equal(row.requester, requester)) fail("peer return scope mismatch");
   return row;
 }
-async function collectReturns(source: InboxSource): Promise<{view: JsonObject; deliveries: ReturnDelivery[]}> {
+function peerReturnPage(source: InboxSource, params: JsonObject): PeerReturnPage | null {
+  if (params.turn_instance_id == null && params.cursor == null) return null;
+  const turn = requireNonEmptyString(params.turn_instance_id, "work Turn identity");
+  if (!TURN_INSTANCE_ID.test(turn) || params.mark_read !== true) fail("a bound peer result read is required");
+  const scope = digest(["peer_returns_v1", source.root, target(source), turn]);
+  if (params.cursor == null) return {scope, afterOperation: "", afterResult: ""};
+  const match = typeof params.cursor === "string"
+    ? /^1:([a-f0-9]{64}):([a-f0-9]{64}):(conclusion(?:-[0-9]{8})?)$/u.exec(params.cursor)
+    : null;
+  if (!match) fail("invalid peer result cursor");
+  const [, suppliedScope, afterOperation, afterResult] = match;
+  if (suppliedScope !== scope) fail("peer result cursor scope mismatch");
+  return {scope, afterOperation, afterResult};
+}
+
+async function collectReturns(source: InboxSource, page: PeerReturnPage | null = null):
+    Promise<{view: JsonObject; deliveries: ReturnDelivery[]}> {
   const items: JsonObject[] = [], deliveries: ReturnDelivery[] = [];
   if (source.recipient) return {view: {items: [], has_more: false}, deliveries};
+  let nextCursor: string | undefined;
   const folder = join(source.root, "peer-operations", digest(target(source)));
   for (const [index, name] of names(folder).entries()) {
     if (index > 0 && index % 128 === 0) await yieldToRuntime();
-    if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5))) continue;
+    const operationId = name.slice(0, -5);
+    if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(operationId) || operationId < (page?.afterOperation ?? "")) continue;
     const operation = readRecord(join(folder, name));
     const conversation = operation.schema_version === CONVERSATION_ENTRY_SCHEMA;
     let row: JsonObject;
@@ -294,7 +313,7 @@ async function collectReturns(source: InboxSource): Promise<{view: JsonObject; d
     const replies = join(source.root, "replies", String(row.request_id));
     for (const [resultIndex, key] of resultKeys(replies).entries()) {
       if (resultIndex > 0 && resultIndex % 128 === 0) await yieldToRuntime();
-      if (key === "decision") continue;
+      if (key === "decision" || (page?.afterOperation === operationId && key <= page.afterResult)) continue;
       const reply = readRecord(join(replies, key + ".json")), inspected = inspectResult(source.root, row, key, reply);
       if (["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "recipient", "requester"].some(field => Object.hasOwn(row, field) && !equal(reply[field], row[field]))
           || reply.phase !== "conclusion" || !inspected) fail("peer reply identity conflict");
@@ -310,13 +329,16 @@ async function collectReturns(source: InboxSource): Promise<{view: JsonObject; d
         text: reply.text, ...(reply.remaining_work ? {remaining_work: reply.remaining_work} : {}),
         decision: reply.decision, created_at: reply.created_at});
       if (items.length > 20) break;
+      if (page) nextCursor = `1:${page.scope}:${operationId}:${key}`;
       deliveries.push({key, request: Object.fromEntries(["request_id", "goal_id", "agent_id", "goal_ref", "recipient", "requester"]
         .filter(field => Object.hasOwn(row, field)).map(field => [field, row[field]])),
       reply: Object.hasOwn(reply, "result_key") ? {result_key: reply.result_key} : {}});
     }
     if (items.length > 20) break;
   }
-  return {view: {items: items.slice(0, 20), has_more: items.length > 20}, deliveries};
+  const hasMore = items.length > 20;
+  return {view: {items: items.slice(0, 20), has_more: hasMore,
+    ...(hasMore && nextCursor ? {next_cursor: nextCursor} : {})}, deliveries};
 }
 function replyStatuses(root: string, row: JsonObject): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
@@ -533,7 +555,7 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
   }
   if (operation === "record_read") return recordReads(source, params);
   if (operation === "returns") {
-    const offered = await collectReturns(source);
+    const offered = await collectReturns(source, peerReturnPage(source, params));
     if (params.mark_read === true) await recordReads(source, {...params, items: [], deliveries: offered.deliveries});
     return offered.view;
   }

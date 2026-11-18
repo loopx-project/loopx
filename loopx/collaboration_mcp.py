@@ -287,16 +287,16 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
 
     if turn_instance_id is not None:
         @server.tool()
-        def read_peer_returns() -> dict:
+        def read_peer_returns(cursor: str | None = None) -> dict:
             """Read only peer results awaiting review by this bound work Turn.
 
             Evaluate the returned result and use consume_peer_result to accept,
-            defer or reject it. A read leaves the result pending. If has_more
-            is true, more results are still pending beyond this bounded window.
+            defer or reject it. Follow next_cursor in this Turn for more
+            results. Omit cursor to start a fresh scan.
             """
             return {"peer_returns": read_turn_peer_returns(
                 root, registry, goal_id, agent_id,
-                turn_instance_id=turn_instance_id, caller_goal_ref=caller_goal_ref,
+                turn_instance_id=turn_instance_id, caller_goal_ref=caller_goal_ref, cursor=cursor,
             )}
 
     @server.tool()

@@ -326,7 +326,7 @@ def request(
 
 
 
-def returns(root, goal_id, agent_id, *, mark_read=False, scope=None, turn_instance_id=None):
+def returns(root, goal_id, agent_id, *, mark_read=False, scope=None, turn_instance_id=None, cursor=None):
     """Read outgoing peer results through the shared Inbox transaction."""
     from .inbox import read_inbox_transaction
 
@@ -335,11 +335,13 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None, turn_instan
     }
     if turn_instance_id is not None:
         query["turn_instance_id"] = turn_instance_id
+    if cursor is not None:
+        query["cursor"] = cursor
     return read_inbox_transaction(root, query, scope=scope)
 
 
 def read_turn_peer_returns(root, registry, goal_id, agent_id, *,
-                           turn_instance_id: str, caller_goal_ref):
+                           turn_instance_id: str, caller_goal_ref, cursor: str | None):
     """Supply pending peer results under the host's current Goal and Turn."""
     from ..effect_runtime import EffectRuntimeResponseAmbiguous
 
@@ -348,7 +350,7 @@ def read_turn_peer_returns(root, registry, goal_id, agent_id, *,
             registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref,
         ) as scope:
             return returns(root, goal_id, agent_id, mark_read=True, scope=scope,
-                           turn_instance_id=turn_instance_id)
+                           turn_instance_id=turn_instance_id, cursor=cursor)
     except EffectRuntimeResponseAmbiguous as exc:
         raise ValueError(
             "Peer result delivery is uncertain. Repeat the same peer result read in this work Turn "

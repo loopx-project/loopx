@@ -385,6 +385,94 @@ def test_bound_peer_read_preserves_result_without_resupplying_inbox(tmp_path, mo
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_bound_peer_return_pages_keep_deferred_results_for_the_next_turn(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.collaboration.inbox import _root, acknowledge
+    from loopx.control_plane.collaboration.peers import request, return_result
+    from loopx.control_plane.turn_driver.codex_cli import (
+        LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME, collaboration_mcp_turn_environment,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, root, _ = promoted_create_fixture(tmp_path, provider=provider)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["coordination"]["registered_agents"].append("agent-b")
+    registry.write_text(json.dumps(config))
+    brief = {"schema_version": "collaboration_brief_v0", "purpose": "Inspect the artifact",
+        "context": "Review the evidence.", "constraints": [], "inputs": [],
+        "acceptance": ["Return the verified finding"], "return_requirement": "Report the result"}
+    results = {}
+    for index, count in enumerate((21, 2)):
+        rid = request(root, registry, "goal-a", "agent-a", "agent-b", f"review-{index}", brief)["request_id"]
+        acknowledge(root, "goal-a", "agent-b", rid, "adopt", "Review the artifact", registry=registry)
+        for number in range(count):
+            reply = f"Finding {index}-{number} needs independent validation."
+            result = return_result(root, "goal-a", "agent-b", rid, reply, registry=registry,
+                                   update_id=f"finding-{number}" if number else None)
+            results[rid, result.get("result_key", "conclusion")] = reply
+
+    def launch(turn):
+        env = collaboration_mcp_turn_environment(
+            {"name": LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME}, turn_key=turn,
+            lineage={"goal_id": "goal-a", "agent_id": "agent-a"}, project=tmp_path,
+        )
+        return StdioServerParameters(command=sys.executable, args=[
+            "-m", "loopx.collaboration_mcp", "--runtime-root", str(root), "--registry", str(registry),
+            "--goal-id", "goal-a", "--agent-id", "agent-a", "--workspace", str(tmp_path),
+        ], env={**os.environ, **env})
+
+    def result_id(row):
+        return row["request_id"], row.get("result_key", "conclusion")
+
+    async def page(session, **args):
+        response = await session.call_tool("read_peer_returns", args)
+        assert not response.isError, response
+        return json.loads(response.content[0].text)["peer_returns"]
+
+    async def exercise():
+        first_turn, later_turn = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        async with stdio_client(launch(first_turn)) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            first = await page(session)
+            assert first["has_more"] and len(first["items"]) == 20
+            first_ids = {result_id(row) for row in first["items"]}
+            cursor = first.get("next_cursor")
+            assert cursor, "the pending tail has no continuation"
+
+            for row in first["items"]:
+                request_id, key = result_id(row)
+                disposition = {"request_id": request_id, "result_key": key, "disposition": "deferred"}
+                reply = await session.call_tool("consume_peer_result", disposition)
+                assert not reply.isError and json.loads(reply.content[0].text)["status"] == "deferred"
+            assert await page(session) == first
+
+            later_id, later_key = min(results.keys() - first_ids)
+            disposition = {"request_id": later_id, "result_key": later_key, "disposition": "accepted"}
+            assert (await session.call_tool("consume_peer_result", disposition)).isError
+            delivery = _root(root) / "replies" / later_id / (later_key + ".delivery.json")
+            assert not delivery.exists()
+            tail = await page(session, cursor=cursor)
+            assert await page(session, cursor=cursor) == tail
+            assert not tail["has_more"]
+            assert {result_id(row) for row in tail["items"]} == results.keys() - first_ids
+            assert {result_id(row): row["text"] for row in first["items"] + tail["items"]} == results
+            assert json.loads(delivery.read_text())["model_turn"]["turn_instance_id"] == first_turn
+            accepted = await session.call_tool("consume_peer_result", disposition)
+            assert not accepted.isError and json.loads(accepted.content[0].text)["status"] == "consumed"
+
+        async with stdio_client(launch(later_turn)) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            rejected = await session.call_tool("read_peer_returns", {"cursor": cursor})
+            assert rejected.isError and "cursor scope mismatch" in rejected.content[0].text
+            reopened = await page(session)
+            assert {result_id(row) for row in reopened["items"]} == first_ids
+            remaining = await page(session, cursor=reopened["next_cursor"])
+            assert {result_id(row) for row in remaining["items"]} == results.keys() - first_ids - {(later_id, later_key)}
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(tmp_path, monkeypatch, provider):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
     from loopx.control_plane.collaboration.peers import request, read_inbox

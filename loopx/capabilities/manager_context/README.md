@@ -1155,9 +1155,11 @@ through the same commands as a manager request. The original requester can
 inspect it under `peer_returns` in `manager-inbox read`. In a host with the
 invocation-bound tools configured, call `read_peer_returns` for the results alone
 and `consume_peer_result` after evaluating them. A read records delivery and
-leaves the results pending. A true `has_more` indicates that additional results
-are pending beyond the current window. The full `read_context` response also
-carries a CLI acknowledgement command for each exact delivery:
+leaves the results pending. Follow `next_cursor` as `cursor` in the same Turn to
+read later results even when earlier ones are deferred. Omit the cursor to
+restart the live scan and discover results added before the previous page
+boundary. The full `read_context` response also carries a CLI acknowledgement
+command for each exact delivery:
 
 ```sh
 loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
@@ -1173,8 +1175,8 @@ Consumption does not mark a Todo done or certify peer acceptance. The requester
 checks the actual artifact, incorporates or rejects the findings, and reports
 the original owner conclusion through its original request. A second review
 round uses a new operation id. Repeating an operation recovers the same request;
-changing its content or recipient is rejected. Peer replies currently support
-one conclusion (including an explicit blocker/defer result), not interim replies.
+changing its content or recipient is rejected. Peer replies use the conclusion
+phase for results, later updates and explicit blockers.
 
 Parent lineage preserves the original owner context through peer requests.
 External-audience parent requests cannot be forwarded through this owner-local
