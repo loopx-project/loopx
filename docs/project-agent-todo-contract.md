@@ -90,6 +90,28 @@ same operation ID is a conflict. No provider promotion or receipt rewrite occurs
 
 ## Write Contract
 
+Confirming a typed Chat Todo or Monitor prepares the provider revision and
+source registry digest and store identity before writing. The proposal's operation ID and the
+Monitor's first due time are reused on retry. After checking the current Goal
+source and caller authority, retry returns the original receipt for a committed
+create. Chat keeps the original card available after refresh and offers a retry
+through that card. A prepared create cannot be regenerated. A stale preview
+that never started can still be regenerated. An uncommitted create requires
+the reviewed source and provider revision. Older control planes reject the
+source-bound v3 request before writing.
+
+After an upgrade, a retained Chat confirmation can read back its original
+assignment or completed Turn. A pending dispatch with a retained managed claim
+also checks the current Goal, claimant and lease. When no claim has committed,
+the original Todo and current write authority must still agree before launch.
+
+确认 Chat 的 Todo 或 Monitor 提案时，先记录源注册表摘要、权威存储身份和修订号，再执行写入。
+重试沿用原操作 ID 和 Monitor 的首次到期时间。已提交的操作返回原回执，未提交的操作仍校验
+确认时的来源和修订号。刷新后仍可用原确认卡重试。已准备的确认不能重新生成；尚未执行的过期预览仍可重新生成。来源绑定请求采用 v3 协议，旧版控制面会在写入前拒绝。
+
+升级后可从保留的 Chat 确认读回原指派或已完成的 Turn。执行认领已提交、仍待启动时，
+须检查当前 Goal、认领者和租约。认领尚未提交时，须确认原 Todo 和当前写入权限后才能启动。
+
 For a caller-owned runtime that already registered its Goal/Agent, generate the
 model planning checkpoint before writing executable task Todos:
 
@@ -1361,6 +1383,27 @@ immutable operation identity or public receipts. A matching historical
 create/update/poll/terminal receipt is recovered before checking current source
 contents. Claim replay retains its current acceptance check and rejects a stale
 source while preserving `original_receipt`; this adds no new claim grant.
+
+Chat Task detail and reviewed actions resolve the Goal's source registry and
+runtime before reading or writing. The review basis carries the source identity,
+source registry digest and provider revision. A created Task checkpoint also
+retains the authority store identity and original operation.
+If an unrelated write advances the same store, assignment and managed claim can
+refresh their provider revision after the native owner rejects the previous one.
+The current Todo must match the record in the original native create receipt.
+Chat saves the new revision before dispatch so an interrupted response replays
+the same assignment.
+
+When a separate directory supplies the Goal route, Chat Task, Monitor and Gate
+mutations carry its byte witness as `registry_source.routing_registry`. The
+native transaction checks both registry files at admission and before commit.
+Restore the original source and inspect the retained Task when either source
+changes or the original Todo no longer matches.
+
+The local v3 Todo create and managed claim wires require both
+`expected_provider_revision` and `expected_registry_sha256`. The source check
+uses the existing registry witness. Earlier wire versions retain their original
+behavior.
 
 On `authority_source_changed`, inspect current registration and the Todo again
 before issuing new work. The rejected attempt writes no canonical head or receipt;
