@@ -18,12 +18,19 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from loopx.presentation.chat_bundle import source_digest, validate_bundle  # noqa: E402
-from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT, RUNTIME_ARTIFACT_SCHEMA_VERSION, validate_manifest  # noqa: E402
+from loopx.cli_commands.update_artifact import (  # noqa: E402
+    RUNTIME_ARTIFACT_SCHEMA_VERSION,
+    extract_artifact,
+    validate_default_contract,
+    validate_manifest,
+)
+from scripts.qualify_runtime_artifact import observe_default_contract  # noqa: E402
 
 PATHS = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps/presentation",
          ".github", "README.md", "LICENSE", "NOTICE", "LICENSE-MIT", "pyproject.toml", "setup.py", "MANIFEST.in")
@@ -41,6 +48,19 @@ OPTIONAL_MEDIA_ROOTS = (
 MEDIA_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm"}
 
 
+def _qualified_default_contract(root: Path, revision: str) -> dict:
+    with tempfile.TemporaryDirectory(prefix="loopx-runtime-contract-") as temporary:
+        staging = Path(temporary)
+        archive = staging / "source.tar.gz"
+        subprocess.run(
+            ["git", "archive", "--format=tar.gz", f"--output={archive}", revision, "loopx", "scripts"],
+            cwd=root,
+            check=True,
+        )
+        source = extract_artifact(archive, staging / "source")
+        return validate_default_contract(observe_default_contract(source))
+
+
 def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     manifest = validate_bundle(root / "loopx/web/chat", source_root=root)
@@ -50,6 +70,9 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
         committed = subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=root)
         if source_digest(Path(name), committed) != digest:
             raise ValueError(f"Frontend input differs from committed source: {name}")
+    # A channel descriptor must describe the committed runtime. The installation
+    # qualification independently checks the default again after installation.
+    default_contract = _qualified_default_contract(root, revision)
     output.mkdir(parents=True, exist_ok=True)
     filename = f"loopx-runtime-{revision}.tar.gz"
     optional_name = f"loopx-resources-{revision}.tar.gz"
@@ -95,7 +118,7 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
             inventory["runtime"].append({"path": member.name, "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest()})
         identity = json.dumps({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
-            "package_version": version, "default_contract": PUBLIC_DEFAULT_CONTRACT}).encode()
+            "package_version": version, "default_contract": default_contract}).encode()
         member = tarfile.TarInfo("runtime-artifact.json")
         member.size, member.mode = len(identity), 0o644
         runtime.addfile(member, io.BytesIO(identity))
@@ -107,7 +130,7 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
     archive = output / filename
     result = validate_manifest({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
         "package_version": version, "channel": channel, "size": archive.stat().st_size,
-        "default_contract": dict(PUBLIC_DEFAULT_CONTRACT),
+        "default_contract": default_contract,
         "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "urls": [f"https://github.com/{repository}/releases/download/{tag}/{filename}"],
         "resources": {"filename": optional_name, "size": (output / optional_name).stat().st_size,
