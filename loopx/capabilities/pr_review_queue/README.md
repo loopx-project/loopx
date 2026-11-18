@@ -639,16 +639,17 @@ evidence and do not pad. Invoking review uses the installed capability policy.
 
 ### Reviewer provenance and specification basis
 
-Policy revision 14 makes two publication requirements mandatory for every new
-result; neither changes queue selection, merge authority or how already
-published GitHub reviews are recognized (`check_review_body` is unchanged).
+Policy revision 14 introduced reviewer attribution and specification basis for
+new review results. GitHub readback uses the published attribution for model
+coverage. Merge authority follows the existing account and review rules.
 
 - `result.reviewer` (`reviewer_declaration`) names `actor_kind`
   (`model_agent` or `human_operator`) and `declaration_source`
   (`runtime_reported` or `self_reported`); an agent adds `declared_model` and
-  `declared_provider` in product-family wording. The body repeats them on
-  exactly one visible `Reviewer:` line, each value as a whole token. This is
-  provenance, not a credential: it authenticates nothing and adds no weight.
+  `declared_provider` in product-family wording. Use one visible line such as
+  `Reviewer: model_agent · MODEL · PROVIDER · self_reported`. Publication and
+  queue readback share the declaration parser. Model coverage requires an
+  explicit source. The declaration adds no weight or account authority.
 - `problem_context.spec_basis` (`spec_basis_assessment`) is `mapped`,
   `no_spec` or `not_yet_proven`. `mapped` gives text `spec_ref`,
   `spec_revision` (a full commit id for `accepted_rfc` and

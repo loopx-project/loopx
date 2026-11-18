@@ -6,9 +6,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ...reasoning_effort import REASONING_EFFORTS
 from .approval_closeout import select_review_history
-from .review_body import reviewer_declaration_lines
+from .review_body import parse_model_reviewer_line, reviewer_declaration_lines
 
 
 # A product alias is evidence only when paired with its declared provider.
@@ -20,36 +19,6 @@ _PROVIDERS = {
     "qwen": {"alibaba", "alibaba cloud", "qwen"},
 }
 _MODEL_NAME = re.compile(r"([a-z][a-z0-9]*)(?:[ .-][a-z0-9]+)*")
-_COMPACT_DECLARATION = re.compile(
-    r"(?:model_agent\s*[·|]\s*)?([^·|]+?)\s*[·|]\s*([^()]+?)"
-    r"\s*\((runtime_reported|self_reported)(?:,\s*[\w -]+)?\)",
-    re.IGNORECASE,
-)
-# Bare effort labels follow the runtime vocabulary and cannot be provenance tags.
-_DOTTED_EFFORT_LABELS = "|".join(
-    re.escape(label) for label in (*REASONING_EFFORTS, "effort_unavailable")
-)
-_DOTTED_DECLARATION = re.compile(
-    r"model_agent\s*·\s*([^·]+?)\s*·\s*([^·]+?)\s*·\s*(runtime_reported|self_reported)"
-    rf"(?:\s*·\s*(?:reasoning_effort=[\w -]+|{_DOTTED_EFFORT_LABELS}))?",
-    re.IGNORECASE,
-)
-_KEYED_DECLARATION = re.compile(
-    r"model_agent;\s*model=([^;]+);\s*provider=([^;]+);\s*"
-    r"declaration_source=(runtime_reported|self_reported)"
-    r"(?:;\s*reasoning_effort=[\w -]+)?\.?",
-    re.IGNORECASE,
-)
-_KEYED_PIPE_DECLARATION = re.compile(
-    r"model_agent\s*\|\s*model=([^|=]+)\s*\|\s*provider=([^|=]+)"
-    r"(?:\s*\|\s*reasoning_effort=[\w -]+)?"
-    r"\s*\|\s*source=(runtime_reported|self_reported)",
-    re.IGNORECASE,
-)
-_LEGACY_DECLARATION = re.compile(
-    r"model_agent\s*\|\s*(runtime_reported|self_reported)\s*\|\s*([^|]+)\s*\|\s*([^|]+)",
-    re.IGNORECASE,
-)
 
 
 def _model_family(model: object, provider: object) -> str | None:
@@ -73,21 +42,11 @@ def published_review_model(body: object) -> tuple[str, str] | None:
     lines = reviewer_declaration_lines(body)
     if len(lines) != 1:
         return None
-    match = (
-        _COMPACT_DECLARATION.fullmatch(lines[0])
-        or _DOTTED_DECLARATION.fullmatch(lines[0])
-        or _KEYED_DECLARATION.fullmatch(lines[0])
-        or _KEYED_PIPE_DECLARATION.fullmatch(lines[0])
-    )
-    if match:
-        model, provider, source = match.groups()
-    else:
-        legacy = _LEGACY_DECLARATION.fullmatch(lines[0])
-        if not legacy:
-            return None
-        source, model, provider = legacy.groups()
-    family = _model_family(model, provider)
-    return (family, source.casefold()) if family else None
+    declaration = parse_model_reviewer_line(lines[0])
+    if declaration is None or declaration.source is None:
+        return None
+    family = _model_family(declaration.model, declaration.provider)
+    return (family, declaration.source) if family else None
 
 
 def needs_cross_model_review(

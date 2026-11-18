@@ -776,20 +776,61 @@ def test_model_queue_reviews_another_familys_current_head(author_only):
         "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · reasoning_effort=max",
         "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · max",
         "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · xhigh",
+        "Reviewer: model_agent · `gpt-6.2-sol` · OpenAI · runtime_reported · max",
+        "Reviewer: model_agent | source=runtime_reported | provider=OpenAI "
+        "| model=gpt-6.2-sol | reasoning_effort=max",
+        "Reviewer: model_agent; reasoning_effort=max; provider=OpenAI; "
+        "model=`gpt-6.2-sol`; declaration_source=runtime_reported.",
+        "Reviewer: model_agent | gpt-6.2-sol | OpenAI | runtime_reported | max",
     ],
-    ids=["keyed-pipe", "middle-dot", "bare-max", "bare-xhigh"],
+    ids=[
+        "keyed-pipe", "middle-dot", "bare-max", "bare-xhigh", "inline-code",
+        "reordered-pipe", "reordered-semicolon", "positional-pipe",
+    ],
 )
 def test_later_other_family_does_not_repeat_a_current_matching_review(shared_login, declaration):
+    from loopx.capabilities.pr_review_queue.result_check import _reviewer_errors
+
     matching = "shared-review-account" if shared_login else "independent"
     report = _github_model_review(10, login=matching, family="gpt-6.2-sol", source="runtime_reported")
     _, separator, rest = report["body"].partition("\n")
     report["body"] = f"{declaration}{separator}{rest}"
+    assert not _reviewer_errors({
+        "actor_kind": "model_agent",
+        "declaration_source": "runtime_reported",
+        "declared_model": "gpt-6.2-sol",
+        "declared_provider": "OpenAI",
+        "declared_reasoning_effort": "xhigh" if declaration.endswith("· xhigh") else "max",
+    }, report["body"], execution_present=True, runtime_reported=True)
     pr = _github_model_pr([report, _github_model_review(11, login="second-peer", family="Gemini")])
     before = _model_queue_row(pr, family=None)
     after = _model_queue_row(pr)
     assert before == after
     if shared_login:
         assert after["independent_review"]["reviewer"] == "second-peer"
+
+
+@pytest.mark.parametrize("line,reason", [
+    (
+        "model_agent | model=gpt-6.2-sol | provider=OpenAI | source=runtime_reported "
+        "| declaration_source=self_reported | reasoning_effort=max",
+        "body_line_disagrees_with_declaration",
+    ),
+    ("model_agent · gpt-6.2-sol · OpenAI · self_reported · max", "runtime_basis_not_published"),
+    ("model_agent · gpt-6.2-sol · OpenAI · runtime_reported · xhigh", "runtime_basis_not_published"),
+    ("model_agent · gpt-6.2-sol · OpenAI (runtime_reported)", "runtime_basis_not_published"),
+])
+def test_runtime_publication_compares_provenance_and_effort_fields(line, reason):
+    from loopx.capabilities.pr_review_queue.result_check import _reviewer_errors
+
+    errors = _reviewer_errors({
+        "actor_kind": "model_agent",
+        "declaration_source": "runtime_reported",
+        "declared_model": "gpt-6.2-sol",
+        "declared_provider": "OpenAI",
+        "declared_reasoning_effort": "max",
+    }, f"Reviewer: {line}", execution_present=True, runtime_reported=True)
+    assert f"reviewer:{reason}" in errors
 
 
 @pytest.mark.parametrize("pretend_matching", ["old_head", "dismissed", "unknown", "retired", "authored"])
@@ -867,7 +908,12 @@ def test_model_queue_reads_complete_history_for_author_only_review_events():
         ("Reviewer: model_agent · GPT-6 · OpenAI · runtime_reported · self_reported", None),
         ("Reviewer: model_agent; model=GPT-5; provider=OpenAI; declaration_source=self_reported.", ("gpt", "self_reported")),
         ("Reviewer: model_agent | model=Gemini | provider=Google DeepMind | source=self_reported", ("gemini", "self_reported")),
+        ("Reviewer: model_agent | Gemini | Google | self_reported", ("gemini", "self_reported")),
         ("Reviewer: model_agent | model=Gemini | provider=Google | provider=OpenAI | source=self_reported", None),
+        ("Reviewer: model_agent | source=self_reported | model=Gemini | provider=Google | declaration_source=runtime_reported", None),
+        ("Reviewer: model_agent | Gemini | Google | self_reported | runtime_reported", None),
+        ("Reviewer: model_agent · Gemini · Google", None),
+        ("Reviewer: model_agent · Gemini · Google (self-reported family)", None),
         ("Reviewer: Gemini | OpenAI (runtime_reported)", None),
         ("Reviewer: not-gpt | OpenAI (runtime_reported)", None),
         ("Reviewer: GPT-6 | OpenAI (unverified)", None),

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
+
+from ...reasoning_effort import REASONING_EFFORTS
 
 # Presentation aliases share the existing canonical section ids. They do not
 # broaden evidence matching to arbitrary headings that contain a Chinese word.
@@ -24,6 +27,16 @@ AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE = (
 AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE = (
     "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
 )
+REVIEWER_DECLARATION_SOURCES = ("runtime_reported", "self_reported")
+
+
+@dataclass(frozen=True)
+class PublishedModelDeclaration:
+    model: str
+    provider: str
+    source: str | None
+    reasoning_effort: str | None
+    has_model_actor: bool
 
 
 def review_body_requirements(*, behavior_bearing: bool) -> dict[str, int]:
@@ -104,6 +117,97 @@ def reviewer_declaration_lines(body: str) -> list[str]:
         if match:
             lines.append(match.group(1).strip())
     return lines
+
+
+def _reviewer_field(text: str) -> str:
+    text = text.strip()
+    if text.startswith("`") and text.endswith("`"):
+        left = text.lstrip("`")
+        right = text.rstrip("`")
+        if len(left) == len(right):
+            return left.rstrip("`").strip()
+    elif len(text) > 2 and text[0] in "*_" and text[0] == text[-1]:
+        return text[1:-1].strip()
+    return text
+
+
+def _keyed_reviewer_fields(fields: list[str]) -> dict[str, str] | None:
+    values: dict[str, str] = {}
+    for field in fields:
+        name, sep, text = field.partition("=")
+        key = _reviewer_field(name).casefold()
+        if key == "declaration_source":
+            key = "source"
+        if not sep or key not in ("model", "provider", "source", "reasoning_effort") or key in values:
+            return None
+        values[key] = _reviewer_field(text)
+    return values if all(values.get(key) for key in ("model", "provider", "source")) else None
+
+
+def parse_model_reviewer_line(line: str) -> PublishedModelDeclaration | None:
+    """Parse the fields after the visible Reviewer label, including historical forms."""
+    # The historical compact form puts the source and optional effort in parentheses.
+    pair, _, attribution = line.rpartition("(")
+    basis = attribution[:-1].split(",") if pair and attribution.endswith(")") else []
+    source_label = _reviewer_field(basis[0]).casefold() if basis else ""
+    compact = source_label in REVIEWER_DECLARATION_SOURCES
+    # Old self-reports could include this note without the typed source marker.
+    legacy_self_report = len(basis) == 1 and source_label == "self-reported family"
+    identity = pair.rstrip() if compact or legacy_self_report else line
+    if ";" in identity:
+        identity = identity.removesuffix(".")
+    fields = [_reviewer_field(field) for field in re.split(r"[·|;]", identity)]
+    has_model_actor = fields[0].casefold() == "model_agent"
+    if has_model_actor:
+        fields = fields[1:]
+    elif not compact:
+        return None
+
+    source: str | None = None
+    effort: str | None = None
+    explicit_effort = False
+    if compact:
+        if len(fields) != 2 or len(basis) > 2:
+            return None
+        model, provider = fields
+        source = basis[0]
+        if len(basis) == 2:
+            effort = basis[1]
+            explicit_effort = True
+    elif any("=" in field for field in fields[:2]):
+        keyed = _keyed_reviewer_fields(fields)
+        if keyed is None:
+            return None
+        model, provider, source = keyed["model"], keyed["provider"], keyed["source"]
+        effort = keyed.get("reasoning_effort")
+        explicit_effort = effort is not None
+    else:
+        if not 2 <= len(fields) <= 4:
+            return None
+        if len(fields) == 3 and fields[0].casefold() in REVIEWER_DECLARATION_SOURCES:
+            fields = fields[1:] + fields[:1]
+        model, provider, *basis = fields
+        source = basis[0] if basis else None
+        if len(basis) == 2:
+            name, sep, text = basis[1].partition("=")
+            explicit_effort = bool(sep) and _reviewer_field(name).casefold() == "reasoning_effort"
+            effort = text if explicit_effort else basis[1]
+
+    if any(not re.fullmatch(r"[^·|;=`]+", field) or field.casefold() in REVIEWER_DECLARATION_SOURCES
+           for field in (model, provider)):
+        return None
+    if source is not None:
+        source = _reviewer_field(source).casefold()
+        if source not in REVIEWER_DECLARATION_SOURCES:
+            return None
+    if effort is not None:
+        effort = _reviewer_field(effort).casefold()
+        if explicit_effort:
+            if not re.fullmatch(r"[\w -]+", effort) or effort in REVIEWER_DECLARATION_SOURCES:
+                return None
+        elif effort not in (*REASONING_EFFORTS, "effort_unavailable"):
+            return None
+    return PublishedModelDeclaration(model, provider, source, effort, has_model_actor)
 
 
 def normalized_review_prose(prose: str) -> str:
