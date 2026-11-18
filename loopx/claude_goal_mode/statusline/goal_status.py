@@ -26,12 +26,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 from goal_state import active_context
 from stdio_utf8 import pin_utf8_stdio
+from loopx.command_invocation import pinned_python_module_command
 
 
-import shutil as _shutil
 def _gh_prefix():
-    _exe = _shutil.which("loopx")
-    return [_exe] if _exe else [__import__("sys").executable, "-m", "loopx.cli"]
+    return pinned_python_module_command("loopx.cli")
 
 
 def _clip(s, n: int) -> str:

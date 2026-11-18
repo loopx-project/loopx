@@ -1275,6 +1275,105 @@ def test_cursor_mcp_writes_then_retires_only_its_own_entry(
     assert not (cursor_home / slash_command_install.CURSOR_MCP_MARKER_NAME).exists()
 
 
+def test_cursor_mcp_preserves_edits_made_during_provisioning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = _stub_mcp_command(monkeypatch)
+    cursor_home = tmp_path / "cursor"
+    cursor_home.mkdir()
+    config = cursor_home / "mcp.json"
+    config.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+    edited = {
+        "mcpServers": {"other": {"command": "user-server"}},
+        "settings": {"enabled": False},
+    }
+
+    def provision() -> tuple[str, str]:
+        config.write_text(json.dumps(edited), encoding="utf-8")
+        return str(entry["command"]), str(entry["args"][0])
+
+    monkeypatch.setattr(slash_command_install, "_loopx_mcp_command", provision)
+    payload = install_slash_commands(
+        execute=True, surfaces=["cursor"], cursor_home=str(cursor_home)
+    )
+
+    assert _row(payload, "cursor_mcp_server")["status"] == "written"
+    expected = {**edited, "mcpServers": {**edited["mcpServers"], "loopx": entry}}
+    assert json.loads(config.read_text(encoding="utf-8")) == expected
+
+
+@pytest.mark.parametrize("change", ["entry", "marker", "invalid_json"])
+def test_cursor_mcp_revalidates_ownership_after_provisioning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    entry = _stub_mcp_command(monkeypatch)
+    cursor_home = tmp_path / "cursor"
+    install_slash_commands(execute=True, surfaces=["cursor"], cursor_home=str(cursor_home))
+    config = cursor_home / "mcp.json"
+    marker = cursor_home / slash_command_install.CURSOR_MCP_MARKER_NAME
+    edited = config.read_text(encoding="utf-8")
+    if change == "entry":
+        edited = json.dumps({"mcpServers": {"loopx": {"command": "user-server"}}})
+    elif change == "invalid_json":
+        edited = "{ incomplete user edit"
+
+    def provision() -> tuple[str, str]:
+        config.write_text(edited, encoding="utf-8")
+        if change == "marker":
+            marker.unlink()
+        return str(entry["command"]), "/opt/loopx/mcp/upgraded_server.py"
+
+    monkeypatch.setattr(slash_command_install, "_loopx_mcp_command", provision)
+    payload = install_slash_commands(
+        execute=True, surfaces=["cursor"], cursor_home=str(cursor_home)
+    )
+
+    expected_status = (
+        "blocked_invalid_cursor_mcp_json"
+        if change.startswith("invalid_")
+        else "skipped_user_owned_mcp_entry"
+    )
+    assert _row(payload, "cursor_mcp_server")["status"] == expected_status
+    assert config.read_text(encoding="utf-8") == edited
+    if change in {"entry", "marker"}:
+        assert not marker.exists()
+
+
+def test_cursor_mcp_install_and_uninstall_preserve_config_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = _stub_mcp_command(monkeypatch)
+    cursor_home = tmp_path / "cursor"
+    cursor_home.mkdir()
+    config = cursor_home / "mcp.json"
+    target = tmp_path / "dotfiles" / "cursor-mcp.json"
+    original = {"mcpServers": {"other": {"command": "user-server"}}}
+    target.parent.mkdir()
+    target.write_text(json.dumps(original), encoding="utf-8")
+    target.chmod(0o640)
+    config.symlink_to(Path("..") / "dotfiles" / target.name)
+
+    payload = install_slash_commands(
+        execute=True, surfaces=["cursor"], cursor_home=str(cursor_home)
+    )
+    assert _row(payload, "cursor_mcp_server")["status"] == "written"
+    assert config.is_symlink()
+    assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["loopx"] == entry
+    assert target.stat().st_mode & 0o777 == 0o640
+
+    payload = install_slash_commands(
+        execute=True, uninstall=True, surfaces=["cursor"], cursor_home=str(cursor_home)
+    )
+    assert _row(payload, "cursor_mcp_server")["status"] == "retired"
+    assert config.is_symlink()
+    assert json.loads(target.read_text(encoding="utf-8")) == original
+    assert target.stat().st_mode & 0o777 == 0o640
+
+
 def test_cursor_mcp_hand_edited_entry_becomes_the_users(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

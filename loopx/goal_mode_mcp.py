@@ -4,14 +4,13 @@ from __future__ import annotations
 import inspect
 import json
 import os
-import shutil
 import subprocess
-import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .command_invocation import pinned_python_module_command
 from .control_plane.host_adapter_settlement import (
     HostTodoSettlementRequest,
     host_vision_request,
@@ -91,8 +90,7 @@ class GoalModeMCPControlPlane:
         return (effective.get("execution_profile") or {}).get("stride_strategy") == "evidence_conditioned_v1"
 
     def command_prefix(self) -> list[str]:
-        executable = shutil.which("loopx")
-        return [executable] if executable else [sys.executable, "-m", "loopx.cli"]
+        return pinned_python_module_command("loopx.cli")
 
     @staticmethod
     def _runtime_profile_flag_is_unsupported(

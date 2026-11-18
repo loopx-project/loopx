@@ -181,7 +181,7 @@ Use a supported LoopX installation containing this module. Restart an idle host
 through its existing service path and resume the original Session. Do not change
 its sandbox, approval policy, workspace grants or authentication to make the
 tool work. The Python environment needs the optional `loopx[ego-source-reader]`
-extra (`mcp==1.28.1`); the base LoopX CLI has no Python runtime dependencies.
+extra (`mcp==1.30.0`); the base LoopX CLI has no Python runtime dependencies.
 Keep this environment outside PATH when another installation owns `loopx`.
 Disable by removing only this MCP entry and restarting that idle host. Keep a
 private configuration backup and the installed/source revision for rollback.

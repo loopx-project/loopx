@@ -805,7 +805,8 @@ def _read_mcp_marker(marker_path: Path) -> dict[str, Any]:
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
-    """Replace `path` in one step, so an interrupted run cannot truncate it."""
+    """Replace the effective file in one step, preserving a user's symlink."""
+    path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = path.stat().st_mode if path.exists() else None
     handle, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
@@ -844,37 +845,40 @@ def _merge_managed_mcp_json(
     to the host's schema and must not carry an entry the host has to parse.
     """
     marker_path = config_path.parent / CURSOR_MCP_MARKER_NAME
-    try:
-        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-        raw = json.loads(text) if text.strip() else {}
-    except (OSError, json.JSONDecodeError):
-        return invalid_status
-    if not isinstance(raw, dict):
-        return invalid_status
-    servers = raw.get("mcpServers")
-    if servers is None:
-        servers = {}
-    if not isinstance(servers, dict):
-        # A list-valued or scalar `mcpServers` is not something to overwrite:
-        # either the file follows a shape LoopX does not understand, or it is
-        # damaged. Both are the user's to resolve.
-        return invalid_status
 
-    existing = servers.get(MANAGED_MCP_KEY)
-    recorded = _read_mcp_marker(marker_path).get(MANAGED_MCP_KEY)
-    # Ownership is only demonstrable when the entry still matches what LoopX
-    # recorded writing. A hand-edited entry counts as the user's from then on.
-    loopx_owned = existing is not None and existing == recorded
+    def read_state() -> tuple[dict[str, object], dict[str, object], object, bool] | None:
+        try:
+            text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+            raw = json.loads(text) if text.strip() else {}
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        servers = raw.get("mcpServers")
+        if servers is None:
+            servers = {}
+        if not isinstance(servers, dict):
+            # A list-valued or scalar `mcpServers` is not something to overwrite:
+            # either the file follows a shape LoopX does not understand, or it is
+            # damaged. Both are the user's to resolve.
+            return None
 
-    # A marker that no longer describes reality is not just useless, it is
-    # dangerous: once the user deletes or edits the entry, the stale marker
-    # would still vouch for a future same-name entry and authorize deleting
-    # something LoopX never wrote. Ownership has to expire the moment it stops
-    # being demonstrable — and only in execute mode, so a dry run stays a
-    # read-only report.
-    if execute and recorded is not None and not loopx_owned:
-        marker_path.unlink(missing_ok=True)
+        existing = servers.get(MANAGED_MCP_KEY)
+        recorded = _read_mcp_marker(marker_path).get(MANAGED_MCP_KEY)
+        # Ownership is only demonstrable when the entry still matches what LoopX
+        # recorded writing. A hand-edited entry counts as the user's from then on.
+        loopx_owned = existing is not None and existing == recorded
 
+        # A stale marker could vouch for a future same-name entry LoopX never
+        # wrote. Expire ownership when it stops matching, except in dry runs.
+        if execute and recorded is not None and not loopx_owned:
+            marker_path.unlink(missing_ok=True)
+        return raw, servers, existing, loopx_owned
+
+    state = read_state()
+    if state is None:
+        return invalid_status
+    raw, servers, existing, loopx_owned = state
     if uninstall:
         if existing is None:
             return "absent"
@@ -897,6 +901,16 @@ def _merge_managed_mcp_json(
     command = command_factory()
     if command is None:
         return "skipped_mcp_dependency_missing"
+    # Provisioning can take long enough for the user to edit the config or
+    # revoke ownership. Merge only into a fresh, revalidated snapshot. External
+    # writers can still race this final read/write; atomic replacement prevents
+    # truncation, not concurrent lost updates.
+    state = read_state()
+    if state is None:
+        return invalid_status
+    raw, servers, existing, loopx_owned = state
+    if existing is not None and not loopx_owned:
+        return "skipped_user_owned_mcp_entry"
     entry = {"command": command[0], "args": [command[1]]}
     if existing == entry:
         return "unchanged"

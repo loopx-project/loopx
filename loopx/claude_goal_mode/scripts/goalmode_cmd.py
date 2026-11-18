@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +37,7 @@ DEFAULT_AGENT = "cc"
 sys.path.insert(0, str(HERE.parent / "hooks"))
 from goal_state import goal_context, find_registry, loop_md_path  # noqa: E402
 from stdio_utf8 import pin_utf8_stdio  # noqa: E402
+from loopx.command_invocation import pinned_python_module_command  # noqa: E402
 from loopx.control_plane.heartbeat.rules import (  # noqa: E402
     HOST_LOOP_SAFETY_RULE,
     RUNTIME_REPAIR_ROUTING_RULE,
@@ -47,9 +47,8 @@ from loopx.history import load_registry  # noqa: E402
 
 
 def gh_prefix():
-    """Cross-platform loopx invocation: the CLI shim if on PATH, else the module."""
-    exe = shutil.which("loopx")
-    return [exe] if exe else [sys.executable, "-m", "loopx.cli"]
+    """Run the CLI from the same release as this host adapter."""
+    return pinned_python_module_command("loopx.cli")
 
 
 def gh(args, cwd=None):

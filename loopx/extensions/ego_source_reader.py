@@ -282,6 +282,16 @@ def _url_fence(current: str, requested: str) -> str:
     )
 
 
+def _utf16_clip_script() -> str:
+    # Keep the existing JS code-unit budget without splitting a Unicode pair.
+    return (
+        "const clip=(text,limit)=>{let end=Math.min(text.length,limit);"
+        "if(end<text.length&&text.charCodeAt(end-1)>=0xD800&&text.charCodeAt(end-1)<=0xDBFF"
+        "&&text.charCodeAt(end)>=0xDC00&&text.charCodeAt(end)<=0xDFFF)end--;"
+        "return text.slice(0,end);};"
+    )
+
+
 def _script(config: ReaderConfig, url: str) -> str:
     # No caller-selected code, executable, browser, Page or CLI arguments.
     return (
@@ -292,11 +302,13 @@ def _script(config: ReaderConfig, url: str) -> str:
         # redirect returns no content, even within another authorized origin.
         _url_fence("current", "request.url") +
         "if(!request.ready)return {error:'source_content_not_ready'};"
-        "const text=document.body?.innerText||'';"
+        "const text=document.body?.innerText||'';" +
+        _utf16_clip_script() +
+        "const clipped=clip(text,request.limit);"
         "return {url:current.href,title:document.title,"
-        "text:text.slice(0,request.limit),truncated:text.length>request.limit,"
+        "text:clipped,truncated:clipped.length<text.length,"
         "image_count:document.images.length,images:Array.from(document.images).slice(0,128)"
-        ".map((im,index)=>({index,alt:im.alt.slice(0,512),"
+        ".map((im,index)=>({index,alt:clip(im.alt,512),"
         "natural_width:im.naturalWidth,natural_height:im.naturalHeight}))};"
         f"}},{{url:target.href,limit:{MAX_TEXT_CHARS},ready:sourceReady}});"
         f"console.log({json.dumps(MARKER)}+JSON.stringify({{...r,"
@@ -406,8 +418,9 @@ def _image_script(config: ReaderConfig, url: str, index: int, path: str) -> str:
         _url_fence("u", "r.url") +
         "const im=document.images[r.index];const b=im.getBoundingClientRect();"
         "if(b.width<2||b.height<2||b.width>r.edge||b.height>r.edge)"
-        "return {error:'source_image_bounds_unsupported'};"
-        "return {url:u.href,index:r.index,alt:im.alt.slice(0,512),src:im.currentSrc,"
+        "return {error:'source_image_bounds_unsupported'};" +
+        _utf16_clip_script() +
+        "return {url:u.href,index:r.index,alt:clip(im.alt,512),src:im.currentSrc,"
         "clip:{x:b.left+scrollX,y:b.top+scrollY,width:b.width,height:b.height}};},request);"
         "if(before.error){console.log('LOOPX_PUBLIC_SOURCE:'+JSON.stringify({...before,"
         "requested_url:requestedUrl,canonical_url:target.href}));}else{"

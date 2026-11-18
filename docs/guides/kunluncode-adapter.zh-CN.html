@@ -379,7 +379,7 @@ uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
           <tbody>
             <tr><td>LoopX shell CLI</td><td><code>loopx ...</code><br><code>loopx-kunluncode ...</code></td><td>LoopX 控制面</td><td>连接、添加 todo、启动 native controller 和读取合并状态</td></tr>
             <tr><td>KunlunCode TUI slash</td><td><code>/goal</code>、<code>/goal-pro</code>、<code>/plan</code>、<code>/mcp</code></td><td>KunlunCode session runtime</td><td>仍由 TUI 解析；适配器通过等价 app-server API 激活 Goal</td></tr>
-            <tr><td>LoopX MCP tools</td><td><code>should_run</code>、<code>claim_task</code>、<code>complete_task</code></td><td>LoopX MCP server</td><td>交互/兼容模式使用；native run 期间写工具失败关闭</td></tr>
+            <tr><td>LoopX MCP tools</td><td><code>should_run</code>、<code>list_todos</code>、<code>claim_task</code>、<code>complete_task</code>、<code>review_task_vision</code></td><td>LoopX MCP server</td><td>交互/兼容模式使用；native run 期间写工具失败关闭</td></tr>
           </tbody>
         </table></div>
 
@@ -504,7 +504,7 @@ export LOOPX_KUNLUN="$LOOPX_SOURCE/.venv/bin/loopx-kunluncode"
 
 kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode
 kunluncode config get mcp_servers</code></pre></div>
-        <p>状态应显示正确 goal 与 Agent；若安装 MCP，MCP test 应列出四个 LoopX 工具。源码贡献者还应运行 <code>examples/kunluncode-app-server-goal-pro-smoke.py --require</code>，证明 <code>2026-07-27</code>、<code>mode=strict</code>、<code>status=complete</code>、<code>verification_passed=true</code> 和跨进程同 thread 恢复。</p>
+        <p>状态应显示正确 goal 与 Agent；若安装 MCP，MCP test 应列出上述五个 LoopX 工具。<code>review_task_vision</code> 用于在原 Todo 完成后补齐遗漏的 vision 判断，不会重复完成 Todo 或扣减额度；native run 期间同样限制写入。源码贡献者还应运行 <code>examples/kunluncode-app-server-goal-pro-smoke.py --require</code>，证明 <code>2026-07-27</code>、<code>mode=strict</code>、<code>status=complete</code>、<code>verification_passed=true</code> 和跨进程同 thread 恢复。</p>
         <div class="table-scroll"><table>
           <thead><tr><th>状态字段</th><th>期望值</th></tr></thead>
           <tbody>
@@ -639,7 +639,7 @@ uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
           <li>connect 返回成功，goal id 与 Agent id 正确。</li>
           <li><code>.loopx/kunluncode.json</code> 未被 Git 跟踪。</li>
           <li>已有 goal 的其他 registered agents 被保留。</li>
-          <li>若安装 MCP，MCP test 显示四个工具。</li>
+          <li>若安装 MCP，MCP test 显示上述五个工具。</li>
           <li>status 显示 registered kunlun、host kunluncode、runtime profile kunluncode。</li>
           <li>真实 app-server smoke 证明 strict Goal、verifier PASS 与跨进程 resume。</li>
           <li>低风险 todo 只在 native Goal Pro verifier PASS 后完成 delivery/todo/quota writeback。</li>

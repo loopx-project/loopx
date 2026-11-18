@@ -12,6 +12,35 @@ from typing import Iterator, Mapping, Sequence
 _loopx_cli_bin: ContextVar[tuple[str, ...]] = ContextVar("loopx_cli_bin", default=("loopx",))
 
 
+_PINNED_MODULE_LAUNCHER = (
+    "import runpy,sys;"
+    "release_root,module=sys.argv[1:3];"
+    "sys.path.insert(0,release_root);"
+    "sys.argv=[module,*sys.argv[3:]];"
+    "runpy.run_module(module,run_name='__main__')"
+)
+
+
+def pinned_python_module_command(
+    module: str, *, interpreter: str | None = None, release_root: Path | None = None,
+) -> list[str]:
+    """Carry the loaded release into a child even when hosts sanitize its env.
+
+    Source-backed adapters may run in an MCP-only Python and a foreign project.
+    Pin the import root in argv so neither PATH nor cwd/PYTHONPATH selects a
+    different LoopX. Keep the interpreter path intact to retain its venv.
+    This is Python process transport; it owns no control-plane decisions.
+    """
+    return [
+        interpreter or sys.executable,
+        "-P",
+        "-c",
+        _PINNED_MODULE_LAUNCHER,
+        str(release_root if release_root is not None else Path(__file__).resolve().parent.parent),
+        module,
+    ]
+
+
 def validate_cli_bin(value: str) -> str:
     """Accept one executable name/path, never a shell command or empty route."""
     if not value.strip() or value.startswith("-") or any(ord(c) < 32 for c in value):

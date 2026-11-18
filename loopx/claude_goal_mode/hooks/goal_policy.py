@@ -53,7 +53,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -63,6 +62,7 @@ from pathlib import Path
 # is the single source of truth; there is no separate active-state file.
 from goal_state import active_context
 from stdio_utf8 import pin_utf8_stdio
+from loopx.command_invocation import pinned_python_module_command
 
 # Read-only tools are always allowed under goal-mode. Edit/Write are scoped to
 # write_scope; Bash is gated by a destructive-command denylist. (No OS sandbox in
@@ -112,8 +112,7 @@ def _usable_cwd(value: str) -> bool:
 
 
 def _gh_prefix():
-    _exe = shutil.which("loopx")
-    return [_exe] if _exe else [__import__("sys").executable, "-m", "loopx.cli"]
+    return pinned_python_module_command("loopx.cli")
 
 
 def emit(decision=None, reason=""):
