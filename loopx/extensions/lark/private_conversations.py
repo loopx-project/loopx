@@ -27,7 +27,7 @@ from ...capabilities.native_chat.external_conversations import (
     STEWARD_BINDING_ADOPTION_PENDING,
 )
 from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
-from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint, reply_image_workspace
 from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, normalize_chat_image_attachments
 from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
@@ -49,12 +49,12 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import normalize_lark_outbound_text, present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
-from .private_delivery_discovery import (PrivateDeliveryDiscovery, allowed_answer_image_urls, answer_image_source_matches,
-    answer_media_dispatch, historical_image_reply_matches, prepared_steward_binding_waits, resumable_answer_image_session)
+from .private_delivery_discovery import (PrivateDeliveryDiscovery, answer_image_source_matches, answer_media_dispatch,
+    historical_image_reply_matches, prepared_steward_binding_waits, private_answer_images, resumable_answer_image_session)
 from .private_ingress import PrivateSourceUnavailable, private_source_text, recovery_source_matches, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
-from .return_files import uploaded_chat_images, verify_chat_images
+from .return_files import read_answer_images, uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
                                presentation_phase, presentation_stream, project_progress)
 
@@ -68,72 +68,6 @@ CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/
 ANSWER_IMAGE_RETRY_SECONDS = 300
 ANSWER_IMAGE_SOURCE_TIMEOUT = 5
 _UNSUPPORTED_MEDIA_LABELS = {"audio": "音频", "file": "文件", "media": "视频"}
-_MARKDOWN_CODE_SPAN = re.compile(r"((?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\2(?!\x60))")
-_ANSWER_IMAGE = re.compile(r"""(?<!\\)!\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^\s<>()]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)""")
-
-
-def _private_answer_images(text: str) -> tuple[str, list[str]]:
-    """Remove image previews from provider prose, leaving the canonical answer alone."""
-    lines, targets = [], []
-    fence = None
-    for line in text.splitlines(keepends=True):
-        marker = re.match(r"^ {0,3}(\x60{3,}|~{3,})(.*)$", line)
-        if marker and fence is None:
-            fence = marker[1]
-        elif marker and fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
-            fence = None
-        elif not fence and not line.startswith(("    ", "\t")):
-            def link(match: re.Match[str]) -> str:
-                url = match[2] or match[3]
-                if url not in targets:
-                    targets.append(url)
-                caption = match[1] or f"图片 {targets.index(url) + 1}"
-                return f"[{caption}](<{url}>)" if url.startswith("https://") and " " in url else (
-                    f"[{caption}]({url})" if url.startswith("https://") else caption)
-
-            start, chunks = 0, []
-            for span in _MARKDOWN_CODE_SPAN.finditer(line):
-                chunks.extend((_ANSWER_IMAGE.sub(link, line[start:span.start()]), span[0]))
-                start = span.end()
-            line = "".join((*chunks, _ANSWER_IMAGE.sub(link, line[start:])))
-        lines.append(line)
-    return "".join(lines), targets
-
-
-def _private_answer_image(url: str, *, allowed_urls: set[str], deadline: float, index: int) -> dict[str, Any]:
-    # Reuse anonymous HTTPS address pinning, redirect checks and byte limits.
-    # No local file, signed-in browser or model tool authority is involved.
-    from urllib.parse import urlsplit
-
-    from ..public_source_reader import fetch
-
-    host = urlsplit(url).hostname
-    same_host_urls = {candidate for candidate in allowed_urls if urlsplit(candidate).hostname == host}
-    _, mime, data = fetch(url, deadline=deadline, allowed_urls=same_host_urls)
-    signatures = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/gif": b"GIF8"}
-    if not ((mime in signatures and data.startswith(signatures[mime]))
-            or (mime == "image/webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
-        raise ValueError("unsupported original image")
-    return {"id": f"reply-image-{index}", "name": f"original-{index}.{mime.split('/')[1]}",
-            "mime_type": mime, "size": len(data), "data_url": f"data:{mime};base64," + base64.b64encode(data).decode()}
-
-
-def _read_answer_images(source: str, targets: list[str], cached: list | None,
-                        delivery: Mapping[str, Any]) -> list[dict[str, Any]]:
-    if (delivery.get("started") and not delivery.get("attempt")) or (delivery.get("attempt") and cached is None):
-        raise ValueError("image delivery acknowledgement or frozen bytes are unavailable")
-    deadline = time.monotonic() + 15
-    allowed_urls = allowed_answer_image_urls(source, targets, deadline=deadline)
-    if not allowed_urls:
-        raise ValueError("image was not referenced by the original source")
-    images = normalize_chat_image_attachments([
-        _private_answer_image(url, allowed_urls=allowed_urls, deadline=deadline, index=index)
-        for index, url in enumerate(targets, 1)])
-    # Older queued bytes were fetched before redirect authorization. Keep
-    # any recorded provider intent tied to the same bytes.
-    if cached is not None and cached != images:
-        raise ValueError("unverified cached image bytes changed")
-    return images
 
 
 def _is_answer_image_followup(record: Mapping[str, Any]) -> bool:
@@ -1511,7 +1445,7 @@ class LarkPrivateConversations:
         return bool(phase_state["verified"])
 
     def _deliver_completed_answer(self, path: Path, record: dict[str, Any], text: str, *,
-                                  inbox: Callable[[], Path]) -> bool:
+                                  inbox: Callable[[], Path], answer_image_plan: list | None = None) -> bool:
         phase = presentation_phase(record, "terminal")
         media_phase = "answer_images." + phase
         old = record["deliveries"].get(phase) or {}
@@ -1519,9 +1453,23 @@ class LarkPrivateConversations:
             return self._deliver(path, record, "terminal", text, inbox=inbox)
         if record["event"].get("chat_type") != "p2p" or record["source"].get("private_human_message") is not True:
             return self._deliver(path, record, "terminal", text, inbox=inbox)
-        body, targets = _private_answer_images(text)
-        if not targets:
+        body, remote_targets = private_answer_images(text)
+        if not remote_targets and answer_image_plan is None:
             return self._deliver(path, record, "terminal", text, inbox=inbox)
+        targets = remote_targets if answer_image_plan is None else answer_image_plan
+
+        def local_scope(session: dict | None, turn: dict | None) -> tuple[Path, str] | None:
+            if session is None or turn is None:
+                return None
+            workspace = reply_image_workspace(session, turn)
+            if workspace is None:
+                return None
+            project_ref = session["project_context"]["project_ref"]
+            current = self.core.controller.project_contexts.available()
+            if any(row["project_ref"] == project_ref and row["workspace_path"] == str(workspace)
+                   and row["grant"] == "workspace_write" for row in current):
+                return workspace, turn["turn_id"]
+            return None
 
         def authorized() -> bool:
             native = self.core.read_request(record["request_ref"])
@@ -1529,18 +1477,26 @@ class LarkPrivateConversations:
             if native.get("status") != "accepted" or not same_request:
                 return False
             turn = self.core.controller.store.load_turn(native["session_id"], native["turn_id"])
-            return resumable_answer_image_session(self.core, native, turn) is not None
+            session = resumable_answer_image_session(self.core, native, turn)
+            return session is not None and (answer_image_plan is None or (
+                local_scope(session, turn) is not None
+                and (turn.get("response") or {}).get("answer_image_plan") == answer_image_plan))
 
         state = record.setdefault("answer_images", {})
         # Hold the source and the exact completed body fixed across retries.
         digest = hashlib.sha256(text.encode()).hexdigest()
         if state.setdefault("answer_sha256", digest) != digest:
             return False
+        if answer_image_plan is not None:
+            plan_digest = hashlib.sha256(json.dumps(answer_image_plan, sort_keys=True).encode()).hexdigest()
+            if state.setdefault("image_plan_sha256", plan_digest) != plan_digest:
+                return False
         if old.get("verified") is not True:
             state.setdefault("status", "pending")
             _atomic_write_json(path, record)
-            self._deliver(path, record, "terminal", body + "\n\n原图会另发；有链接的图名可打开原始来源。",
-                          inbox=inbox, finalize_source=False)
+            caption = ("图片将单独核验和发送。" if answer_image_plan is not None
+                       else "原图会另发；有链接的图名可打开原始来源。")
+            self._deliver(path, record, "terminal", body + "\n\n" + caption, inbox=inbox, finalize_source=False)
             # Release the body worker before the pending image work.
             return False
         if state.get("status") == "delivered" and record["deliveries"].get(media_phase, {}).get("images_verified") is True:
@@ -1553,14 +1509,23 @@ class LarkPrivateConversations:
         try:
             event = record["event"]
             origin = event.get("content")
-            if (len(targets) > CHAT_IMAGE_MAX_COUNT or event.get("message_type") != "text"
+            if (not isinstance(targets, list) or not 1 <= len(targets) <= CHAT_IMAGE_MAX_COUNT
+                    or event.get("message_type") != "text"
                     or not isinstance(origin, str) or not authorized() or not self._source_authority(
                         record, record["profile"], event["chat_id"], event["message_id"], expected_text=origin)[1]):
                 raise ValueError("answer image source unavailable or not authorized")
+            if answer_image_plan is not None and (
+                    None in targets or [target for target in targets if isinstance(target, str)] != remote_targets):
+                raise ValueError("the completed answer contains an unavailable image")
             images = state.get("attachments")
             if images is None or state.get("source_urls_verified") is not True:
-                images = state["attachments"] = _read_answer_images(origin, targets, images,
-                                                                    record["deliveries"].get(media_phase, {}))
+                scope = None
+                if answer_image_plan is not None:
+                    store = self.core.controller.store
+                    scope = local_scope(store.load_session(record["session_id"]),
+                                        store.load_turn(record["session_id"], record["turn_id"]))
+                images = state["attachments"] = read_answer_images(origin, targets, images,
+                    record["deliveries"].get(media_phase, {}), local_scope=scope)
                 state["source_urls_verified"] = True
                 _atomic_write_json(path, record)
             if self._deliver(path, record, media_phase, "原图（按正文顺序）", inbox=inbox,
@@ -1578,8 +1543,9 @@ class LarkPrivateConversations:
             pass
         state["status"] = "unverified"
         _atomic_write_json(path, record)
-        self._deliver(path, record, "answer_image_notice." + phase,
-                      "正文已送达，图片尚未核验送达。有链接的图名可打开原始来源。",
+        notice = ("正文已送达，图片尚未核验送达。"
+                  if answer_image_plan is not None else "正文已送达，图片尚未核验送达。有链接的图名可打开原始来源。")
+        self._deliver(path, record, "answer_image_notice." + phase, notice,
                       inbox=inbox, authorization_check=authorized, finalize_source=False)
         return False
 
@@ -1604,7 +1570,7 @@ class LarkPrivateConversations:
         if (not isinstance(answer := (turn.get("response") or {}).get("message"), str)
                 or hashlib.sha256(answer.encode()).hexdigest() != plan["answer_sha256"]
                 or terminal.get("text") != _presentation_text(answer)
-                or not _private_answer_images(answer)[1]
+                or not private_answer_images(answer)[1]
                 or (session := resumable_answer_image_session(self.core, native, turn)) is None):
             raise ValueError("original completed answer or its authority changed")
         return session
@@ -1689,7 +1655,7 @@ class LarkPrivateConversations:
                 attachments = state.get("attachments")
                 recheck_sources = attachments is None or state.get("source_urls_verified") is not True
                 if recheck_sources:
-                    attachments = _read_answer_images(event["content"], [item["url"] for item in plan["images"]],
+                    attachments = read_answer_images(event["content"], [item["url"] for item in plan["images"]],
                                                       attachments, record["deliveries"].get(phase, {}))
                 digests = [hashlib.sha256(base64.b64decode(
                     picture["data_url"].split(",", 1)[1], validate=True)).hexdigest() for picture in attachments]
@@ -1726,7 +1692,7 @@ class LarkPrivateConversations:
             return 1
 
     def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path], finalizing: bool = False) -> bool:
-        text = _presentation_text(_private_answer_images(text)[0] if record["event"].get("chat_type") == "p2p" else text)
+        text = _presentation_text(private_answer_images(text)[0] if record["event"].get("chat_type") == "p2p" else text)
         progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
         if not progress.get("verified"):
             return self._deliver(path, record, "progress", text, inbox=inbox)
@@ -2566,7 +2532,8 @@ class LarkPrivateConversations:
                         or _command_text(str(record.get("response_code") or "")) or str(record.get("response") or ""))
                     if record.get("status_snapshot"):
                         response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
-                if (self._deliver_completed_answer(path, record, response, inbox=inbox) if completed_answer else
+                if (self._deliver_completed_answer(path, record, response, inbox=inbox,
+                        answer_image_plan=(turn.get("response") or {}).get("answer_image_plan")) if completed_answer else
                         self._deliver(path, record, "terminal", response, inbox=inbox)):
                     if control_receipt_first:
                         # The verified result is the useful control receipt.
