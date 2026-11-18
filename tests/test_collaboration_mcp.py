@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 
@@ -65,9 +66,12 @@ main()
 ''')
 
     async def exercise():
+        turn_key = "sha256:" + "c" * 64
         params = StdioServerParameters(command=sys.executable, args=[str(launcher),
             "--runtime-root", str(tmp_path), "--registry", str(registry), "--goal-id", "delivery",
-            "--agent-id", "worker", "--workspace", str(tmp_path)])
+            "--agent-id", "worker", "--workspace", str(tmp_path)], env={**os.environ,
+                "LOOPX_TURN_KEY": turn_key, "LOOPX_TURN_GOAL_ID": "delivery",
+                "LOOPX_TURN_AGENT_ID": "worker", "LOOPX_TURN_WORKSPACE": str(tmp_path.resolve())})
         async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
             await session.initialize()
             first = await session.call_tool("read_context", {})
@@ -89,7 +93,8 @@ main()
             assert error["ok"] is False and error["read_complete"] is False
             recovery = error["recovery"]
             assert recovery["scope"] == {"goal_id": "delivery", "agent_id": "worker", "goal_ref": ref}
-            assert recovery["read_arguments"] == {"cursor": cursor, "operation_cursor": None, "request_id": None}
+            assert recovery["read_arguments"] == {"cursor": cursor, "operation_cursor": None,
+                "request_id": None, "turn_instance_id": turn_key}
             assert {row["request_id"] for row in recovery["requests"]} == {row["request_id"] for row in tail}
             assert recovery["peer_returns"] == [{"request": {"request_id": rid, "goal_id": "delivery",
                 "agent_id": "source", "goal_ref": ref}, "result_key": "conclusion"}]
@@ -101,12 +106,22 @@ main()
             assert sum(bool(row) for row in receipts) == 1
             assert {path: path.read_bytes() for path in before} == before
             assert not (_root(tmp_path) / "replies" / rid / "conclusion.delivery.json").exists()
+            disposition = {"request_id": rid, "disposition": "accepted"}
+            refused = await session.call_tool("consume_peer_result", disposition)
+            assert refused.isError and "read the peer conclusion" in refused.content[0].text
             recovered = await session.call_tool("read_context", {"cursor": cursor})
             assert not recovered.isError
             assert {row["request_id"] for row in json.loads(recovered.content[0].text)["items"]} == {row["request_id"] for row in tail}
             assert all(path.read_bytes() == data for path, data in before.items())
-            assert (_root(tmp_path) / "replies" / rid / "conclusion.delivery.json").is_file()
+            delivery = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
+            assert json.loads(delivery.read_text())["model_turn"]["turn_instance_id"] == turn_key
             assert not list((_root(tmp_path) / "replies").rglob("*.consumed.json"))
+            for replay in (False, True):
+                result = await session.call_tool("consume_peer_result", disposition)
+                assert not result.isError
+                acknowledgement = json.loads(result.content[0].text)
+                assert acknowledgement["status"] == "consumed"
+                assert acknowledgement.get("replay", False) is replay
             with source_session_registry_transaction(registry, operation="revoke_fixture_agent") as transaction:
                 changed = transaction.payload_copy()
                 changed["goals"][0]["coordination"]["registered_agents"] = ["source"]
@@ -116,6 +131,17 @@ main()
             assert '"recovery"' not in revoked.content[0].text
 
     asyncio.run(exercise())
+
+
+def test_collaboration_mcp_rejects_mismatched_host_bound_turn_scope(tmp_path, monkeypatch):
+    from loopx.collaboration_mcp import _bound_work_turn_identity
+
+    monkeypatch.setenv("LOOPX_TURN_KEY", "sha256:" + "d" * 64)
+    monkeypatch.setenv("LOOPX_TURN_GOAL_ID", "other")
+    monkeypatch.setenv("LOOPX_TURN_AGENT_ID", "worker")
+    monkeypatch.setenv("LOOPX_TURN_WORKSPACE", str(tmp_path.resolve()))
+    with pytest.raises(ValueError, match="scope does not match"):
+        _bound_work_turn_identity("delivery", "worker", tmp_path)
 
 
 def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
@@ -173,6 +199,11 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
                 "consume_peer_result",
                 "original_conversation_collaboration",
             }
+            read_tool = next(tool for tool in tools.tools if tool.name == "read_context")
+            consume_tool = next(tool for tool in tools.tools if tool.name == "consume_peer_result")
+            assert set(read_tool.inputSchema["properties"]) == {"cursor"}
+            assert set(consume_tool.inputSchema["properties"]) == {"request_id", "disposition", "result_key"}
+            assert set(consume_tool.inputSchema["required"]) == {"request_id", "disposition"}
             for tool in tools.tools:
                 assert not {
                     "agent_id",

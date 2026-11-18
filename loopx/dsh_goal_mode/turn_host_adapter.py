@@ -508,6 +508,7 @@ def _execute_turn_host_request(
             # environment allowlist: the SDK still inherits the parent env.
             runner_arguments["env"] = {
                 **dict(config.env or {}),
+                "LOOPX_TURN_KEY": str(request.get("turn_key") or ""),
                 "LOOPX_TURN_GOAL_ID": str(work_identity.get("goal_id") or ""),
                 "LOOPX_TURN_AGENT_ID": str(work_identity.get("agent_id") or ""),
                 "LOOPX_TURN_TODO_ID": str(work_identity.get("todo_id") or ""),

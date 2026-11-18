@@ -102,9 +102,12 @@ The original failed Turn remains failed; the panel separately reports a recovere
 result. A failure before saved model output remains visible and cannot be
 silently rerun as a new Turn under the same identity.
 
-Read the result through the requester's existing manager inbox and use
-`acknowledge-return` / MCP `consume_peer_result` to record consumption after
-checking it. The saved requester route is verified at dispatch, source control,
+Read the result with the requester's Turn-bound `read_context` tool. After
+checking it, use `consume_peer_result` or the acknowledgement command in that
+tool's result to record acceptance, deferral or rejection. A CLI Inbox read
+can inspect the conclusion and leaves it pending until a bound tool supplies
+it. Deferral keeps the same result visible on the next Turn. The
+saved requester route is verified at dispatch, source control,
 requester read and consumption. Results do not automatically go to the
 recipient conversation's external audience.
 

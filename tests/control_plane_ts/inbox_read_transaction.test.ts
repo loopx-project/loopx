@@ -219,6 +219,43 @@ test("a legal combined Inbox and peer-return page retains content beyond the inl
   for (const item of (page.peer_returns as JsonObject).items as JsonObject[]) assert.equal(item.text, text);
 });
 
+test("peer-return transport reads remain pending until a concrete model Turn receives them", async t => {
+  const f = fixture(t), operations = join(f.base, "peer-operations", targets.exact);
+  const receiver = join(f.base, "entries", "5ab0deb53efce4b1d0cf830afb67ce662e0e9aff3127e2424a4ce768212b5586");
+  const row = f.row(101, {agent_id: "reviewer", source_kind: "peer", source_agent_id: "worker",
+    brief: {schema_version: "collaboration_brief_v0", purpose: "Independent review", context: "Inspect",
+      constraints: [], inputs: [], acceptance: ["Return findings"], return_requirement: "Reply"}});
+  const identity = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref"]
+    .map(key => [key, row[key as keyof typeof row]]));
+  for (const folder of [operations, receiver, join(f.base, "decisions"), join(f.base, "roundtrips")]) {
+    mkdirSync(folder, {recursive: true});
+  }
+  writeFileSync(join(receiver, row.request_id + ".json"), JSON.stringify(row));
+  writeFileSync(join(operations, row.request_id + ".json"), JSON.stringify(row));
+  writeFileSync(join(f.base, "roundtrips", row.request_id + ".json"), JSON.stringify(identity));
+  writeFileSync(join(f.base, "decisions", row.request_id + ".json"), JSON.stringify({...identity, decision: "adopt"}));
+  const replies = join(f.base, "replies", row.request_id);
+  mkdirSync(replies, {recursive: true});
+  writeFileSync(join(replies, "conclusion.json"), JSON.stringify({...identity, phase: "conclusion",
+    decision: "adopt", text: "Checked result", created_at: "2026-10-19T00:00:00Z"}));
+  const delivery = join(replies, "conclusion.delivery.json");
+
+  await assert.rejects(f.call("receiver_read", {turn_instance_id: "bad/turn"}), /work Turn identity is invalid/);
+  assert.throws(() => readFileSync(delivery), /ENOENT/);
+  await f.call("receiver_read");
+  const transport = JSON.parse(readFileSync(delivery, "utf8"));
+  assert.equal(transport.kind, "requester_cli_read");
+  assert.equal(transport.model_turn, undefined);
+  await f.call("receiver_read", {turn_instance_id: "turn-a"});
+  const supplied = readFileSync(delivery);
+  assert.deepEqual(JSON.parse(supplied.toString()).model_turn,
+    {turn_instance_id: "turn-a", supplied_at: "2026-10-19T00:00:00.000000+00:00"});
+  await f.call("receiver_read", {turn_instance_id: "turn-a"});
+  assert.deepEqual(readFileSync(delivery), supplied);
+  await f.call("receiver_read", {turn_instance_id: "turn-b"});
+  assert.equal(JSON.parse(readFileSync(delivery, "utf8")).model_turn.turn_instance_id, "turn-b");
+});
+
 test("a large private agenda lets another runtime request finish before the scan completes", async t => {
   const large = fixture(t), other = fixture(t);
   for (let n = 1; n <= 256; n++) large.publish(n);
