@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+from importlib.metadata import PathDistribution
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -182,6 +185,56 @@ def test_installation_scope_uses_current_distribution_and_console_script(
     assert observed["module_path"] == Path(doctor.__file__).resolve()
     assert observed["deep_checks"]["invocation_path"] == invocation
     assert observed["deep_checks"]["distribution_root"] == str(distribution_root)
+
+
+@pytest.mark.parametrize("module", ["cli.py", "entrypoint.py"])
+@pytest.mark.parametrize("launcher_record", ["owned", "missing", "other_distribution", "source_manifest"])
+def test_full_doctor_keeps_packaged_module_readback_on_its_python_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module: str, launcher_record: str,
+) -> None:
+    module_path = Path(doctor.__file__).resolve()
+    owned_console = tmp_path / ("loopx.exe" if os.name == "nt" else "loopx")
+    owned_console.touch(mode=0o700)
+    foreign_console = tmp_path / "other" / owned_console.name
+    foreign_console.parent.mkdir()
+    foreign_console.touch(mode=0o700)
+    dist_info = tmp_path / "loopx.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Name: loopx\nVersion: 2.4.0\n", encoding="utf-8")
+    recorded_module = (
+        tmp_path / "other/loopx/doctor.py" if launcher_record == "other_distribution" else module_path
+    )
+    if launcher_record == "source_manifest":
+        (dist_info / "SOURCES.txt").write_text(f"{module_path.as_posix()}\n", encoding="utf-8")
+    else:
+        with (dist_info / "RECORD").open("w", encoding="utf-8", newline="") as record:
+            writer = csv.writer(record)
+            writer.writerow([recorded_module.as_posix(), "", ""])
+            if launcher_record != "missing":
+                writer.writerow([owned_console.as_posix(), "", ""])
+    monkeypatch.setattr(doctor, "distribution", lambda _name: PathDistribution(dist_info))
+    monkeypatch.setattr(doctor.sys, "argv", [str(module_path.with_name(module)), "doctor"])
+    monkeypatch.setattr(
+        doctor, "resolve_command_path", lambda name: foreign_console if name == "loopx" else None,
+    )
+    monkeypatch.setattr(
+        "loopx.control_plane.effect_runtime.collect_effect_runtime_readiness",
+        lambda *, deep: {"ready": True, "status": "ready"},
+    )
+
+    runtime = tmp_path / "runtime"
+    result = doctor.collect_doctor(runtime_root_override=str(runtime))
+    assert result["path"]["loopx_on_path"] == str(foreign_console)
+    expected = {
+        "owned": str(owned_console),
+        "missing": None,
+        "other_distribution": str(foreign_console),
+        "source_manifest": str(foreign_console),
+    }
+    assert result["path"]["loopx"] == expected[launcher_record]
+    checks = {check["id"]: check for check in result["checks"]}
+    assert checks["command_available"]["ok"] is (launcher_record != "missing")
+    assert checks["command_resolves"]["ok"] is (launcher_record != "missing")
 
 
 def test_runtime_projection_diagnostics_bound_one_stalled_source_and_retry(
