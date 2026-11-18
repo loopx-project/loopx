@@ -1457,6 +1457,19 @@ def build_goal_frontier_projection_context_from_status(
         agent_id=agent_id,
         neutral_classifications=neutral_replan_ack_classifications,
     )
+    # Receipt recovery supplies the owned ACK history, including an empty list.
+    # The status snapshot's newest ACK can belong to another Goal instance, so
+    # it must not satisfy or replace this Turn's review.
+    scoped_ack_history = (
+        status_payload.get("receipt_bound_replan_ack_candidates")
+        if receipt_bound_replan_obligation_id
+        else None
+    )
+    if isinstance(scoped_ack_history, list):
+        latest_agent_replan_ack = next(
+            (candidate for candidate in scoped_ack_history if isinstance(candidate, dict)),
+            None,
+        )
     latest_replan_ack_feedback = latest_replan_ack_feedback_from_status_payload(
         status_payload,
         goal_id=goal_id,
@@ -1667,11 +1680,7 @@ def build_goal_frontier_projection_context_from_status(
     # current-frontier transition: the settlement owner validates its exact
     # Goal, Agent, obligation, chronology, and Turn before it can close the old
     # writeback. Projected asset ACKs never enter this candidate.
-    raw_historical_ack_candidates = (
-        status_payload.get("receipt_bound_replan_ack_candidates")
-        if receipt_bound_replan_obligation_id
-        else None
-    )
+    raw_historical_ack_candidates = scoped_ack_history
     historical_ack_candidates = [
         {"historical_ack": dict(candidate)}
         for candidate in (
@@ -1681,7 +1690,11 @@ def build_goal_frontier_projection_context_from_status(
         )[:8]
         if isinstance(candidate, dict)
     ]
-    if latest_agent_replan_ack is not None and receipt_bound_replan_obligation_id:
+    if (
+        latest_agent_replan_ack is not None
+        and receipt_bound_replan_obligation_id
+        and not isinstance(raw_historical_ack_candidates, list)
+    ):
         historical_ack_candidates.append(
             {"historical_ack": latest_agent_replan_ack}
         )

@@ -666,6 +666,73 @@ def _project_unbound_work_fields(payload: dict[str, Any]) -> None:
         recommendation["spend_policy"] = reason
 
 
+def _restore_replan_obligation_without_foreign_acks(
+    status_payload: dict[str, Any], *, goal_id: str, agent_id: str,
+    goal_ref: Mapping[str, Any] | None,
+) -> None:
+    """Recompute the open review after removing another instance's ACK rows."""
+    from ...status import autonomous_replan_obligation_from_runs
+    from ..work_items.autonomous_replan_ack import drop_unowned_recorded_replan_acks
+    from ..work_items.project_asset import attach_active_state_project_asset_fields
+
+    run_history = status_payload.get("run_history")
+    goals = run_history.get("goals") if isinstance(run_history, dict) else None
+    goal = next(
+        (
+            item for item in goals
+            if isinstance(item, dict) and str(item.get("id") or "") == goal_id
+        ),
+        None,
+    ) if isinstance(goals, list) else None
+    if not isinstance(goal, dict) or not isinstance(goal.get("latest_runs"), list):
+        return
+    filtered, changed = drop_unowned_recorded_replan_acks(
+        goal["latest_runs"], goal_id=goal_id, goal_ref=goal_ref,
+    )
+    if not changed:
+        return
+    goal["latest_runs"] = filtered
+    kept_ack_times = {
+        run.get("generated_at")
+        for run in filtered
+        if isinstance(run.get("autonomous_replan_ack"), dict)
+    }
+    semantic = goal.get("semantic_history")
+    agents = semantic.get("agents") if isinstance(semantic, dict) else None
+    if isinstance(agents, list):
+        for context in agents:
+            if not isinstance(context, dict):
+                continue
+            ack_run = context.get("latest_autonomous_replan_ack_run")
+            if (
+                isinstance(ack_run, dict)
+                and ack_run.get("generated_at") not in kept_ack_times
+            ):
+                context.pop("latest_autonomous_replan_ack_run", None)
+    queue = status_payload.get("attention_queue")
+    items = queue.get("items") if isinstance(queue, dict) else None
+    item = next(
+        (
+            entry for entry in items
+            if isinstance(entry, dict) and entry.get("goal_id") == goal_id
+        ),
+        None,
+    ) if isinstance(items, list) else None
+    if not isinstance(item, dict):
+        return
+    for target in (item, item.get("project_asset")):
+        if not isinstance(target, dict):
+            continue
+        target.pop("autonomous_replan_obligation", None)
+        target.pop("autonomous_replan_obligations_by_agent", None)
+        target.pop("autonomous_replan_ack", None)
+    attach_active_state_project_asset_fields(
+        item, latest_runs=filtered,
+        autonomous_replan_obligation_from_runs=autonomous_replan_obligation_from_runs,
+        agent_lane_id=agent_id,
+    )
+
+
 def build_live_quota_should_run_decision(
     status_payload: dict[str, Any],
     *,
@@ -799,6 +866,9 @@ def build_live_quota_should_run_decision(
             guard_recorded_at=receipt_bound_guard_fields["receipt_bound_guard_recorded_at"],
             guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"],
             goal_ref=goal_ref)
+        _restore_replan_obligation_without_foreign_acks(
+            decision_status_payload, goal_id=goal_id, agent_id=agent_id, goal_ref=goal_ref,
+        )
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )

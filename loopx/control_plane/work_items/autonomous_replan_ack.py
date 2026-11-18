@@ -274,17 +274,28 @@ def _event_details(event: dict[str, Any]) -> dict[str, Any]:
     return details if isinstance(details, dict) else {}
 
 
+def _parsed_exact_goal_ref(value: object) -> dict[str, str] | None:
+    """Parse one exact GoalRef, keeping the native string-only rule."""
+    if not isinstance(value, Mapping):
+        return None
+    goal_id = value.get("goal_id")
+    instance_id = value.get("goal_instance_id")
+    if not isinstance(goal_id, str) or not isinstance(instance_id, str):
+        return None
+    try:
+        return exact_goal_ref(goal_id, instance_id)
+    except ValueError:
+        return None
+
+
 def _owner_goal_ref(
     goal_ref: Mapping[str, Any] | None, *, goal_id: str,
 ) -> dict[str, str] | None:
     """Normalize the quota owner. None is the alias owner."""
     if goal_ref is None:
         return None
-    owner = exact_goal_ref(
-        str(goal_ref.get("goal_id") or ""),
-        str(goal_ref.get("goal_instance_id") or ""),
-    )
-    if owner["goal_id"] != str(goal_id or "").strip():
+    owner = _parsed_exact_goal_ref(goal_ref)
+    if owner is None or owner["goal_id"] != str(goal_id or "").strip():
         raise ValueError("historical ACK GoalRef does not match goal_id")
     return owner
 
@@ -295,21 +306,42 @@ def _record_owned_by_goal_ref(
     """Match quotaOwnerOwnsProjection for one rollout or run-index row.
 
     An alias owner keeps only rows with no goal_ref. An exact owner keeps
-    only rows whose goal_ref is that exact Goal instance.
+    only rows whose goal_ref is that exact Goal instance. Non-string ids are
+    not owned, matching the strict GoalRef parser.
     """
     if owner is None:
         return "goal_ref" not in record
-    value = record.get("goal_ref")
-    if "goal_ref" not in record or not isinstance(value, Mapping):
+    if "goal_ref" not in record:
         return False
-    try:
-        parsed = exact_goal_ref(
-            str(value.get("goal_id") or ""),
-            str(value.get("goal_instance_id") or ""),
-        )
-    except ValueError:
-        return False
+    parsed = _parsed_exact_goal_ref(record.get("goal_ref"))
     return parsed == owner
+
+
+def drop_unowned_recorded_replan_acks(
+    runs: list[dict[str, Any]] | None, *, goal_id: str,
+    goal_ref: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Drop recorded replan ACKs that belong to another Goal instance.
+
+    Other run rows stay. Alias owners keep ACKs with no goal_ref; an exact
+    owner keeps only its own goal_ref.
+    """
+    owner = _owner_goal_ref(goal_ref, goal_id=goal_id)
+    kept: list[dict[str, Any]] = []
+    changed = False
+    for run in runs or []:
+        if not isinstance(run, dict):
+            continue
+        ack = run.get("autonomous_replan_ack")
+        if (
+            isinstance(ack, dict)
+            and ack.get("recorded") is True
+            and not _record_owned_by_goal_ref(run, owner)
+        ):
+            changed = True
+            continue
+        kept.append(run)
+    return kept, changed
 
 
 def _owned_records(

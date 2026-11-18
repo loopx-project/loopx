@@ -9479,3 +9479,99 @@ def test_retired_instance_writeback_cannot_drop_same_second_historical_ack(
     decision = (recovery.get("replan_action_packet") or {}).get("decision")
     assert rc == 0, recovery
     assert decision == "historical_ack_recorded", recovery.get("replan_action_packet")
+
+
+def _decision_summary(rc: int, payload: dict[str, Any]) -> dict[str, Any]:
+    packet = payload.get("replan_action_packet")
+    packet = packet if isinstance(packet, dict) else {}
+    return {
+        "rc": rc,
+        "decision": payload.get("decision"),
+        "error_code": payload.get("error_code"),
+        "packet_decision": packet.get("decision"),
+        "effective_action": payload.get("effective_action"),
+        "should_run": payload.get("should_run"),
+    }
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_only_retired_instance_ack_keeps_the_original_replan(
+    tmp_path: Path, provider: str,
+) -> None:
+    """A newer ACK from a retired instance must not stop the current recovery.
+
+    With no owned historical ACK, the admitted Turn keeps its replan. The
+    same decision remains when the shared run index contains only the retired
+    instance's later confirmation.
+    """
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    original_turn = "turn-retired-ack-only"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    recorded = datetime.fromisoformat(
+        admitted["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00"))
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID)
+    baseline_rc, baseline = _run_cli(registry, runtime, *guard_args)
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    generated_at = (recorded + timedelta(seconds=5)).isoformat()
+    run = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "turn_instance_id": "retired-later-ack", "generated_at": generated_at,
+        "goal_ref": {"goal_id": GOAL_ID, "goal_instance_id": INSTANCE_A},
+        "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "source": "refresh_state",
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0", "accepted": True,
+                "obligation_id": obligation,
+                "outcomes": ["fresh_vision_path_outcome"],
+                "satisfying_outcomes": ["fresh_vision_path_outcome"],
+            },
+        },
+    }
+    source = runs_dir / "retired-later-ack.json"
+    source.write_text(json.dumps(run), encoding="utf-8")
+    markdown = source.with_suffix(".md")
+    markdown.write_text("# Retired instance confirmation\n", encoding="utf-8")
+    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            **run, "json_path": str(source), "markdown_path": str(markdown),
+        }) + "\n")
+    retired_rc, retired = _run_cli(registry, runtime, *guard_args)
+    assert _decision_summary(retired_rc, retired) == _decision_summary(baseline_rc, baseline)
+    assert retired_rc == 0
+    assert retired.get("error_code") != "heartbeat_receipt_identity_conflict"
+    assert (retired.get("replan_action_packet") or {}).get("decision") != "historical_ack_recorded"
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
+        "todo_delta": [f"retain:{SELECTED_REPLAN_TODO_ID}"],
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Fixture work needs a verified next route.",
+            "observed_reality": "A fixture check supports continuing the existing work.",
+            "retained": ["Original requirements and the existing Todo."],
+            "evidence_refs": ["evidence:fixture-check"],
+        },
+    }), encoding="utf-8")
+    refresh_rc, refreshed = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-instance-id", original_turn,
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(project),
+        "--delivery-boundary", "semantic_closeout", "--agent-vision-json", str(vision),
+        "--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refreshed
+    assert refreshed.get("appended") is True
+    assert refreshed.get("error_code") != "heartbeat_receipt_identity_conflict"

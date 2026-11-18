@@ -24,6 +24,7 @@ from ..todos.quota_summary import (
 )
 from ..todos.succession_warning import todo_succession_gap_items
 from .autonomous_replan_ack import (
+    drop_unowned_recorded_replan_acks,
     historical_ack_candidates_with_writeback_order,
     latest_monitor_replan_frontier_identity,
     watch_lane_continuation_todo_ids,
@@ -276,8 +277,11 @@ def qualify_replan_writeback(
         if isinstance(raw_agent_todos, dict)
         else []
     )
+    owned_history, _ = drop_unowned_recorded_replan_acks(
+        list(newest_first_runs or []), goal_id=goal_id, goal_ref=goal_ref,
+    )
     run_obligation = autonomous_replan_obligation_from_runs(
-        newest_first_runs,
+        owned_history,
         agent_todos=agent_todos,
         agent_id=safe_agent_id,
         external_progress_review=external_progress_review,
@@ -290,13 +294,13 @@ def qualify_replan_writeback(
                 {
                     **(registry_goal or {}),
                     "id": goal_id,
-                    "latest_runs": list(newest_first_runs or []),
+                    "latest_runs": owned_history,
                 }
             ]
         }
     }
     status_payload["receipt_bound_replan_ack_candidates"] = historical_ack_candidates_with_writeback_order(
-        newest_first_runs, goal_id=goal_id, agent_id=safe_agent_id,
+        owned_history, goal_id=goal_id, agent_id=safe_agent_id,
         obligation_id=guard_semantic_replan_obligation_id, guard_scoped=guard_scoped,
         source_route=replan_source_route,
         guard_recorded_at=receipt_bound_guard_recorded_at,
