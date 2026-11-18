@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..extensions.runtime import extension_catalog_entries
+from ..python_install_owner import RESEARCH_DISTRIBUTION
 from .benchmark_toolkit.catalog_entry import BENCHMARK_TOOLKIT_CATALOG_ENTRY
 from .integration_branch.catalog_entry import INTEGRATION_BRANCH_CATALOG_ENTRY
 from .repository_change_window.catalog_entry import (
@@ -31,7 +32,11 @@ from .periodic_report.catalog_entry import PERIODIC_REPORT_CATALOG_ENTRY
 from .content_ops.catalog_entry import CONTENT_OPS_CATALOG_ENTRY
 from .value_connectors.catalog_entry import VALUE_CONNECTORS_CATALOG_ENTRY
 from .explore.catalog_entry import EXPLORE_CATALOG_ENTRY
-from .deep_research.catalog_entry import DEEP_RESEARCH_CATALOG_ENTRY
+from .deep_research.catalog_entry import (
+    DEEP_RESEARCH_CATALOG_ENTRY,
+    RESEARCH_INSTALL_HINT,
+    research_workflows_installed,
+)
 from .public_safe_outbound.catalog_entry import PUBLIC_SAFE_OUTBOUND_CATALOG_ENTRY
 from .connector_registry.catalog_entry import CONNECTOR_REGISTRY_CATALOG_ENTRY
 from .external_research.catalog_entry import EXTERNAL_RESEARCH_CATALOG_ENTRY
@@ -190,10 +195,25 @@ def build_capability_registry(
         }
     )
     builtin_cli_present = find_spec("loopx.cli") is not None
+    research_installed = (
+        not builtin_cli_present and research_workflows_installed(builtin_cli_present=False)
+    )
+    if not builtin_cli_present:
+        registry.register_provider(
+            {"id": RESEARCH_DISTRIBUTION, "origin": "builtin", "installed": research_installed}
+        )
     for record in BUILTIN_CAPABILITIES:
-        registry.register_capability(_record_for_installed_capability(
-            registry, record, builtin_cli_present=builtin_cli_present,
-        ))
+        if not builtin_cli_present and (
+            record is DEEP_RESEARCH_CATALOG_ENTRY or record is EXTERNAL_RESEARCH_CATALOG_ENTRY
+        ):
+            adapted: dict[str, Any] = dict(record) | {"provider_id": RESEARCH_DISTRIBUTION}
+            if not research_installed:
+                adapted["next_real_step"] = RESEARCH_INSTALL_HINT
+            registry.register_capability(adapted)
+        else:
+            registry.register_capability(_record_for_installed_capability(
+                registry, record, builtin_cli_present=builtin_cli_present,
+            ))
     for record in BUILTIN_CAPABILITIES:
         _register_declared_implementation_providers(registry, record)
     for manifest in extension_catalog_entries(

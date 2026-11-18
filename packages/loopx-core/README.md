@@ -115,6 +115,10 @@ uv pip uninstall --python "$LOOPX_CORE_PYTHON" \
   loopx-capability-agent-turn-recall loopx-capability-pull-request-review loopx-capability-issue-fix
 ```
 
+To add the optional research workflows, build and install the matching
+[research workflow wheel](../loopx-capability-research/README.md). Check the
+capability entries before opening an existing project ledger.
+
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary
 installation by switching back to its environment; preserve task state and

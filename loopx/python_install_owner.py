@@ -142,6 +142,7 @@ def builtin_capability_installed(
 
 
 WORKSPACE_DISTRIBUTION = "loopx-workspace"
+RESEARCH_DISTRIBUTION = "loopx-capability-research"
 @dataclass(frozen=True)
 class PythonInstallOwner:
     manager: str

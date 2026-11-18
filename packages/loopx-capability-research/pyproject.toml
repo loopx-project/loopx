@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-capability-research"
+dynamic = ["version", "dependencies"]
+description = "Evidence-ledger and external evidence workflows for matching LoopX Core."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+dependencies = {file = "requires-core.txt"}
+
+[tool.setuptools.packages.find]
+include = [
+    "loopx.capabilities.deep_research",
+    "loopx.capabilities.external_research",
+    "loopx.cli_commands",
+    "loopx.control_plane.capabilities",
+    "loopx.extensions",
+]
+
+[tool.setuptools.package-data]
+"loopx.control_plane.capabilities" = ["external_evidence.ts"]

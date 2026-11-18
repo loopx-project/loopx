@@ -2,6 +2,26 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...python_install_owner import RESEARCH_DISTRIBUTION, builtin_capability_installed
+
+
+RESEARCH_INSTALL_HINT = "Install the matching loopx-capability-research wheel into this Core environment."
+
+
+def research_workflows_installed(*, builtin_cli_present: bool | None = None) -> bool:
+    return builtin_capability_installed(
+        RESEARCH_DISTRIBUTION,
+        (
+            "loopx.capabilities.deep_research.runtime",
+            "loopx.capabilities.external_research.cli",
+            "loopx.capabilities.external_research.projection",
+            "loopx.cli_commands.deepresearch",
+            "loopx.extensions.public_github_research",
+        ),
+        builtin_cli_present=builtin_cli_present,
+        resources=("loopx/control_plane/capabilities/external_evidence.ts",),
+    )
+
 
 DEEP_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
     "id": "deep-research",
