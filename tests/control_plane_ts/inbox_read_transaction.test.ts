@@ -290,6 +290,7 @@ for (const profile of ["legacy", "exact"] as const) {
     const attention = (await f.call("receiver_read", {attention_only: true})).result as JsonObject;
     assert.deepEqual(attention.items, []);
     assert.equal(attention.has_more, false);
+    assert.equal((attention.open_request_summaries as JsonObject[])[0].request_id, row.request_id);
     assert.equal(readdirSync(f.base).includes("reads"), false);
     const agenda = (await f.call("turn_context")).unfinished_delegations as JsonObject;
     assert.equal(agenda.incoming_count, 1);
@@ -322,3 +323,41 @@ for (const profile of ["legacy", "exact"] as const) {
     assert.equal((last.items as JsonObject[])[0].request_id, f.row(22).request_id);
   });
 }
+
+test("attention pagination retains a delivered remainder outside the compact agenda", async t => {
+  const f = fixture(t);
+  for (let n = 1; n <= 20; n++) f.publish(n);
+  const row = f.publish(21);
+  const identity = {goal_id: row.goal_id, goal_ref: ref, agent_id: row.agent_id,
+    request_id: row.request_id, source_id: row.source_id};
+  const replies = join(f.base, "replies", row.request_id);
+  for (const folder of [replies, join(f.base, "decisions"), join(f.base, "roundtrips")]) mkdirSync(folder, {recursive: true});
+  writeFileSync(join(f.base, "decisions", row.request_id + ".json"), JSON.stringify({...identity, decision: "adopt"}));
+  writeFileSync(join(f.base, "roundtrips", row.request_id + ".json"), JSON.stringify(identity));
+  const remaining_work = {summary: "Validate the package", resume_when: "The build is ready"};
+  writeFileSync(join(replies, "conclusion.json"), JSON.stringify({...identity, phase: "conclusion",
+    decision: "adopt", text: "Source verification passed.", remaining_work}));
+  writeFileSync(join(replies, "conclusion.delivery.json"), JSON.stringify({status: "delivered"}));
+
+  const first = await f.call("receiver_read", {attention_only: true});
+  const firstPage = first.result as JsonObject, context = first.context as JsonObject;
+  assert.equal((firstPage.items as JsonObject[]).length, 20);
+  assert.equal(((context.unfinished_delegations as JsonObject).items as JsonObject[])
+    .some(item => item.request_id === row.request_id), false);
+  assert.deepEqual(firstPage.open_request_summaries, []);
+  assert.equal(firstPage.has_more, true);
+
+  const last = (await f.call("receiver_read", {attention_only: true, cursor: firstPage.next_cursor})).result as JsonObject;
+  assert.deepEqual(last.items, []);
+  assert.equal(last.has_more, false);
+  assert.equal(last.next_cursor, null);
+  const [summary] = last.open_request_summaries as JsonObject[];
+  assert.equal(summary.request_id, row.request_id);
+  assert.equal(summary.request_revision, 1);
+  assert.equal(summary.step, "review_request_work");
+  assert.deepEqual(summary.remaining_work, remaining_work);
+  assert.equal(JSON.stringify(summary).includes("PRIVATE_LONG_SOURCE"), false);
+  assert.equal(readdirSync(join(f.base, "reads")).includes(row.request_id + ".json"), false);
+  const exact = (await f.call("receiver_read", {request_id: row.request_id})).result as JsonObject;
+  assert.equal((exact.items as JsonObject[])[0].message, row.message);
+});

@@ -221,7 +221,12 @@ applies during explicit Todo selection when work and quota spending are
 still disabled. A complete scan can still hit the summary's display limit.
 The initial view then also keeps the exact omitted count and reconciliation
 guidance. The required read and its existing cursor deliver the scoped request
-rows. The captured summary remains available at its original address. An
+rows. With `--attention-only`, each incoming page keeps full `items` for
+requests still needing their briefs and `open_request_summaries` for requests
+whose latest delivered conclusion leaves remaining work. Follow `next_cursor`
+even on summary-only pages. Use `--request-id` without `--attention-only` to
+read a summary's complete current brief. The captured summary remains
+available at its original address. An
 incomplete scan, unavailable scan records or an unmatched read keeps the whole
 summary inline.
 Adoption and queued returns are intermediate states. Read the full current request before
@@ -434,8 +439,11 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 首读包含有界 `unfinished_delegations` 投影和 `read_complete` 标记。已准入的普通
 工作 Turn 若有大型委派摘要、扫描完整，且必读列表中有同一条管家收件箱命令，首读保留
 收发请求计数、扫描状态和必读命令。扫描完整但摘要达到展示上限时，首读同时保留精确的
-省略数量与核对指引。逐条请求通过必读命令及其现有分页游标交付。原摘要仍可从同一
-捕获取回。扫描不完整、扫描记录不可读或没有匹配必读命令时，首读保留完整摘要。
+省略数量与核对指引。逐条请求通过必读命令及其现有分页游标交付。`--attention-only`
+下，需要原简报的收件仍在 `items`，最近一次结论已送达且有剩余工作的收件在
+`open_request_summaries`。只有摘要的页也继续跟随 `next_cursor`。用 `--request-id`
+读取摘要对应的完整当前简报时，去掉 `--attention-only`。原摘要仍可从同一捕获取回。
+扫描不完整、扫描记录不可读或没有匹配必读命令时，首读保留完整摘要。
 采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，并沿已有范围约束和
 消费入口办理。
 

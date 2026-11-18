@@ -202,19 +202,23 @@ function inboxItem(row: JsonObject, state: JsonObject): JsonObject {
   else if (view) item.next_action = view.receiver_instruction;
   return item;
 }
-function hasDeliveredRemainder(source: InboxSource, row: JsonObject, state: JsonObject): boolean {
-  if (state.kind !== "awaiting_conclusion" || !state.remaining_work) return false;
+function deliveredRemainderSummary(source: InboxSource, row: JsonObject, state: JsonObject): JsonObject | null {
+  if (state.kind !== "awaiting_conclusion" || !state.remaining_work) return null;
   const control = jsonObject(state.request_control_view);
-  const read = jsonObject(jsonObject(state.readback)?.read);
-  if (control?.active_reservation != null || read?.status === "unavailable"
-      || linksReceipt(source.root, row).unavailable) return false;
+  if (control?.active_reservation != null || jsonObject(jsonObject(state.readback)?.read)?.status === "unavailable") {
+    return null;
+  }
+  const links = linksReceipt(source.root, row);
+  if (links.unavailable) return null;
   try {
-    const revision = control?.revision ?? 1;
-    const latest = agendaResults(source.root, row).filter(result => result.request_revision === revision).at(-1);
-    return latest?.status === "delivered";
+    const results = agendaResults(source.root, row);
+    const latest = results.filter(result => result.request_revision === (control?.revision ?? 1)).at(-1);
+    return latest?.status === "delivered"
+      ? projectDelegationTurnItem(delegationObservation("incoming", row, state, links, results))
+      : null;
   } catch (error) {
     if (!recordFailure(error)) throw error;
-    return false;
+    return null;
   }
 }
 
@@ -233,7 +237,7 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     return {ok: true, request_id: params.request_id, items: [inboxItem(row, receiptState(source.root, row))],
       has_more: false, next_cursor: null, instruction: TRIAGE + " This is an exact source read, including concluded requests; it does not reopen their work."};
   }
-  const cursorKind = attentionOnly ? "pending_attention_v1" : "pending_requests_v1";
+  const cursorKind = attentionOnly ? "pending_attention_v2" : "pending_requests_v1";
   const scope = digest(source.exact ? [cursorKind, params.runtime_root, target(source)]
     : [cursorKind, params.runtime_root, source.goal, source.agent]);
   let after = "";
@@ -243,21 +247,25 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     if (suppliedScope !== scope) fail("pending request cursor scope mismatch");
     after = suppliedAfter;
   }
-  const folder = join(source.root, "entries", digest(target(source))), items: JsonObject[] = [];
+  const folder = join(source.root, "entries", digest(target(source)));
+  const entries: {item: JsonObject; summary: boolean}[] = [];
   for (const [index, name] of names(folder).entries()) {
     if (index > 0 && index % 128 === 0) await yieldToRuntime();
     if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5)) || name.slice(0, -5) <= after) continue;
     const row = pendingEntry(source, join(folder, name)), state = receiptState(source.root, row);
     if (state.kind === "settled" && !(source.recipient && params.include_settled === true)
         || !lifecycle(source, "inbox_observe", row)) continue;
-    if (attentionOnly && hasDeliveredRemainder(source, row, state)) continue;
-    items.push(inboxItem(row, state));
-    if (items.length === 21) break;
+    const summary = attentionOnly ? deliveredRemainderSummary(source, row, state) : null;
+    entries.push({item: summary ?? inboxItem(row, state), summary: summary !== null});
+    if (entries.length === 21) break;
   }
-  return {ok: true, items: items.slice(0, 20), has_more: items.length > 20,
-    next_cursor: items.length > 20 ? `1:${scope}:${items[19].request_id}` : null, _cursor_scope: scope,
-    instruction: TRIAGE + (attentionOnly ? " These incoming briefs need attention before work. " +
-      "Other open requests remain on the agenda. Use its unfiltered read command and --request-id for their full current brief before working on or returning them." : "") +
+  const page = entries.slice(0, 20);
+  return {ok: true, items: page.filter(entry => !entry.summary).map(entry => entry.item),
+    ...(attentionOnly ? {open_request_summaries: page.filter(entry => entry.summary).map(entry => entry.item)} : {}),
+    has_more: entries.length > 20,
+    next_cursor: entries.length > 20 ? `1:${scope}:${page[19].item.request_id}` : null, _cursor_scope: scope,
+    instruction: TRIAGE + (attentionOnly ? " Reconcile open_request_summaries together with items on every page. " +
+      "Use the unfiltered read command with --request-id for a summary's full current brief before working on or returning it." : "") +
       " Follow next_cursor to read later pending requests. Restart without a cursor to discover new " +
       "requests before it. The end of a page sequence is not work completion."};
 }
@@ -393,6 +401,19 @@ function linksReceipt(root: string, row: JsonObject): {value: JsonObject; unavai
     && validRefs("todo_ids", isCanonicalTodoId) && validRefs("evidence_ids", ref => ENVELOPED_SHA256_PATTERN.test(ref));
   return {value: valid ? value : {}, unavailable: !valid};
 }
+function delegationObservation(direction: "incoming" | "outgoing", row: JsonObject, state: JsonObject,
+    links: ReturnType<typeof linksReceipt>, results: JsonObject[], evidenceUnavailable = links.unavailable): JsonObject {
+  const view = jsonObject(state.request_control_view);
+  const receipt: JsonObject = {kind: state.kind, recorded_decision: state.recorded_decision};
+  if (state.remaining_work) receipt.remaining_work = state.remaining_work;
+  if (view) receipt.request_control_view = {control_state: view.control_state, active_reservation: view.active_reservation,
+    revision: view.revision, revision_digest: view.revision_digest, brief: {purpose: (view.brief as JsonObject).purpose}};
+  return {direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref", "recipient"]
+    .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])),
+    purpose: (jsonObject(row.brief)?.purpose || [...(row.message as string ?? "")].slice(0, 2000).join(""))},
+    receipt, todo_ids: links.value.todo_ids ?? [], evidence_unavailable: evidenceUnavailable, results};
+}
+
 async function turnContext(source: InboxSource, params: JsonObject): Promise<JsonObject> {
   let complete = true, unavailable = 0;
   const batches: JsonObject[] = [], observations: JsonObject[] = [];
@@ -416,15 +437,7 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
       let results: JsonObject[] = [], evidenceUnavailable = links.unavailable;
       try { results = agendaResults(source.root, row); }
       catch (error) { if (!recordFailure(error)) throw error; evidenceUnavailable = true; }
-      const view = jsonObject(state.request_control_view);
-      const receipt: JsonObject = {kind: state.kind, recorded_decision: state.recorded_decision};
-      if (state.remaining_work) receipt.remaining_work = state.remaining_work;
-      if (view) receipt.request_control_view = {control_state: view.control_state, active_reservation: view.active_reservation,
-        revision: view.revision, revision_digest: view.revision_digest, brief: {purpose: (view.brief as JsonObject).purpose}};
-      observations.push({direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref", "recipient"]
-        .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])),
-      purpose: (jsonObject(row.brief)?.purpose || [...(row.message as string ?? "")].slice(0, 2000).join(""))},
-      receipt, todo_ids: links.value.todo_ids ?? [], evidence_unavailable: evidenceUnavailable, results});
+      observations.push(delegationObservation(direction, row, state, links, results, evidenceUnavailable));
       if (observations.length === 128) flush();
     }
   }
