@@ -11,13 +11,13 @@ import {isDeepStrictEqual} from "node:util";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { inflateSync } from "node:zlib";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
-import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
+import {omitUnboundExploreResultWriteback, referenceExploreResultDelivery,
+  referenceExploreResultWriteback} from "../capabilities/explore_context_delivery.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
   contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
-import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
 import {completeCliSettlementChannel} from "./settlement_plan.ts";
 import {REPLAN_SETTLEMENT_CONTRACT_SCHEMA} from "../work_items/replan_settlement.ts";
 

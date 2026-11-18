@@ -466,6 +466,34 @@ def _spends(runtime):
                for line in index.read_text().splitlines()) if index.exists() else 0
 
 
+def test_installed_core_ordinary_turn_defers_explore_evaluation(core_python, task, tmp_path, monkeypatch):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    workspace, runtime, _registry, arguments = task
+    isolated = tmp_path / "loads"
+    isolated.mkdir()
+    isolate_sqlite_runtime(isolated, monkeypatch)
+    trace, observer = isolated / "modules.txt", isolated / "observe.mjs"
+    observer.write_text("""import {appendFileSync} from "node:fs";
+import {registerHooks} from "node:module";
+const tracked = new Set(["turn_envelope.ts", "yardstick_decision.ts", "explore_result_writeback.ts",
+  "explore_turn_context.ts", "explore_measurements.ts"]);
+registerHooks({load(url, context, next) {
+  const name = url.split("/").at(-1);
+  if (tracked.has(name)) appendFileSync(process.env.LOOPX_TEST_MODULE_TRACE, name + "\\n");
+  return next(url, context);
+}});
+""", encoding="utf-8")
+    monkeypatch.setenv("LOOPX_TEST_MODULE_TRACE", str(trace))
+    monkeypatch.setenv("NODE_OPTIONS", f"{os.environ['NODE_OPTIONS']} --import={observer.as_uri()}")
+    result = json.loads(_run(core_python, arguments, workspace).stdout)
+    key = _assert_committed(core_python, workspace, runtime, result)
+    replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", key], workspace).stdout)
+    assert replay["resume_turn_key"] == key
+    assert not any(replay["effects"][name] for name in ("host_invoked", "state_written", "quota_spent"))
+    assert set(trace.read_text(encoding="utf-8").splitlines()) == {"turn_envelope.ts"}
+
+
 def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core_python, task):
     workspace, runtime, registry, arguments = task
     host_started = workspace / "lifecycle-host-started"

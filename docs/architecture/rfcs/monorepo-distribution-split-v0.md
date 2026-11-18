@@ -489,6 +489,13 @@ defaults or a new LoopX model loop. Pinned sources are in Appendix C.
 
 ## 7. Safety, privacy, and compatibility
 
+Ordinary C1 composition and replay use shared Explore guidance and exact
+context references. An empty read with graph and planning disabled returns
+the existing disabled view before loading the graph projector. A scoped
+Explore read loads Yardstick when its graph is available and the Goal enables
+evaluation. Settings, evidence identities, and recovery remain with the
+current Goal and Explore owners.
+
 - **Default-off / feature-off parity:** absent `loopx-workspace` or capability
   packages behave like the existing extension off state (I4). No command
   silently falls back to another implementation.

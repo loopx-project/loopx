@@ -2,6 +2,53 @@ import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
 import test from "node:test";
 
+test("Explore reads load Yardstick only for enabled graph evidence", () => {
+  const entry = new URL("../../loopx/control_plane/effect_runtime_handlers.ts", import.meta.url).href;
+  const script = `
+    import assert from "node:assert/strict";
+    import {registerHooks} from "node:module";
+    let loads = 0, graphLoads = 0;
+    registerHooks({load(url, context, next) {
+      if (url.endsWith("/work_items/yardstick_decision.ts")) loads++;
+      if (url.endsWith("/capabilities/explore_turn_context.ts")) graphLoads++;
+      return next(url, context);
+    }});
+    const {createEffectRuntimeHandlers, dispatchEffectRuntimeMethod} = await import(${JSON.stringify(entry)});
+    const handlers = createEffectRuntimeHandlers({fingerprint: "loading-test", requestShutdown() {}});
+    const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+      graph_enabled: true, harness_gate: {enabled: false},
+      plan: {}, projection: {nodes: [], findings: [], edges: []}};
+    const read = options => dispatchEffectRuntimeMethod(handlers, "explore.turn_context", {...request, ...options});
+    const disabled = {graph_enabled: false, projection: {}, yardstick_enabled: true};
+    assert.deepEqual(await read(disabled), {
+      ok: true, goal_id: "research", agent_id: "worker", graph_enabled: false, harness_enabled: false,
+      graph: null, harness: null, boundary: {read_only: true, changes_configuration: false,
+        writes_evidence: false, claims_todos: false, starts_agents: false, changes_quota: false},
+    });
+    assert.equal(graphLoads, 0);
+    assert.equal(loads, 0);
+    await assert.rejects(read({...disabled, result_offset: 1}), /Continuation requires result_revision/);
+    const ordinary = await read({});
+    assert.equal(ordinary.ok, true);
+    assert.equal(Object.hasOwn(ordinary.graph, "work_yardstick_capture"), false);
+    assert.deepEqual(await read({yardstick_enabled: false}), ordinary);
+    assert.equal((await read({graph_enabled: false, yardstick_enabled: true})).graph, null);
+    assert.equal(loads, 0);
+
+    const enabled = await read({yardstick_enabled: true});
+    assert.equal(enabled.ok, true);
+    assert.equal(enabled.graph.work_yardstick_capture.optional, true);
+    assert.equal(enabled.graph.work_yardstick_capture.schema_version, "work_yardstick_decision_v0");
+    assert.equal(loads, 1);
+    assert.deepEqual(await read({yardstick_enabled: true}), enabled);
+    assert.deepEqual(await read({yardstick_enabled: false}), ordinary);
+    assert.equal(loads, 1);
+  `;
+  const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-strip-types",
+    "--input-type=module", "-e", script], {encoding: "utf8", timeout: 30_000});
+  assert.equal(child.status, 0, child.stderr);
+});
+
 test("coordination claims remain available without terminal research evidence", () => {
   const entry = new URL("../../loopx/control_plane/effect_runtime_handlers.ts", import.meta.url).href;
   const fixtures = new URL("./local_promotion_fixture.ts", import.meta.url).href;

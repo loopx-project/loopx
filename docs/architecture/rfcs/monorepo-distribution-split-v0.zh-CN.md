@@ -345,6 +345,10 @@ minimal 包含持久 shell、图像读取与 compaction。SDK minimal 还提供�
 
 ## 7. 安全、隐私与兼容
 
+普通 C1 组装和重放沿用 Explore 的共享指引及精确上下文引用。图和规划关闭时，
+空读取在加载图投影前返回既有的关闭状态。有范围的 Explore 读取在图可用且 Goal
+启用评估时加载 Yardstick。设置、证据身份和恢复继续由当前 Goal 与 Explore 负责。
+
 - **默认关闭 / 功能关闭一致性：** 缺失 `loopx-workspace` 或 capability 包时，行为等同现有 extension off state（I4）。没有命令会静默回退到另一实现。
 - **公开/私有边界：** 不变。`loopx check` 继续扫描每个包；移动文件不改变其扫描类别。
 - **旧读者/写者：** import shim（I3）覆盖已建立的公开 Python import。console script 保持名字；`loopx` meta-package 让 `pip install loopx` 在一个 minor 版本内行为完全一致。

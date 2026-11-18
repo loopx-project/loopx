@@ -655,6 +655,9 @@ Explore evidence 可用；开启该设置不启动工作或自动开启其他 ca
 关闭后移除普通 Turn 的新增提示，并在主提交前拒绝新 capture；历史 finding
 及成功的精确重放仍可读。
 
+Explore 读取在图可用且设置已开启时加载 Yardstick 投影。普通 C1 使用共享指引和
+精确引用读取捕获的上下文。选中或重放既有决策时仍绑定原始来源。
+
 既有 Research finding reader 展示记录的目标、成果/代理指标、来源、下一步和成本边界。
 普通 task-scoped Explore context 只投影该 Todo 当前目标、下一选择短提示和反证引用。
 既有 question-scoped 扩读命令返回完整决策、精确 profile 的反馈和前次执行归属；
