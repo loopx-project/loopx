@@ -256,11 +256,11 @@ Here, “CAS” is a concurrency-control principle, not a claim that the entire 
 - settlement binds writeback, spend, and scheduler receipts to `goal_id + agent_id + turn_instance_id`.
 
 The matching source anchors are
-[`completion_transaction.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py),
-[`local_state_write_correctness.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py),
-[`authority_store.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts),
-[`coordination/authority_core.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_core.py),
-and [`settlement.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py).
+[`completion_transaction.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py),
+[`local_state_write_correctness.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py),
+[`authority_store.ts`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts),
+[`coordination/authority_core.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/authority_core.py),
+and [`settlement.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py).
 
 The real pattern is “read basis -> propose -> validate/guard -> guarded commit -> event or receipt ->
 readback,” not direct replacement of a state object that merely looks complete.
@@ -328,7 +328,7 @@ fact and contract dependencies, not process messages between state machines.
 
 ### Todo lifecycle: only four durable statuses
 
-[`loopx/control_plane/todos/contract.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/contract.py)
+[`loopx/control_plane/todos/contract.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/contract.py)
 defines the durable Todo statuses:
 
 ```text
@@ -400,7 +400,7 @@ that decision.
 
 ### Handoff: cleared does not mean the route is complete
 
-[`handoff_gate.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py)
+[`handoff_gate.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py)
 derives six handoff states from Todo relations:
 
 | Derived state | Meaning | Next step |
@@ -420,7 +420,7 @@ a valid successor, reopening work, or recording `no_followup`, not by changing t
 
 ### Quota runtime: decide behavior before considering spend
 
-[`loopx/control_plane/quota/states.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/quota/states.py)
+[`loopx/control_plane/quota/states.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/quota/states.py)
 fixes the decision precedence of quota runtime states:
 
 ```text
@@ -457,7 +457,7 @@ infer the action from `NOTIFY` (which controls user output only) or from `should
 
 ### Settlement: success lands in transaction order
 
-[`turn_transaction_contract.json`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_transaction_contract.json)
+[`turn_transaction_contract.json`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/turn_transaction_contract.json)
 defines the phases of a complete Turn:
 
 ```text
@@ -565,7 +565,7 @@ it can enter the Monitor write transaction.
 - Expiry or stop condition reached: complete the Monitor and connect a successor or `no_followup`.
 
 For a Goal explicitly promoted to shared authority,
-[`todo_monitor_poll.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/todo_monitor_poll.ts)
+[`todo_monitor_poll.ts`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/todo_monitor_poll.ts)
 commits a **lease-free observation and its requested independent successors** against one canonical revision,
 with one CAS and one durable operation receipt. The transaction first validates actor registration,
 claim/binding/exclusion, an active Monitor, and a genuinely advanced material-change generation. Any failed
@@ -689,7 +689,7 @@ flowchart TD
 ### Terminal is a strict conjunction, not “the queue looks empty”
 
 `goal_frontier_is_terminal_no_followup` in
-[`loopx/control_plane/goals/goal_frontier/terminal.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/goals/goal_frontier/terminal.py)
+[`loopx/control_plane/goals/goal_frontier/terminal.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/goals/goal_frontier/terminal.py)
 does not accept a handwritten terminal flag. It requires complete and closed Todo sources; no unresolved
 advancement, monitor, successor, handoff, replan, acceptance, or autonomy-blocker frontier; and a structured
 `no_followup` intent.

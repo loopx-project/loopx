@@ -129,7 +129,7 @@ typed Todo / Gate facts
 }
 ```
 
-这里由 [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
+这里由 [`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
 拥有 scope coverage 语义。最重要的在于：
 
 - Gate 明确声明 kind、granularity 与 scope key；
@@ -160,7 +160,7 @@ Todo 和 Gate 会进入多个只读表面：
 - attention queue；
 - quota input。
 
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+[`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
 可以展示 `blocks`、`requires_decision`、`validates` 或 handoff relation，但它不创建 authority。
 
 在本场景中，projection 至少要保留：
@@ -251,8 +251,8 @@ if open_gate_count > 0, should_run = false?
 
 ### Policy 阅读断点
 
-以 [State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
-和 [Control-Plane Rule Seam Map](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/rule-seam-map.md)
+以 [State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
+和 [Control-Plane Rule Seam Map](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/rule-seam-map.md)
 为地图，确认：
 
 1. 输入 facts 是否已经 normalized；
@@ -297,7 +297,7 @@ agent still has independent T2
 
 ## 第 5 站：TurnEnvelope 只承载已决定的下一轮
 
-[`turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
+[`turn_envelope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
 是 quota decision 上的 bounded read model。它应携带足够信息，让执行者知道：
 
 - Goal、Agent 与 selected Todo；
@@ -317,7 +317,7 @@ agent still has independent T2
 
 ## 第 6 站：LoopX Turn 形成 bounded effect
 
-[`loopx_turn_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
+[`loopx_turn_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
 把一轮执行约束为：
 
 ```text

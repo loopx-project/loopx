@@ -1,5 +1,4 @@
 """Read-only consumers reuse the native owner and exact host profile."""
-import json
 import sys
 from pathlib import Path
 

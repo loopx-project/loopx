@@ -188,7 +188,7 @@ async function copyInteractiveCasePages(siteDir) {
       if (/^(?:https?:|\/)/.test(href)) return match;
       const source = relative(repoRoot, resolve(dirname(sourcePath), href));
       if (source === showcaseCatalogPath || source.startsWith("../")) return match;
-      return `href="https://github.com/huangruiteng/loopx/blob/main/${source}"`;
+      return `href="https://github.com/loopx-project/loopx/blob/main/${source}"`;
     });
     await writeFile(targetPath, html);
   }

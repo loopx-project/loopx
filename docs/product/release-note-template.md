@@ -152,7 +152,7 @@ opt-in surface, replace the no-change declaration with one entry per surface:
 
 **Authority boundary:** <Writes, merges, providers, privacy, or host powers not granted.>
 
-**Docs:** https://github.com/huangruiteng/loopx/blob/vX.Y.Z/<canonical-doc>
+**Docs:** https://github.com/loopx-project/loopx/blob/vX.Y.Z/<canonical-doc>
 
 ```bash
 <activation-command>
@@ -256,4 +256,4 @@ Apache-2.0 不限制商业使用；显式专利框架服务于未来企业与生
 - <Exact-commit checks that passed, including failures or skips without
   overclaiming hosted, live-model, benchmark, or long-horizon evidence.>
 
-Compare: https://github.com/huangruiteng/loopx/compare/vPREVIOUS...vX.Y.Z
+Compare: https://github.com/loopx-project/loopx/compare/vPREVIOUS...vX.Y.Z
