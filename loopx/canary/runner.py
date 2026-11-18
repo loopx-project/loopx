@@ -388,6 +388,15 @@ def _remove_fixture_root(root: Path) -> None:
     remove_owned_tree(root)
 
 
+def check_output_tail(output: str | bytes | None) -> str:
+    limit = 800
+    if isinstance(output, bytes):
+        # TimeoutExpired can carry bytes even when the process uses text mode.
+        # UTF-8 needs at most four bytes for each character in the tail.
+        output = output[-4 * limit :].decode("utf-8", errors="replace")
+    return (output or "")[-limit:]
+
+
 def _run_check(
     check: dict[str, Any],
     *,
@@ -469,8 +478,8 @@ def _run_check(
                 "ok": False,
                 "returncode": None,
                 "duration_seconds": round(time.monotonic() - started, 3),
-                "stdout_tail": (exc.stdout or "")[-800:] if isinstance(exc.stdout, str) else "",
-                "stderr_tail": (exc.stderr or "")[-800:] if isinstance(exc.stderr, str) else "",
+                "stdout_tail": check_output_tail(exc.stdout),
+                "stderr_tail": check_output_tail(exc.stderr),
             }
         )
         if cleanup_error:
@@ -483,8 +492,8 @@ def _run_check(
             "ok": completed.returncode == 0 and not cleanup_error,
             "returncode": completed.returncode,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "stdout_tail": completed.stdout[-800:],
-            "stderr_tail": completed.stderr[-800:],
+            "stdout_tail": check_output_tail(completed.stdout),
+            "stderr_tail": check_output_tail(completed.stderr),
         }
     )
     if cleanup_error:

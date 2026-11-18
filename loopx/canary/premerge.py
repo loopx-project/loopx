@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from ..contract import scan_public_boundary
 from .planner import REPO_ROOT, resolve_canary_catalog_path
-from .runner import build_canary_smoke_suite_run
+from .runner import build_canary_smoke_suite_run, check_output_tail
 
 
 PREMERGE_GATE_SCHEMA_VERSION = "loopx_premerge_validation_gate_v0"
@@ -471,8 +471,8 @@ def _run_gate_check(
                 "status": "timed_out",
                 "returncode": None,
                 "duration_seconds": round(time.monotonic() - started, 3),
-                "stdout_tail": (exc.stdout or "")[-800:] if isinstance(exc.stdout, str) else "",
-                "stderr_tail": (exc.stderr or "")[-800:] if isinstance(exc.stderr, str) else "",
+                "stdout_tail": check_output_tail(exc.stdout),
+                "stderr_tail": check_output_tail(exc.stderr),
             }
         )
         if progress_callback:
@@ -497,8 +497,8 @@ def _run_gate_check(
             "status": "passed" if completed.returncode == 0 else "failed",
             "returncode": completed.returncode,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "stdout_tail": completed.stdout[-800:],
-            "stderr_tail": completed.stderr[-800:],
+            "stdout_tail": check_output_tail(completed.stdout),
+            "stderr_tail": check_output_tail(completed.stderr),
         }
     )
     if progress_callback:
@@ -834,7 +834,7 @@ def downgrade_inherited_baseline_failures(
     *,
     changed_files: list[str],
 ) -> dict[str, Any] | None:
-    """Downgrade known repo-baseline failures when they do not mention changed files."""
+    """Apply the baseline exception to finished failures with diagnostic output."""
 
     if not isinstance(run, dict):
         return run
@@ -847,7 +847,7 @@ def downgrade_inherited_baseline_failures(
 
     changed_any = False
     for check in run.get("selected_checks", []):
-        if not isinstance(check, dict) or check.get("ok"):
+        if not isinstance(check, dict) or check.get("ok") or check.get("status") != "failed":
             continue
         command = str(check.get("command") or "")
         if not any(token in command for token in INHERITED_BASELINE_COMMANDS):
@@ -856,7 +856,7 @@ def downgrade_inherited_baseline_failures(
             str(check.get(key) or "")
             for key in ("stdout_tail", "stderr_tail")
         )
-        if any(needle and needle in evidence for needle in changed_mentions):
+        if not evidence.strip() or any(needle and needle in evidence for needle in changed_mentions):
             continue
         check.update(
             {
