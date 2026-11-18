@@ -179,15 +179,22 @@ def test_idle_runtime_retires_despite_a_silent_connection(
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "1500")
     started = effect_runtime.effect_runtime_result("runtime.ping", {})
     info = json.loads(_runtime_info_path().read_text(encoding="utf-8"))
-    # A caller that connected and then died never sends a request or closes.
-    with socket.create_connection((info["host"], int(info["port"]))):
-        deadline = time.monotonic() + 20
-        while effect_runtime._pid_is_alive(int(started["pid"])):
-            assert time.monotonic() < deadline, "idle runtime stayed alive without listening"
-            time.sleep(0.2)
-        replacement = effect_runtime.effect_runtime_result("runtime.ping", {})
-    assert int(replacement["pid"]) != int(started["pid"])
-    effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+    try:
+        # A caller that connected and then died never sends a request or closes.
+        with socket.create_connection((info["host"], int(info["port"]))):
+            deadline = time.monotonic() + 20
+            while True:
+                # A POSIX child stays visible to the probe until its parent reaps it.
+                effect_runtime._reap_exited_runtime_child(info)
+                if not effect_runtime._pid_is_alive(int(started["pid"])):
+                    break
+                assert time.monotonic() < deadline, "idle runtime stayed alive without listening"
+                time.sleep(0.2)
+            assert not _runtime_info_path().exists()
+            replacement = effect_runtime.effect_runtime_result("runtime.ping", {})
+        assert int(replacement["pid"]) != int(started["pid"])
+    finally:
+        effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
 def test_unqualified_serving_runtime_is_reported_with_a_restart_action(
