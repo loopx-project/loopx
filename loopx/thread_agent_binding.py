@@ -136,6 +136,38 @@ def _bindings_for_goal(goal: dict[str, Any]) -> list[dict[str, str]]:
     return result
 
 
+def goal_thread_bindings(goal: dict[str, Any]) -> list[dict[str, str]]:
+    """Every thread binding the owner accepts on one Goal, in registry order."""
+
+    return _bindings_for_goal(goal)
+
+
+def list_attached_session_bindings(goals: Iterable[Any]) -> list[dict[str, Any]]:
+    """Read-only listing of every external-session binding, one row per binding.
+
+    Each row names the host surface, the host's session id, the Goal (id and
+    title) and the registered Agent. Nothing here selects a route, opens a
+    session or changes the registry.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for goal in goals:
+        if not isinstance(goal, dict) or not goal.get("id"):
+            continue
+        title = goal.get("display_name") or goal.get("title") or goal.get("name")
+        for binding in _bindings_for_goal(goal):
+            rows.append(
+                {
+                    "host_surface": binding["host_surface"],
+                    "session_id": binding["thread_id"],
+                    "goal_id": str(goal["id"]),
+                    "goal_title": str(title) if title else None,
+                    "agent_id": binding["agent_id"],
+                }
+            )
+    return rows
+
+
 def resolve_thread_agent_binding(
     goal: dict[str, Any] | None,
     *,

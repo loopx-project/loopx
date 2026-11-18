@@ -962,12 +962,17 @@ def test_complete_dsh_binds_session_and_tools_to_shared_work(
         return '{"result_kind":"wait"}'
 
     monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
-    pinned = {"LOOPX_TURN_TODO_ID": "stale-ambient-todo", "DSH_PERMISSION_MODE": "read-only"}
+    pinned = {
+        "LOOPX_TURN_KEY": "sha256:" + "a" * 64,
+        "LOOPX_TURN_TODO_ID": "stale-ambient-todo",
+        "DSH_PERMISSION_MODE": "read-only",
+    }
     config = turn_host_adapter.DshHostConfig(workspace=tmp_path, env=pinned)
     result = turn_host_adapter.run_dsh_host(request, config=config)
     assert result["result_kind"] == "wait"
     [call] = calls
-    assert call["env"] == {**pinned, "LOOPX_TURN_GOAL_ID": original["goal_id"],
+    assert call["env"] == {**pinned, "LOOPX_TURN_KEY": request["turn_key"],
+                           "LOOPX_TURN_GOAL_ID": original["goal_id"],
                            "LOOPX_TURN_AGENT_ID": original["agent_identity"]["agent_id"],
                            "LOOPX_TURN_TODO_ID": expected_todo,
                            "LOOPX_TURN_WORKSPACE": str(tmp_path.resolve())}
@@ -984,6 +989,7 @@ def test_complete_dsh_binds_session_and_tools_to_shared_work(
     assert call["session_id"] == expected_session
     model_input, _ = json.JSONDecoder().raw_decode(call["prompt"].split("Turn request:\n", 1)[1])
     assert_host_task_context(model_input, contract)
+    assert pinned["LOOPX_TURN_KEY"] == "sha256:" + "a" * 64
     assert pinned["LOOPX_TURN_TODO_ID"] == "stale-ambient-todo"
     for invalid in (None, {**contract, "reason": "changed source"},
                     {**contract, "schema_version": "unsupported_fixture_version"}):

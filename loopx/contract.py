@@ -287,7 +287,62 @@ CREDENTIAL_BASIC_VARIABLE_REFERENCE_PATTERN = re.compile(
 )
 
 
+# These are source expressions, not arbitrary text with a low entropy score.
+# Keep the original quotes until after this check: a quoted member path is a
+# literal, while a bare member access or a braced lookup reads a runtime value.
+_CREDENTIAL_MEMBER_PATH = (
+    r"[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_]*|\['[A-Za-z_][A-Za-z0-9_]*'\]"
+    r'|\["[A-Za-z_][A-Za-z0-9_]*"\])*'
+)
+_CREDENTIAL_BRACED_REFERENCE = re.compile(
+    r"\{\s*" + _CREDENTIAL_MEMBER_PATH + r"\s*\}"
+    r"(?=$|[ \t]|/?>|[\"']\s*[,)}\]])"
+)
+_CREDENTIAL_OBJECT_REFERENCE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+"
+    r"\s*(?=$|[,)}\]])"
+)
+_CREDENTIAL_QUOTED_TEXT = re.compile(r"(['\"`])(?:\\.|(?!\1)[^\\])*\1")
+
+
+def _credential_source_reference(line: str, match: re.Match[str]) -> bool:
+    keyword = match.group(0).lower()
+    value = line[match.end():]
+    if keyword not in ("token=", "password=", "authorization:"):
+        return False
+    containing_span = next((
+        span for span in _CREDENTIAL_QUOTED_TEXT.finditer(line)
+        if span.start() < match.start() < span.end()
+    ), None)
+    # A field name ending its containing string/code span has no value.
+    # An opening quote on an assignment's value does not satisfy this rule.
+    if containing_span is not None and containing_span.end() == match.end() + 1:
+        return True
+    if keyword in ("token=", "password="):
+        # A standalone query-parameter term in prose has no value. Do not
+        # apply this to a URL string whose value starts with a space.
+        prefix = line[:match.start()]
+        if re.search(r"\s[?&#]$", prefix) and value[:1].isspace():
+            return True
+        if containing_span is not None and not re.search(
+            r"(?i)(?<![a-z0-9_])(?:f|fr|rf)$", line[:containing_span.start()]
+        ):
+            return False
+        return bool(_CREDENTIAL_BRACED_REFERENCE.match(value.lstrip()))
+    if keyword == "authorization:":
+        # A dotted literal in an HTTP header is not a source member access.
+        return bool(
+            containing_span is None
+            and re.search(r"[{,]\s*$", line[:match.start()])
+            and _CREDENTIAL_OBJECT_REFERENCE.match(value.lstrip())
+        )
+    return False
+
+
 def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
+    if _credential_source_reference(line, match):
+        return True
     value = line[match.start() :]
     last_keyword: str | None = None
     while True:

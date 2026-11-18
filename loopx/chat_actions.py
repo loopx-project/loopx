@@ -860,6 +860,8 @@ class ChatActionService(
 
         turn_result: dict[str, Any] | None = None
         session_id = ""
+        # A caller that owns its conversation layer opens the first Session itself.
+        open_session = parameters.get("open_session") is not False
         first_turn_message = (f"/goal start --tokens {parameters['native_token_budget']} {objective}"
             if parameters.get("native_token_budget") else (
             f"开始推进 Goal {goal_id}。先核对目标边界和现有 Todo，"
@@ -869,7 +871,7 @@ class ChatActionService(
         opening_session_id = _digest({"goal_create": proposal_id, "goal_id": goal_id})[:32]
         expected_managed_agent = (creation_plan.get("creationSession") or {}).get("managedAgentId")
         turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
-        if not progress.get("firstTurn") and not progress.get("sessionId") and turn_store is not None:
+        if open_session and not progress.get("firstTurn") and not progress.get("sessionId") and turn_store is not None:
             require_regular_session_paths(turn_store, opening_session_id)
             original = turn_store.load_session(opening_session_id)
             if original is not None:
@@ -884,7 +886,9 @@ class ChatActionService(
             if original is not None:
                 read_original_session(session_id=original["session_id"])
                 progress = {**progress, "sessionId": original["session_id"]}
-        if progress.get("firstTurn"):
+        if not open_session:
+            pass
+        elif progress.get("firstTurn"):
             session_id = progress["firstTurn"]["sessionId"]
             turn_id = progress["firstTurn"]["turnId"]
             turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
@@ -917,7 +921,7 @@ class ChatActionService(
                         "outcome": "first_turn_started", "session_id": session_id, "turn_id": turn["turn_id"],
                     })
         first_turn_gate: dict[str, Any] | None = None
-        if agent_id and self.runtime_controller is not None and turn_result is None:
+        if open_session and agent_id and self.runtime_controller is not None and turn_result is None:
             try:
                 from .status import collect_status
 
@@ -960,7 +964,7 @@ class ChatActionService(
                     )[:600],
                     "quota_state": str(guard.get("state") or "waiting"),
                 }
-        if agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
+        if open_session and agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
             if progress.get("sessionId"):
                 session = read_original_session(session_id=progress["sessionId"])
             else:
@@ -1054,6 +1058,7 @@ class ChatActionService(
                 step="heartbeat_gate_ready",
                 receipt={"outcome": "heartbeat_gate_ready", "gate": child_gate},
             )
+        managed_agent_id = (creation_plan.get("creationSession") or {}).get("managedAgentId")
         receipt = {
             "receipt_id": _digest({"proposal_id": proposal_id, "goal_id": goal_id})[
                 :32
@@ -1083,6 +1088,10 @@ class ChatActionService(
                     "goal_instance_id": session.get("goal_instance_id")}
                    if session_id and session.get("managed_agent_id") is not None else {}),
                 **({"turn_id": turn_result["turn_id"]} if turn_result else {}),
+                # Without an opened Session the caller still needs the managed Agent's address.
+                **({"managed_agent_id": managed_agent_id, "channel_id": f"agent.{managed_agent_id}",
+                    "goal_instance_id": projected.get("goal_instance_id")}
+                   if not session_id and not open_session and managed_agent_id else {}),
             },
             **({"child_gate": child_gate} if child_gate else {}),
             "step_receipts": (

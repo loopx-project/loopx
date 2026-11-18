@@ -969,3 +969,31 @@ def test_agent_directory_withholds_a_credential_shaped_thread_from_the_packet(
     assert row["peer_route"]["withheld_candidate_count"] == 1
     assert "route_candidate_withheld" in packet["limitations"]
     validate_public_safe_value(packet, path="peer_agent_directory")
+
+
+def test_list_attached_session_bindings_is_a_read_only_row_per_binding():
+    from loopx.thread_agent_binding import list_attached_session_bindings
+
+    goals = [
+        {
+            "id": "g1",
+            "display_name": "First",
+            "coordination": {
+                "thread_agent_bindings": [
+                    {"thread_id": "t1", "host_surface": "codex-app", "agent_id": "codex"},
+                    {"thread_id": "bad id", "host_surface": "codex-app", "agent_id": "codex"},
+                ]
+            },
+        },
+        {"id": "g2"},
+        "not-a-goal",
+    ]
+    assert list_attached_session_bindings(goals) == [
+        {
+            "host_surface": "codex-app",
+            "session_id": "t1",
+            "goal_id": "g1",
+            "goal_title": "First",
+            "agent_id": "codex",
+        }
+    ]

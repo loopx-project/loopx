@@ -67,12 +67,70 @@ def test_outgoing_request_and_return_require_explicit_consumption(tmp_path):
     acknowledge(root, "research", "reviewer", rid, "adopt", "Inspect current source")
     report(root, "research", "reviewer", rid, "conclusion", "One boundary requires correction.")
     assert agenda(root, registry)["items"][0]["step"] == "consume_peer_result"
-    read_inbox(root, registry, "research", "worker")
+    turn = "turn-review-return"
+    read_inbox(root, registry, "research", "worker", turn_instance_id=turn)
     assert agenda(root, registry)["items"][0]["step"] == "consume_peer_result"
     assert agenda(root, registry, "reviewer")["items"][0]["step"] == "await_peer_consumption"
-    consume_return(root, "research", "worker", rid, registry=registry)
+    consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id=turn, disposition="accepted")
     assert agenda(root, registry)["items"] == []
     assert agenda(root, registry, "reviewer")["items"] == []
+
+
+def test_peer_return_deferral_survives_until_a_later_turn(flow):
+    root, registry, _store, _create = flow
+    configured = json.loads(registry.read_text())
+    configured["goals"][0]["coordination"]["registered_agents"].append("reviewer")
+    registry.write_text(json.dumps(configured))
+    brief = {"schema_version": "collaboration_brief_v0", "purpose": "Review the boundary",
+        "context": "Keep requester authority", "constraints": [], "inputs": [],
+        "acceptance": ["Return findings"], "return_requirement": "Return to requester"}
+    receipt = request(root, registry, "research", "worker", "reviewer", "review-round", brief)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "reviewer", rid, "adopt", "Review")
+    report(root, "research", "reviewer", rid, "conclusion", "Use this result next Turn.")
+
+    hook = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "worker")])
+    assert "--turn-instance-id" not in hook["required_reads"][0]["command"]
+    assert not (_root(root) / "replies" / rid / "conclusion.delivery.json").exists()
+
+    # A transport-only read is not proof that a model Turn received the result.
+    read_inbox(root, registry, "research", "worker")
+    with pytest.raises(ValueError, match="in this work Turn"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-a", disposition="accepted")
+
+    first = read_inbox(root, registry, "research", "worker", turn_instance_id="turn-a")
+    assert "--turn-instance-id turn-a" in first["peer_returns"]["items"][0]["acknowledge_command"]
+    delivery = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    supplied = delivery.read_bytes()
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-a")
+    assert delivery.read_bytes() == supplied
+    deferred = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-a", disposition="deferred")
+    replay = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-a", disposition="deferred")
+    assert deferred["status"] == "deferred" and deferred["replay"] is False
+    assert replay["replay"] is True
+    assert agenda(root, registry)["return_attention"]["count"] == 1
+
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-b")
+    acknowledgement = _root(root) / "replies" / rid / "conclusion.acknowledgement.json"
+    saved_acknowledgement = acknowledgement.read_bytes()
+    acknowledgement.write_text(json.dumps({**json.loads(saved_acknowledgement), "agent_id": "other"}))
+    with pytest.raises(ValueError, match="deferred acknowledgement is invalid"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-b", disposition="accepted")
+    acknowledgement.write_bytes(saved_acknowledgement)
+    accepted = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-b", disposition="accepted")
+    replayed = consume_return(root, "research", "worker", rid, registry=registry,
+        turn_instance_id="turn-b", disposition="accepted")
+    assert accepted["status"] == "consumed" and replayed["replay"] is True
+    with pytest.raises(ValueError, match="scope mismatch"):
+        consume_return(root, "research", "worker", rid, registry=registry,
+            turn_instance_id="turn-b", disposition="deferred")
+    assert agenda(root, registry)["return_attention"]["count"] == 0
 
 
 @pytest.mark.skipif(os.name != "posix", reason="exercise the rendered POSIX host command")
@@ -500,6 +558,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         manager_read = next(item for item in required_reads if item["hook_id"] == "manager.context_inbox")
         manager_argv = shlex.split(manager_read["command"])
         assert "manager-inbox" in manager_argv and "read" in manager_argv
+        assert "--turn-instance-id" not in manager_argv
         assert "--attention-only" in manager_argv
         assert manager_argv[manager_argv.index("--format") + 1] == "markdown"
         assert "Continue the linked work" not in json.dumps(content)
@@ -510,6 +569,19 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert result.returncode == 0, result.stderr
         body = result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n")
         rendered = json.loads(body)
+        if "command" in rendered:
+            assert rendered["ok"] and rendered["read_complete"] is False
+            digest = rendered["sha256"]
+            reader = rendered["command"]
+            raw = bytearray()
+            while reader:
+                code, part = run(*shlex.split(reader))
+                assert code == 0 and part["ok"] and part["sha256"] == digest
+                assert part["offset"] == len(raw)
+                raw.extend(part["content"].encode("utf-8"))
+                assert len(raw) == (part["total_bytes"] if part["eof"] else part["next_offset"])
+                reader = None if part["eof"] else part["next_command"]
+            rendered = json.loads(raw)
         common = rendered.pop("shared_item_guidance", {})
         rendered["items"] = [{**common, **row} for row in rendered["items"]]
         # Both commands perform the same scoped read. Each reports its own
