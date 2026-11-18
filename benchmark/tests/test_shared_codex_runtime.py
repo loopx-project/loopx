@@ -168,6 +168,19 @@ sys.stdin.read()
     }
 
 
+def test_resumed_worker_builds_native_command_without_collaboration_server(tmp_path):
+    env = worker_env(tmp_path)
+    execution = Execution(context_delivery="off")
+    session = SimpleNamespace(session_id="retained-session")
+
+    command = worker.native_command(env, execution, "execute", tmp_path, session)
+
+    assert command[:2] == [env["CODEX_BIN"], "exec"]
+    assert "resume" in command
+    assert command[-2:] == [session.session_id, "-"]
+    assert not any(argument.startswith("mcp_servers.") for argument in command)
+
+
 def test_non_heartbeat_wakes_do_not_import_checkpoint_control_plane(tmp_path, monkeypatch):
     # plain/native-goal workers stage no LoopX control plane; a checkpoint import
     # there turned a 90-minute trial into a 0.7s ModuleNotFoundError exit.
