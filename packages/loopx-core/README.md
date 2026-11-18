@@ -68,10 +68,11 @@ are refused. Its native events are protocol fixtures; they do not establish
 model retention or installed-host adoption.
 
 `capability show agent-turn-recall` reports the optional recall implementation
-as unavailable in Core. Use the ordinary LoopX installation to run recall.
-If an existing Goal explicitly enables automatic recall, Core records the
-missing implementation and continues the task. Outcome ingest retains its
-independent configuration and recovery path.
+as unavailable in Core alone. Install the [matching recall wheel](../loopx-capability-agent-turn-recall/README.md)
+in the Core environment to make its existing command available. Recall starts
+only with the existing explicit Goal/Agent configuration. When the implementation
+is unavailable, an enabled Goal records that fact and continues the task.
+Outcome ingest uses its own configuration and recovery path.
 
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary
@@ -86,6 +87,6 @@ host/CLI dependencies because the current imports are coupled. This makes it a
 workspace-free installation prerequisite, not a qualified minimal mechanism
 closure. Those dependencies are migration debt, not evidence that every
 capability belongs in the kernel. Full workspace/meta-package splitting,
-independent capability packaging, other host/platform qualification and the
+the remaining capability packages, other host/platform qualification and the
 complexity/coverage hypothesis remain separate work. Smaller installation or a
 passing process fixture alone does not establish model effectiveness.
