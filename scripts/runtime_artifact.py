@@ -23,7 +23,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from loopx.presentation.chat_bundle import source_digest, validate_bundle  # noqa: E402
-from loopx.cli_commands.update_artifact import RUNTIME_ARTIFACT_SCHEMA_VERSION, validate_manifest  # noqa: E402
+from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT, RUNTIME_ARTIFACT_SCHEMA_VERSION, validate_manifest  # noqa: E402
 
 PATHS = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps/presentation",
          ".github", "README.md", "LICENSE", "NOTICE", "LICENSE-MIT", "pyproject.toml", "setup.py", "MANIFEST.in")
@@ -95,7 +95,7 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
             inventory["runtime"].append({"path": member.name, "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest()})
         identity = json.dumps({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
-            "package_version": version}).encode()
+            "package_version": version, "default_contract": PUBLIC_DEFAULT_CONTRACT}).encode()
         member = tarfile.TarInfo("runtime-artifact.json")
         member.size, member.mode = len(identity), 0o644
         runtime.addfile(member, io.BytesIO(identity))
@@ -107,6 +107,7 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
     archive = output / filename
     result = validate_manifest({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
         "package_version": version, "channel": channel, "size": archive.stat().st_size,
+        "default_contract": dict(PUBLIC_DEFAULT_CONTRACT),
         "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "urls": [f"https://github.com/{repository}/releases/download/{tag}/{filename}"],
         "resources": {"filename": optional_name, "size": (output / optional_name).stat().st_size,

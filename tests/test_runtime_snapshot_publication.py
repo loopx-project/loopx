@@ -12,6 +12,7 @@ import sys
 
 import pytest
 import yaml
+from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT, validate_default_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "a" * 40
@@ -92,10 +93,11 @@ def publication(tmp_path):
                          ("runtime-inventory", ".json")):
         (runtime / f"{stem}-{REVISION}{suffix}").write_bytes(f"{stem}:immutable".encode())
     archive = runtime / f"loopx-runtime-{REVISION}.tar.gz"
-    manifest = json.dumps({"source_revision": REVISION, "channel": "main",
+    manifest = json.dumps({"source_revision": REVISION, "channel": "main", "default_contract": dict(PUBLIC_DEFAULT_CONTRACT),
         "size": archive.stat().st_size, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "urls": [
         f"https://github.com/example/loopx/releases/download/{SNAPSHOT}/loopx-runtime-{REVISION}.tar.gz"]})
     qualification = {"ok": True, "source_revision": REVISION, "channel": "main",
+        "default_contract": dict(PUBLIC_DEFAULT_CONTRACT),
         "bytes": archive.stat().st_size, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "clean_install": True, "upgrade": True, "doctor": True, "skills": True,
         "frontend_bundle_contract": True, "frontend_http": True,
@@ -126,13 +128,14 @@ def publish(root):
     functions = f"gh() {{ {shlex.quote(sys.executable)} github.py \"$@\"; }}\n"
     functions += f"python() {{ {shlex.quote(sys.executable)} \"$@\"; }}\n"
     return subprocess.run(["bash", "-c", functions + PUBLISH], cwd=root,
-        env={**os.environ, "GITHUB_REPOSITORY": "example/loopx", "FAKE_GITHUB_STATE": str(root / "github.json")},
+        env={**os.environ, "PYTHONPATH": str(ROOT), "GITHUB_REPOSITORY": "example/loopx", "FAKE_GITHUB_STATE": str(root / "github.json")},
         capture_output=True, text=True, encoding="utf-8", timeout=30, check=False)
 
 
 @pytest.mark.parametrize("failure", [
     "missing", "invalid_json", "failed", "incomplete", "wrong_revision", "wrong_channel",
     "wrong_size", "wrong_digest", "archive_changed", "manifest_changed", "frozen_manifest_changed", "truthy_status",
+    "missing_contract", "unknown_contract", "c1_default", "mismatched_contract", "missing_observed_contract",
 ])
 def test_unqualified_runtime_never_changes_remote_state(publication, failure):
     qualification = publication / "runtime" / f"qualification-{REVISION}.json"
@@ -143,6 +146,25 @@ def test_unqualified_runtime_never_changes_remote_state(publication, failure):
         qualification.write_text("{", encoding="utf-8")
     elif failure == "frozen_manifest_changed":
         (publication / "runtime" / f"loopx-runtime-{REVISION}.json").write_text("{}", encoding="utf-8")
+    elif failure in {"missing_contract", "unknown_contract", "c1_default"}:
+        path = publication / "runtime/loopx-runtime.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if failure == "missing_contract":
+            data.pop("default_contract")
+        else:
+            profile = {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+                       "interaction_schema_version": "loopx_interaction_contract_v0"} if failure == "c1_default" else {"surface": "future"}
+            data["default_contract"] = record["default_contract"] = profile
+        # All engineering checks, identities and frozen bytes still agree.
+        for name in ["loopx-runtime.json", f"loopx-runtime-{REVISION}.json"]:
+            (publication / "runtime" / name).write_text(json.dumps(data), encoding="utf-8")
+        qualification.write_text(json.dumps(record), encoding="utf-8")
+    elif failure in {"mismatched_contract", "missing_observed_contract"}:
+        if failure == "missing_observed_contract":
+            record.pop("default_contract")
+        else:
+            record["default_contract"] = {"surface": "complete_turn"}
+        qualification.write_text(json.dumps(record), encoding="utf-8")
     elif failure in {"archive_changed", "manifest_changed"}:
         if failure == "archive_changed":
             (publication / "runtime" / f"loopx-runtime-{REVISION}.tar.gz").write_bytes(b"unqualified bytes")
@@ -308,3 +330,21 @@ def test_builder_freezes_correct_archive_url_before_publication(tmp_path, monkey
     assert descriptor["urls"] == [f"https://github.com/example/loopx/releases/download/{tag}/loopx-runtime-{revision}.tar.gz"]
     assert json.loads((output / "loopx-runtime.json").read_text(encoding="utf-8")) == descriptor
     assert (output / f"loopx-runtime-{revision}.tar.gz").stat().st_size == descriptor["size"]
+    assert descriptor["default_contract"] == PUBLIC_DEFAULT_CONTRACT
+
+
+def test_release_probe_observes_real_default_without_model_or_active_goal():
+    from scripts.qualify_runtime_artifact import observe_default_contract
+
+    # The probe observes the real writer rather than inheriting the intended
+    # distribution profile. Main currently exercises C1, which remains outside
+    # the supported public scope until its original qualification is complete.
+    observed = observe_default_contract(ROOT)
+    assert observed == {
+        "surface": "complete_turn",
+        "schema_version": "loopx_turn_envelope_v1",
+        "interaction_schema_version": "loopx_interaction_contract_v0",
+    }
+    assert observed != PUBLIC_DEFAULT_CONTRACT
+    with pytest.raises(ValueError, match="unqualified for public adoption"):
+        validate_default_contract(observed)
