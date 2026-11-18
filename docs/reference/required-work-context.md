@@ -503,6 +503,15 @@ cannot be combined with socket handoff. Ordinary callers keep their existing
 presentation, and context delivery off keeps its original pending Goal reads.
 Unbound staged replans retain their existing review-owned original Goal read.
 
+If complete Turn composition fails after quota admission, the capture contains
+the failure and original receipts for `quota context-read`. `quota context-project`
+refuses the diagnostic capture. A saved diagnostic carries no executable input
+or native claim source. Reconcile the original Turn receipt before recovery.
+
+中文：额度 guard 已准入、完整 Turn 组合随后失败时，capture 保留失败与原回执，
+可通过 `quota context-read` 读回。`quota context-project` 会拒绝该诊断
+capture，活跃会话的认领来源保持原样。恢复前先核对原 Turn 回执。
+
 After a Host claim, the ready guard uses the private
 `--prepared-capture-reference` route. It publishes the complete decision and
 returns its writer digest with the fields needed to verify the same Todo and
