@@ -208,7 +208,7 @@ class StewardReports:
                 inspection = interpret_turn_journal_projection(journal, goal_id=goal_id, agent_id=agent_id, turn_key=key)
                 return (inspection.get("journal_consistent") is True
                     and inspection.get("completed_phases") == []
-                    and StewardTurnHost(self.controller).report_failure_observation(turn) is not None)
+                    and StewardTurnHost(self.controller).report_window_failure_verified(turn, window))
 
     def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
                               failure: dict[str, str], *, cadence_locked: bool = False) -> None:

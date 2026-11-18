@@ -12,9 +12,11 @@ from contextlib import contextmanager, ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import time
 from typing import Any
 
@@ -22,6 +24,11 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected
 from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ...file_lock import exclusive_file_lock
+from .report_failure_proof import (
+    read_retained_report_failure,
+    report_failure_binding,
+    retain_report_failure,
+)
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
@@ -61,6 +68,9 @@ def _same_report_validator_command(frozen_cmd: Any, request_cmd: Any) -> bool:
         and frozen_cmd[1] == "-c" and request_cmd[1] == "-c"
         and frozen_cmd[2] == request_cmd[2] and frozen_cmd[2].startswith(_REPORT_VALIDATOR_PREFIX)
         and frozen_cmd[2].endswith("))"))
+
+
+_LOG = logging.getLogger(__name__)
 
 
 def native_steward_client_id(actor: Mapping[str, Any], turn_instance_id: str) -> str:
@@ -434,13 +444,15 @@ class StewardTurnHost:
                 ("editorial-response.json", "private-generation.json", "private-delivery.json")),
             "observed_at": time.time()}}
 
-    def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
-        """Read the original native failure without starting or resuming work."""
+    def _report_failure_probe(
+        self, original: Mapping[str, Any], *, include_contradiction: bool = False,
+    ) -> tuple[list[str], dict[str, Any] | None] | None:
         result = (original.get("response") or {}).get("native_loopx") or {}
         request = original.get("loopx_request") or {}
         if (original.get("status") != "completed" or request.get("work_kind") != "report"
                 or result.get("result_kind") != "host_failure" or not original.get("upstream_turn_id")):
             return None
+        from ...chat_agent import CodexChatAgentError
         from .codex_adapter import CodexAppServerAdapter
         from .codex_context import checked_session_home
         session = self.store.load_session(original["session_id"])
@@ -454,22 +466,74 @@ class StewardTurnHost:
         # Context replacement retains native provenance on this same Session.
         # Read the original refusal there; never resume a historical thread.
         threads = [session["upstream_thread_id"], *(item["thread_id"] for item in reversed(history))]
-        proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
-            codex_home=Path(session["codex_home"]),
-            model_auth_home=checked_session_home(self.controller.codex_home, session),
-            thread_ids=list(dict.fromkeys(threads)), turn_id=original["upstream_turn_id"])
-        if (not proof or proof.get("turn_id") != original["upstream_turn_id"]
-                or proof.get("thread_id") not in threads or proof.get("only_original_user_item") is not True
-                or not proof.get("codex_error_info")):
-            return None
-        return proof
+        try:
+            proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
+                codex_home=Path(session["codex_home"]), thread_ids=list(dict.fromkeys(threads)),
+                model_auth_home=checked_session_home(self.controller.codex_home, session),
+                turn_id=original["upstream_turn_id"], include_contradiction=include_contradiction)
+        except (CodexChatAgentError, OSError, subprocess.SubprocessError):
+            if not include_contradiction:
+                raise
+            proof = None
+        return threads, proof
 
-    def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+    @staticmethod
+    def _valid_report_failure_proof(
+        original: Mapping[str, Any], threads: Sequence[str], proof: Mapping[str, Any] | None,
+    ) -> bool:
+        return (isinstance(proof, Mapping) and proof.get("contradicted") is not True
+            and proof.get("turn_id") == original["upstream_turn_id"] and proof.get("thread_id") in threads
+            and proof.get("only_original_user_item") is True and bool(proof.get("codex_error_info")))
+
+    def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Read the original native failure without starting or resuming work."""
+        probed = self._report_failure_probe(original)
+        if probed is None:
+            return None
+        threads, proof = probed
+        return proof if self._valid_report_failure_proof(original, threads, proof) else None
+
+    def report_window_failure_verified(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
+        """Query live provider history first; fall back to retained proof only if unavailable."""
+        probed = self._report_failure_probe(original, include_contradiction=True)
+        if probed is None:
+            return False
+        threads, proof = probed
+        if proof is not None:
+            if proof.get("contradicted") is True or not self._valid_report_failure_proof(original, threads, proof):
+                return False
+            self._try_retain_report_failure(original, window, proof)
+            return True
+        return self.retained_report_failure_observation(original, window)
+
+    @staticmethod
+    def _report_failure_binding(original: Mapping[str, Any], window: dict[str, Any]) -> dict[str, str] | None:
+        return report_failure_binding(original, window)
+
+    def retained_report_failure_observation(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
+        """Scope retained provider evidence to the same failure and cadence window."""
+        return read_retained_report_failure(self.controller.coordination_runtime_root, original, window)
+
+    def _retain_report_failure_observation(self, original: Mapping[str, Any], window: dict[str, Any],
+                                           proof: Mapping[str, Any]) -> None:
+        retain_report_failure(self.controller.coordination_runtime_root, self.store, original, window, proof)
+
+    def _try_retain_report_failure(self, original: Mapping[str, Any], window: dict[str, Any],
+                                   proof: Mapping[str, Any]) -> None:
+        try:
+            self._retain_report_failure_observation(original, window, proof)
+        except (OSError, ValueError, TypeError, KeyError):
+            _LOG.warning("An original report's terminal failure proof could not be retained")
+
+    def report_quota_request(self, original: Mapping[str, Any], *,
+                             report_window: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Observe quota recovery, never resume or rewrite the failed native Turn."""
         request = original.get("loopx_request") or {}
         if request.get("report_quota_recovery") is not None:
             return None
         proof = self.report_failure_observation(original)
+        if proof is not None and report_window is not None:
+            self._try_retain_report_failure(original, report_window, proof)
         if (not proof or proof.get("only_original_user_item") is not True
                 or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
             return None
@@ -1148,7 +1212,8 @@ class StewardTurnHost:
         quota_observation = None
         if "quota_probe" in prepared:
             quota_observation = prepared["quota_probe"]
-            quota_observation["request"] = self.report_quota_request(quota_observation["original"])
+            quota_observation["request"] = self.report_quota_request(
+                quota_observation["original"], report_window=report_window)
             prepared = inspect_submission(quota_observation)
         if "turn" in prepared:
             return prepared["turn"], False

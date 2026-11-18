@@ -735,6 +735,17 @@ deadline is not a promise that the held window can run. This observation grants
 no cancellation, retirement or retry. A correlated quota continuation that
 succeeds clears the current failure projection while retaining its failed predecessor.
 
+When a terminal Codex failure with only the original user input is verified, the
+report attempt records that observation under its generation lock. The record
+binds the original Chat and Codex Turns, the report window and subscription
+revision, and the original native result digest. A later independent period
+queries live Codex history first after the existing journal, generation and
+delivery checks pass: readable counter-evidence holds the original window even
+if a retained proof exists, and the retained proof is used only when Codex
+history is unavailable. Quota continuation for the original period still
+requires a live observation. Missing or mismatched evidence still leaves a
+window held when the original failure cannot be verified.
+
 | Cancelled failure on the original settings page | Narrow retained-failure state |
 | --- | --- |
 | ![Cancelled generation is not completed or delivered](../assets/personal-workspace/steward-reports/failed-window-cancelled.png) | ![Retained cancelled window in a narrow viewport](../assets/personal-workspace/steward-reports/cancelled-window-narrow.png) |
