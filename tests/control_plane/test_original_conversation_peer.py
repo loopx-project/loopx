@@ -199,6 +199,51 @@ def test_original_project_has_explicit_grant_and_returns_through_requester_inbox
     assert not any("dynamicTools" in p.get("params", {}) for p in packets)
 
 
+@pytest.mark.parametrize(
+    ("terminal_disposition", "opposite_disposition"),
+    [("accepted", "rejected"), ("rejected", "accepted")],
+)
+def test_original_peer_terminal_disposition_rejects_a_conflicting_retry(
+    project_peer, terminal_disposition, opposite_disposition,
+):
+    from loopx.control_plane.collaboration.inbox import _root
+
+    f = project_peer
+    allow(f)
+    published = f["service"].publish(f["body"])
+    completed = f["runtime"].wait_for_turn(
+        session_id=f["session"]["session_id"], turn_id=published["turn_id"], timeout_sec=15,
+    )
+    assert completed["status"] == "completed", completed
+
+    current_turn = "turn-terminal-disposition"
+    inbox = read_inbox(f["root"], f["registry"], "delivery", "builder",
+        caller_goal_ref=f["ref"], turn_instance_id=current_turn)
+    assert [item["request_id"] for item in inbox["peer_returns"]["items"]] == [published["request_id"]]
+
+    def acknowledge(disposition):
+        return consume_return(f["root"], "delivery", "builder", published["request_id"],
+            registry=f["registry"], caller_goal_ref=f["ref"], turn_instance_id=current_turn,
+            disposition=disposition)
+
+    consumed = acknowledge(terminal_disposition)
+    assert consumed["consumed"]
+    folder = _root(f["root"]) / "replies" / published["request_id"]
+    receipt_path = folder / "conclusion.consumed.json"
+    receipt = receipt_path.read_bytes()
+    assert json.loads(receipt)["disposition"] == terminal_disposition
+
+    for conflicting in ("deferred", opposite_disposition):
+        with pytest.raises(ValueError, match="peer consumption receipt scope mismatch"):
+            acknowledge(conflicting)
+    assert acknowledge(terminal_disposition) == consumed
+    assert receipt_path.read_bytes() == receipt
+    assert not (folder / "conclusion.acknowledgement.json").exists()
+    next_inbox = read_inbox(f["root"], f["registry"], "delivery", "builder",
+        caller_goal_ref=f["ref"], turn_instance_id="turn-after-terminal-disposition")
+    assert not next_inbox.get("peer_returns", {}).get("items")
+
+
 @pytest.mark.parametrize("changed_record", ["operation", "entry"])
 def test_outgoing_agenda_refuses_a_changed_original_requester(project_peer, monkeypatch, changed_record):
     from loopx.control_plane.collaboration.inbox import _root

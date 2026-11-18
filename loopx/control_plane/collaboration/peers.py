@@ -334,7 +334,9 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
     }, scope=scope)
 
 
-def _deferred_acknowledgement(path, acknowledgement, *, record):
+def _deferred_acknowledgement(
+    path: Path, acknowledgement: dict[str, Any], *, record: bool,
+) -> bool:
     """Validate the latest deferred review and optionally advance it to this Turn."""
     from ...turn_identity import normalize_turn_instance_id
 
@@ -352,12 +354,31 @@ def _deferred_acknowledgement(path, acknowledgement, *, record):
                 or len(prior["acknowledged_at"]) > 80
                 or any(prior.get(key) != expected for key, expected in stable.items())):
             raise ValueError("peer deferred acknowledgement is invalid")
-        replay = prior_turn == acknowledgement["turn_instance_id"]
+        replay = bool(prior_turn == acknowledgement["turn_instance_id"])
     else:
         replay = False
     if record and not replay:
         _write(path, {**acknowledgement, "disposition": "deferred", "acknowledged_at": _now()})
     return replay
+
+
+def _record_return_disposition_locked(
+    folder: Path, result_key: str, acknowledgement: dict[str, Any],
+) -> bool:
+    """Record the disposition under the caller's request lock and report replay."""
+    consumed_path = folder / (result_key + ".consumed.json")
+    if consumed_path.exists():
+        consumed = _read(consumed_path)
+        if any(consumed.get(key) != value for key, value in acknowledgement.items()):
+            raise ValueError("peer consumption receipt scope mismatch")
+        return True
+
+    acknowledgement_path = folder / (result_key + ".acknowledgement.json")
+    if acknowledgement["disposition"] == "deferred":
+        return _deferred_acknowledgement(acknowledgement_path, acknowledgement, record=True)
+    _deferred_acknowledgement(acknowledgement_path, acknowledgement, record=False)
+    _write(consumed_path, {**acknowledgement, "consumed_at": _now()})
+    return False
 
 
 def _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key, *,
@@ -391,17 +412,10 @@ def _consume_original_conversation_return(root, route, goal_id, agent_id, scope,
         value = {"request_id": request_id, "requester": requester, "recipient": recipient,
             **({"result_key": result_key} if "result_key" in reply else {}),
             "turn_instance_id": turn_instance_id, "disposition": disposition}
-        review_path = folder / (result_key + ".acknowledgement.json")
+        replay = _record_return_disposition_locked(folder, result_key, value)
         if disposition == "deferred":
-            replay = _deferred_acknowledgement(review_path, value, record=True)
             return {"ok": True, "request_id": request_id, "result_key": result_key,
                 "status": "deferred", "consumed": False, "replay": replay}
-        _deferred_acknowledgement(review_path, value, record=False)
-        path = folder / (result_key + ".consumed.json")
-        if path.exists() and any(_read(path).get(key) != val for key, val in value.items()):
-            raise ValueError("peer consumption receipt scope mismatch")
-        if not path.exists():
-            _write(path, {**value, "consumed_at": _now()})
     return {"ok": True, "request_id": request_id, "result_key": result_key, "consumed": True}
 
 
@@ -520,37 +534,16 @@ def consume_return(
         "disposition": disposition,
         **({"goal_ref": row["goal_ref"]} if "goal_ref" in row else {}),
     }
-    acknowledgement_path = folder / (result_key + ".acknowledgement.json")
-    consumed_path = folder / (result_key + ".consumed.json")
     mutation_lock = folder / (result_key + ".acknowledgement.lock")
     with _request_lock(root, request_id, scope, mutation_lock):
-        if consumed_path.exists():
-            consumed = _read(consumed_path)
-            if any(consumed.get(key) != expected for key, expected in acknowledgement.items()):
-                raise ValueError("peer consumption receipt scope mismatch")
-            return {"ok": True, "request_id": request_id, "status": "consumed",
-                **({"result_key": result_key} if "result_key" in reply else {}),
-                "work_state_changed": False, "replay": True}
-        if disposition == "deferred":
-            replay = _deferred_acknowledgement(acknowledgement_path, acknowledgement, record=True)
-            return {"ok": True, "request_id": request_id, "status": "deferred",
-                **({"result_key": result_key} if "result_key" in reply else {}), "work_state_changed": False,
-                "replay": replay}
-        _deferred_acknowledgement(acknowledgement_path, acknowledgement, record=False)
-        if not consumed_path.exists():
-            _write(
-                consumed_path,
-                {
-                    **acknowledgement,
-                    "consumed_at": _now(),
-                },
-            )
+        replay = _record_return_disposition_locked(folder, result_key, acknowledgement)
     return {
         "ok": True,
         "request_id": request_id,
-        "status": "consumed",
+        "status": "deferred" if disposition == "deferred" else "consumed",
         **({"result_key": result_key} if "result_key" in reply else {}),
         "work_state_changed": False,
+        **({"replay": replay} if disposition == "deferred" or replay else {}),
     }
 
 

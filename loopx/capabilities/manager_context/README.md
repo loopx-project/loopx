@@ -1164,6 +1164,8 @@ loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
 ```
 
 Use `--disposition deferred` to keep the same result in next-Turn attention.
+After acceptance or rejection, only the same disposition from the same Turn
+can replay the terminal acknowledgement.
 On hosts that only provide the ordinary CLI read, the result stays pending.
 Consumption does not mark a Todo done or certify peer acceptance. The requester
 checks the actual artifact, incorporates or rejects the findings, and reports
