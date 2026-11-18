@@ -65,6 +65,11 @@
       "any_count": 85,
       "dict_any_count": 0
     },
+    "loopx/domain_packs/issue_fix.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 627
+    },
     "loopx/extensions/lark/goal_topic_runtime.py": {
       "any_count": 56,
       "dict_any_count": 0
