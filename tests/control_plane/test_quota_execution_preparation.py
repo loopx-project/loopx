@@ -436,14 +436,14 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
-    assert plan["schema_version"] == (
-        "quota_settlement_plan_v2" if scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
-    )
-    if scenario == "codex_app_heartbeat":
-        writeback, spend = [step for step in plan["ordered_steps"]
-                            if step["kind"] in {"durable_writeback", "quota_spend"}]
-        assert "--settle-turn --settlement-receipt" in writeback["command_template"]
-        assert spend["owner"] == "runtime" and "command_template" not in spend
+    assert plan["identity"] == selected["/heartbeat_receipt"]["settlement_identity"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    channel = selected["/interaction_contract/cli_channel"]
+    assert channel["quota_spend_source"] == ("heartbeat" if scenario == "codex_app_heartbeat" else "visible-goal")
+    writeback, spend = [step for step in plan["ordered_steps"]
+                        if step["kind"] in {"durable_writeback", "quota_spend"}]
+    assert "--settle-turn --settlement-receipt" in writeback["command_template"]
+    assert spend["owner"] == "runtime" and "command_template" not in spend
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.
@@ -494,10 +494,17 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     readback_command = shlex.split(readback["context"]["recovery_command"])
     observed = subprocess.run(readback_command, cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert observed.returncode == 0, observed.stderr
+    projection = json.loads(observed.stdout)
+    assert projection["ok"] and projection["sha256"] == readback["capture_sha256"]
+    # C1 verifies the saved contract before offering its original reader.
+    # Successful projection alone does not show any source bytes were read.
+    reader = shlex.split(projection["recovery"]["command"])
+    observed = subprocess.run(reader, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert observed.returncode == 0, observed.stderr
     ready_page = json.loads(observed.stdout)
     assert ready_page["ok"] and ready_page["sha256"] == readback["capture_sha256"]
     forged = {**ready_page, "content": "x" + ready_page["content"][1:]}
-    for observation, should_repeat in ((forged, True), (ready_page, False)):
+    for observation, should_repeat in ((projection, True), (forged, True), (ready_page, False)):
         shown = subprocess.run(hook, input=json.dumps({**hook_event, "tool_response": observation}),
             env=hook_env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
         assert shown.returncode == 0, shown.stderr
@@ -746,7 +753,14 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
             presented_capture.mkdir(mode=0o700)
             copy = presented_capture / "decision.json"
             if legacy:
-                copy.write_text(json.dumps({**json.loads(original_bytes), "native_claim_replay_bound": True}))
+                # This fixture tests the former unsigned carrier. Editing the
+                # current signed source would stop at its integrity check,
+                # before the legacy marker's lack of a live guard is tested.
+                historical = json.loads(original_bytes)
+                assert historical.pop("schema_version") == "loopx_turn_envelope_v1"
+                historical.pop("contract_binding")
+                historical["native_claim_replay_bound"] = True
+                copy.write_text(json.dumps(historical))
             else:
                 copy.write_bytes(original_bytes + b" ")
             copy.chmod(0o600)

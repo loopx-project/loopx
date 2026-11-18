@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from ...domain_state import default_domain_state_file_path, upsert_domain_state_jsonl
 from .experiment_identity import (
@@ -18,6 +17,9 @@ from .factorial_contrast import (
     build_benchmark_factorial_contrasts,
     build_benchmark_metric_delta,
 )
+
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION = "benchmark_experiment_board_row_v0"
 BENCHMARK_EXPERIMENT_BOARD_SCHEMA_VERSION = "benchmark_experiment_board_v0"
@@ -81,8 +83,22 @@ def benchmark_run_status_is_terminal(value: object) -> bool:
     return isinstance(value, str) and value in _TERMINAL_RUN_STATUSES
 
 
+def _as_map(value: object) -> Payload:
+    return {str(k): v for k, v in value.items()} if isinstance(value, Mapping) else {}
+
+
+def _as_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _strip_domain_state_key(payload: PayloadView) -> Payload:
+    row = dict(payload)
+    row.pop("domain_state_key", None)
+    return row
+
+
 def _reject_unknown_fields(
-    value: Mapping[str, Any],
+    value: PayloadView,
     *,
     allowed: set[str],
     field: str,
@@ -92,13 +108,13 @@ def _reject_unknown_fields(
         raise ValueError(f"{field} contains unsupported fields: {', '.join(unknown)}")
 
 
-def _optional_token(value: Any, *, field: str) -> str | None:
+def _optional_token(value: object, *, field: str) -> str | None:
     if value in (None, ""):
         return None
     return _token(value, field=field)
 
 
-def _artifact_ref(value: Any, *, field: str) -> str:
+def _artifact_ref(value: object, *, field: str) -> str:
     text = _token(value, field=field)
     if "/" in text or "\\" in text or "://" in text:
         raise ValueError(f"{field} must be a basename or public handle, not a path")
@@ -106,7 +122,7 @@ def _artifact_ref(value: Any, *, field: str) -> str:
 
 
 def _finite_number(
-    value: Any, *, field: str, non_negative: bool = False
+    value: object, *, field: str, non_negative: bool = False
 ) -> float | int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{field} must be numeric")
@@ -118,13 +134,13 @@ def _finite_number(
     return value
 
 
-def _non_negative_int(value: Any, *, field: str) -> int:
+def _non_negative_int(value: object, *, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field} must be a non-negative integer")
     return value
 
 
-def _timestamp(value: Any, *, field: str) -> str:
+def _timestamp(value: object, *, field: str) -> str:
     text = str(value or "").strip()
     try:
         parsed = datetime.fromisoformat(text)
@@ -135,127 +151,136 @@ def _timestamp(value: Any, *, field: str) -> str:
     return parsed.isoformat()
 
 
-def _metric_map(value: Any) -> dict[str, dict[str, Any]]:
+def _metric_map(value: object) -> dict[str, Payload]:
     if not isinstance(value, Mapping):
         raise TypeError("metrics must be an object")
     if len(value) > 16:
         raise ValueError("metrics must contain at most 16 entries")
-    metrics: dict[str, dict[str, Any]] = {}
+    metrics: dict[str, Payload] = {}
     for raw_name, raw_metric in value.items():
         name = _token(raw_name, field="metrics name")
         if not isinstance(raw_metric, Mapping):
             raise TypeError(f"metrics.{name} must be an object")
+        metric_view = _as_map(raw_metric)
         _reject_unknown_fields(
-            raw_metric,
+            metric_view,
             allowed={"value", "total", "unit", "higher_is_better"},
             field=f"metrics.{name}",
         )
-        if "value" not in raw_metric:
+        if "value" not in metric_view:
             raise ValueError(f"metrics.{name}.value is required")
-        metric: dict[str, Any] = {
-            "value": _finite_number(raw_metric["value"], field=f"metrics.{name}.value")
+        metric: Payload = {
+            "value": _finite_number(metric_view["value"], field=f"metrics.{name}.value")
         }
-        if "total" in raw_metric:
+        if "total" in metric_view:
             metric["total"] = _finite_number(
-                raw_metric["total"],
+                metric_view["total"],
                 field=f"metrics.{name}.total",
                 non_negative=True,
             )
-        if raw_metric.get("unit") not in (None, ""):
-            metric["unit"] = _token(raw_metric["unit"], field=f"metrics.{name}.unit")
-        if "higher_is_better" in raw_metric:
-            if not isinstance(raw_metric["higher_is_better"], bool):
+        if metric_view.get("unit") not in (None, ""):
+            metric["unit"] = _token(metric_view["unit"], field=f"metrics.{name}.unit")
+        if "higher_is_better" in metric_view:
+            flag = metric_view["higher_is_better"]
+            if not isinstance(flag, bool):
                 raise ValueError(f"metrics.{name}.higher_is_better must be boolean")
-            metric["higher_is_better"] = raw_metric["higher_is_better"]
+            metric["higher_is_better"] = flag
         metrics[name] = metric
     return dict(sorted(metrics.items()))
 
 
-def _countability(value: Any) -> dict[str, bool]:
+def _countability(value: object) -> dict[str, bool]:
     if not isinstance(value, Mapping):
         raise TypeError("countability must be an object")
     allowed = {"integrity_qualified", "official_result_present", "score_countable"}
-    _reject_unknown_fields(value, allowed=allowed, field="countability")
+    view = _as_map(value)
+    _reject_unknown_fields(view, allowed=allowed, field="countability")
     result: dict[str, bool] = {}
     for field in sorted(allowed):
-        field_value = value.get(field)
+        field_value = view.get(field)
         if not isinstance(field_value, bool):
             raise TypeError(f"countability.{field} must be boolean")
         result[field] = field_value
     return result
 
 
-def _effort(value: Any) -> dict[str, float | int]:
+def _effort(value: object) -> dict[str, float | int]:
     if value in (None, {}):
         return {}
     if not isinstance(value, Mapping):
         raise TypeError("effort must be an object")
-    allowed = {
-        "duration_ms",
-        "agent_steps",
-        "goal_turns",
-        "token_count",
-        "estimated_cost_usd",
-    }
-    _reject_unknown_fields(value, allowed=allowed, field="effort")
+    view = _as_map(value)
+    _reject_unknown_fields(
+        view,
+        allowed={
+            "duration_ms",
+            "agent_steps",
+            "goal_turns",
+            "token_count",
+            "estimated_cost_usd",
+        },
+        field="effort",
+    )
     result: dict[str, float | int] = {}
     for field in ("duration_ms", "agent_steps", "goal_turns", "token_count"):
-        if field in value:
-            result[field] = _non_negative_int(value[field], field=f"effort.{field}")
-    if "estimated_cost_usd" in value:
+        if field in view:
+            result[field] = _non_negative_int(view[field], field=f"effort.{field}")
+    if "estimated_cost_usd" in view:
         result["estimated_cost_usd"] = _finite_number(
-            value["estimated_cost_usd"],
+            view["estimated_cost_usd"],
             field="effort.estimated_cost_usd",
             non_negative=True,
         )
     return result
 
 
-def _insight(value: Any) -> dict[str, Any]:
+def _insight(value: object) -> Payload:
     if value in (None, {}):
         return {"status": "pending"}
     if not isinstance(value, Mapping):
         raise TypeError("insight must be an object")
+    view = _as_map(value)
     _reject_unknown_fields(
-        value,
+        view,
         allowed={"status", "classification", "artifact_ref"},
         field="insight",
     )
-    status = _token(value.get("status"), field="insight.status")
+    status = _token(view.get("status"), field="insight.status")
     if status not in _INSIGHT_STATUSES:
         raise ValueError("insight.status is unsupported")
-    result: dict[str, Any] = {"status": status}
-    if value.get("classification") not in (None, ""):
+    result: Payload = {"status": status}
+    if view.get("classification") not in (None, ""):
         result["classification"] = _token(
-            value["classification"], field="insight.classification"
+            view["classification"], field="insight.classification"
         )
-    if value.get("artifact_ref") not in (None, ""):
+    if view.get("artifact_ref") not in (None, ""):
         result["artifact_ref"] = _artifact_ref(
-            value["artifact_ref"], field="insight.artifact_ref"
+            view["artifact_ref"], field="insight.artifact_ref"
         )
     return result
 
 
-def _orchestrator_runtime(value: Any) -> dict[str, str] | None:
+def _orchestrator_runtime(value: object) -> dict[str, str] | None:
     if value in (None, {}):
         return None
     if not isinstance(value, Mapping):
         raise TypeError("orchestrator_runtime must be an object")
+    view = _as_map(value)
     _reject_unknown_fields(
-        value,
+        view,
         allowed={"provider_id", "version", "revision"},
         field="orchestrator_runtime",
     )
     result = {
         "provider_id": _token(
-            value.get("provider_id"), field="orchestrator_runtime.provider_id"
+            view.get("provider_id"), field="orchestrator_runtime.provider_id"
         ),
         "revision": _token(
-            value.get("revision"), field="orchestrator_runtime.revision"
+            view.get("revision"), field="orchestrator_runtime.revision"
         ),
     }
     version = _optional_token(
-        value.get("version"), field="orchestrator_runtime.version"
+        view.get("version"), field="orchestrator_runtime.version"
     )
     if version is not None:
         result["version"] = version
@@ -263,8 +288,8 @@ def _orchestrator_runtime(value: Any) -> dict[str, str] | None:
 
 
 def normalize_benchmark_experiment_board_row(
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
+    payload: PayloadView,
+) -> Payload:
     """Validate and compact one public-safe benchmark experiment-board row."""
 
     if not isinstance(payload, Mapping):
@@ -343,7 +368,7 @@ def normalize_benchmark_experiment_board_row(
                 "score_countable requires official_result_present"
             )
 
-    row: dict[str, Any] = {
+    row: Payload = {
         "schema_version": BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
         "benchmark_id": _token(payload.get("benchmark_id"), field="benchmark_id"),
         "study_id": _token(payload.get("study_id"), field="study_id"),
@@ -381,16 +406,16 @@ def normalize_benchmark_experiment_board_row(
     return row
 
 
-def benchmark_experiment_board_row_key(payload: Mapping[str, Any]) -> dict[str, str]:
-    row = dict(payload)
-    row.pop("domain_state_key", None)
-    normalized = normalize_benchmark_experiment_board_row(row)
+def benchmark_experiment_board_row_key(payload: PayloadView) -> dict[str, str]:
+    normalized = normalize_benchmark_experiment_board_row(
+        _strip_domain_state_key(payload)
+    )
     return {
         "schema_version": BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
-        "benchmark_id": normalized["benchmark_id"],
-        "study_id": normalized["study_id"],
-        "case_id": normalized["case_id"],
-        "run_id": normalized["run_id"],
+        "benchmark_id": str(normalized["benchmark_id"]),
+        "study_id": str(normalized["study_id"]),
+        "case_id": str(normalized["case_id"]),
+        "run_id": str(normalized["run_id"]),
     }
 
 
@@ -407,11 +432,11 @@ def default_benchmark_experiment_board_path(
 
 def read_benchmark_experiment_board_rows(
     ledger_path: str | Path,
-) -> list[dict[str, Any]]:
+) -> list[Payload]:
     path = Path(ledger_path).expanduser()
     if not path.exists():
         return []
-    rows: list[dict[str, Any]] = []
+    rows: list[Payload] = []
     for index, line in enumerate(
         path.read_text(encoding="utf-8").split("\n"), start=1
     ):
@@ -423,21 +448,23 @@ def read_benchmark_experiment_board_rows(
             raise ValueError(f"invalid experiment-board JSONL row {index}") from exc
         if not isinstance(payload, Mapping):
             raise TypeError(f"invalid experiment-board JSONL row {index}")
-        compact = dict(payload)
-        compact.pop("domain_state_key", None)
-        rows.append(normalize_benchmark_experiment_board_row(compact))
+        rows.append(
+            normalize_benchmark_experiment_board_row(
+                _strip_domain_state_key(_as_map(payload))
+            )
+        )
     return rows
 
 
 def preview_benchmark_experiment_board_upsert(
-    rows: Iterable[Mapping[str, Any]], payload: Mapping[str, Any]
-) -> tuple[list[dict[str, Any]], str]:
+    rows: Iterable[PayloadView], payload: PayloadView
+) -> tuple[list[Payload], str]:
     normalized_rows = [
         normalize_benchmark_experiment_board_row(dict(row)) for row in rows
     ]
     candidate = normalize_benchmark_experiment_board_row(payload)
     candidate_key = benchmark_experiment_board_row_key(candidate)
-    output: list[dict[str, Any]] = []
+    output: list[Payload] = []
     status = "inserted"
     for row in normalized_rows:
         if benchmark_experiment_board_row_key(row) == candidate_key:
@@ -453,7 +480,7 @@ def preview_benchmark_experiment_board_upsert(
 
 
 def _validate_benchmark_run_status_transition(
-    existing: Mapping[str, Any], candidate: Mapping[str, Any]
+    existing: PayloadView, candidate: PayloadView
 ) -> None:
     existing_status = str(existing.get("status") or "")
     candidate_status = str(candidate.get("status") or "")
@@ -464,27 +491,23 @@ def _validate_benchmark_run_status_transition(
 
 
 def _merge_benchmark_experiment_board_domain_row(
-    existing: dict[str, Any], candidate: dict[str, Any]
-) -> dict[str, Any]:
-    existing_row = dict(existing)
-    existing_row.pop("domain_state_key", None)
-    candidate_row = dict(candidate)
-    candidate_row.pop("domain_state_key", None)
+    existing: Payload, candidate: Payload
+) -> Payload:
     _validate_benchmark_run_status_transition(
-        normalize_benchmark_experiment_board_row(existing_row),
-        normalize_benchmark_experiment_board_row(candidate_row),
+        normalize_benchmark_experiment_board_row(_strip_domain_state_key(existing)),
+        normalize_benchmark_experiment_board_row(_strip_domain_state_key(candidate)),
     )
     return candidate
 
 
 def upsert_benchmark_experiment_board_row(
-    ledger_path: str | Path, payload: Mapping[str, Any]
-) -> dict[str, Any]:
+    ledger_path: str | Path, payload: PayloadView
+) -> Payload:
     row = normalize_benchmark_experiment_board_row(payload)
     write = upsert_domain_state_jsonl(
         ledger_path,
         row,
-        key=benchmark_experiment_board_row_key(row),
+        key=dict(benchmark_experiment_board_row_key(row)),
         existing_key_fn=benchmark_experiment_board_row_key,
         merge_existing_fn=_merge_benchmark_experiment_board_domain_row,
     )
@@ -497,19 +520,19 @@ def upsert_benchmark_experiment_board_row(
 
 
 def _benchmark_experiment_board_row_key_tuple(
-    payload: Mapping[str, Any],
+    payload: PayloadView,
 ) -> tuple[str, str, str, str]:
     return experiment_run_key(benchmark_experiment_board_row_key(payload))
 
 
-def _benchmark_experiment_board_observed_at(payload: Mapping[str, Any]) -> datetime:
+def _benchmark_experiment_board_observed_at(payload: PayloadView) -> datetime:
     return datetime.fromisoformat(str(payload["observed_at"]))
 
 
 def _advance_reconciled_benchmark_experiment_board_row(
-    selected: dict[str, Any],
-    candidate: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
+    selected: Payload,
+    candidate: Payload,
+) -> tuple[Payload, bool]:
     if selected == candidate:
         return selected, False
 
@@ -543,9 +566,9 @@ def _advance_reconciled_benchmark_experiment_board_row(
 
 
 def _select_reconciled_benchmark_experiment_board_row(
-    current: dict[str, Any] | None,
-    candidates: list[dict[str, Any]],
-) -> tuple[dict[str, Any], int]:
+    current: Payload | None,
+    candidates: list[Payload],
+) -> tuple[Payload, int]:
     ordered = sorted(candidates, key=_benchmark_experiment_board_observed_at)
     selected = current
     stale_skipped = 0
@@ -565,9 +588,9 @@ def _select_reconciled_benchmark_experiment_board_row(
 
 
 def preview_benchmark_experiment_board_reconcile(
-    rows: Iterable[Mapping[str, Any]],
-    source_rows: Iterable[Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    rows: Iterable[PayloadView],
+    source_rows: Iterable[PayloadView],
+) -> tuple[list[Payload], dict[str, int]]:
     """Fold provider-owned board shards into one monotonic canonical projection."""
 
     normalized_rows = [
@@ -582,7 +605,7 @@ def preview_benchmark_experiment_board_reconcile(
     existing_by_key = {
         _benchmark_experiment_board_row_key_tuple(row): row for row in normalized_rows
     }
-    candidates_by_key: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    candidates_by_key: dict[tuple[str, str, str, str], list[Payload]] = {}
     for row in normalized_sources:
         candidates_by_key.setdefault(
             _benchmark_experiment_board_row_key_tuple(row), []
@@ -619,8 +642,8 @@ def preview_benchmark_experiment_board_reconcile(
 
 
 def _build_comparison(
-    candidate: Mapping[str, Any], anchor: Mapping[str, Any] | None
-) -> dict[str, Any]:
+    candidate: PayloadView, anchor: PayloadView | None
+) -> Payload:
     reasons: list[str] = []
     warnings: list[str] = []
     if anchor is None:
@@ -643,22 +666,24 @@ def _build_comparison(
             warnings.append("exact_protocol_revision_differs")
         if anchor.get("primary_metric") != candidate.get("primary_metric"):
             reasons.append("primary_metric_mismatch")
-        if not anchor.get("countability", {}).get("score_countable"):
+        if not _as_map(anchor.get("countability")).get("score_countable"):
             reasons.append("comparison_anchor_score_uncountable")
-        if not candidate.get("countability", {}).get("score_countable"):
+        if not _as_map(candidate.get("countability")).get("score_countable"):
             reasons.append("candidate_score_uncountable")
         if candidate.get("treatment_fidelity") != "qualified":
             reasons.append("candidate_treatment_fidelity_not_qualified")
 
-    metric_deltas: dict[str, Any] = {}
+    metric_deltas: dict[str, Payload] = {}
     if anchor is not None:
-        anchor_metrics = anchor.get("metrics", {})
-        candidate_metrics = candidate.get("metrics", {})
+        anchor_metrics = _as_map(anchor.get("metrics"))
+        candidate_metrics = _as_map(candidate.get("metrics"))
         for name in sorted(set(anchor_metrics) & set(candidate_metrics)):
             metric_deltas[name] = build_benchmark_metric_delta(
-                anchor_metrics[name], candidate_metrics[name]
+                _as_map(anchor_metrics[name]),
+                _as_map(candidate_metrics[name]),
             )
-        if metric_deltas.get(candidate.get("primary_metric"), {}).get(
+        primary_name = str(candidate.get("primary_metric") or "")
+        if _as_map(metric_deltas.get(primary_name)).get(
             "comparison_unavailable_reason"
         ):
             reasons.append("primary_metric_definition_mismatch")
@@ -684,7 +709,7 @@ def _build_comparison(
     }
 
 
-def _row_sort_key(row: Mapping[str, Any]) -> tuple[str, ...]:
+def _row_sort_key(row: PayloadView) -> tuple[str, ...]:
     return (
         str(row.get("benchmark_id") or ""),
         str(row.get("study_id") or ""),
@@ -697,7 +722,7 @@ def _row_sort_key(row: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _comparison_lane_counts(
-    comparisons: Iterable[Mapping[str, Any]],
+    comparisons: Iterable[PayloadView],
     *,
     field: str,
     values: Iterable[str],
@@ -717,7 +742,7 @@ def _comparison_lane_counts(
     }
 
 
-def _orchestrator_runtime_key(row: Mapping[str, Any]) -> str:
+def _orchestrator_runtime_key(row: PayloadView) -> str:
     runtime = row.get("orchestrator_runtime")
     if not isinstance(runtime, Mapping):
         return "none"
@@ -728,12 +753,12 @@ def _orchestrator_runtime_key(row: Mapping[str, Any]) -> str:
 
 
 def build_benchmark_experiment_board(
-    rows: Iterable[Mapping[str, Any]],
+    rows: Iterable[PayloadView],
     *,
     benchmark_id: str | None = None,
     study_id: str | None = None,
-    four_arm_contract: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    four_arm_contract: PayloadView | None = None,
+) -> Payload:
     normalized = [normalize_benchmark_experiment_board_row(dict(row)) for row in rows]
     if benchmark_id is not None:
         benchmark_filter = _token(benchmark_id, field="benchmark_id")
@@ -751,22 +776,24 @@ def build_benchmark_experiment_board(
         else []
     )
 
-    by_run_key = {}
+    by_run_key: dict[tuple[str, str, str, str], Payload] = {}
     for row in normalized:
         key = experiment_run_key(row)
         if key in by_run_key:
             raise ValueError("duplicate experiment-board run identity")
         by_run_key[key] = row
-    comparisons = [
-        _build_comparison(
-            row,
-            by_run_key.get(
-                experiment_run_key(row, run_id=row["comparison_anchor_run_id"])
-            ),
+    comparisons: list[Payload] = []
+    for row in normalized:
+        if row["arm_role"] == "baseline":
+            continue
+        anchor_id = row.get("comparison_anchor_run_id")
+        anchor_row = by_run_key.get(
+            experiment_run_key(
+                row, run_id=anchor_id if isinstance(anchor_id, str) else None
+            )
         )
-        for row in normalized
-        if row["arm_role"] != "baseline"
-    ]
+        comparisons.append(_build_comparison(row, anchor_row))
+
     role_counts = {
         role: sum(1 for row in normalized if row["arm_role"] == role)
         for role in sorted(ARM_ROLES)
@@ -802,7 +829,9 @@ def build_benchmark_experiment_board(
                 if row["status"] in {"completed", "runner_invalid", "cancelled"}
             ),
             "score_countable_run_count": sum(
-                1 for row in normalized if row["countability"]["score_countable"]
+                1
+                for row in normalized
+                if _as_map(row.get("countability")).get("score_countable")
             ),
             "comparison_count": len(comparisons),
             "matched_pair_countable_count": sum(
@@ -858,15 +887,15 @@ def build_benchmark_experiment_board(
     }
 
 
-def _format_metric(metric: Mapping[str, Any] | None) -> str:
-    if not metric:
+def _format_metric(metric: object) -> str:
+    if not isinstance(metric, Mapping) or not metric:
         return "n/a"
     value = metric.get("value")
     total = metric.get("total")
     return f"{value}/{total}" if total is not None else str(value)
 
 
-def _format_orchestrator_runtime(value: Any) -> str:
+def _format_orchestrator_runtime(value: object) -> str:
     if not isinstance(value, Mapping):
         return "n/a"
     provider_id = str(value.get("provider_id") or "unknown")
@@ -876,25 +905,34 @@ def _format_orchestrator_runtime(value: Any) -> str:
     return f"{identity}:{revision[:12]}"
 
 
-def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> str:
-    summary = (
-        payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
-    )
-    claim_scope_counts = (
-        summary.get("comparison_claim_scope_counts")
-        if isinstance(summary.get("comparison_claim_scope_counts"), Mapping)
-        else {}
-    )
-    matched_study_counts = (
-        claim_scope_counts.get("matched_study")
-        if isinstance(claim_scope_counts.get("matched_study"), Mapping)
-        else {}
-    )
-    diagnostic_counts = (
-        claim_scope_counts.get("diagnostic_only")
-        if isinstance(claim_scope_counts.get("diagnostic_only"), Mapping)
-        else {}
-    )
+def _join_codes(value: object) -> str:
+    return ", ".join(str(item) for item in _as_list(value)) or "none"
+
+
+def _render_table_section(
+    title: str,
+    headers: Sequence[str],
+    dividers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+) -> list[str]:
+    lines = [
+        "",
+        f"## {title}",
+        "",
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(dividers) + " |",
+    ]
+    body_rows = rows or [["n/a"] * len(headers)]
+    for cells in body_rows:
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
+
+
+def render_benchmark_experiment_board_markdown(payload: PayloadView) -> str:
+    summary = _as_map(payload.get("summary"))
+    claim_scope_counts = _as_map(summary.get("comparison_claim_scope_counts"))
+    matched_study_counts = _as_map(claim_scope_counts.get("matched_study"))
+    diagnostic_counts = _as_map(claim_scope_counts.get("diagnostic_only"))
     lines = [
         "# Benchmark Experiment Board",
         "",
@@ -905,164 +943,125 @@ def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> st
         f"- Countable factorial contrasts: `{summary.get('factorial_contrast_countable_count', 0)}`",
         f"- Countable matched-study comparisons: `{matched_study_counts.get('matched_pair_countable', 0)}`",
         f"- Countable diagnostic-only comparisons: `{diagnostic_counts.get('matched_pair_countable', 0)}`",
-        "",
-        "## Runs",
-        "",
-        "| Benchmark | Study | Case | Role | Arm | Orchestrator | Status | Primary | Reward | Integrity | Countable | Fidelity | Steps | Cost USD | Insight |",
-        "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | --- |",
     ]
-    for row in payload.get("runs", []) or []:
-        if not isinstance(row, Mapping):
-            continue
-        metrics = row.get("metrics") if isinstance(row.get("metrics"), Mapping) else {}
-        primary = metrics.get(row.get("primary_metric"))
-        reward = metrics.get("reward")
-        countability = (
-            row.get("countability")
-            if isinstance(row.get("countability"), Mapping)
-            else {}
-        )
-        effort = row.get("effort") if isinstance(row.get("effort"), Mapping) else {}
-        insight = row.get("insight") if isinstance(row.get("insight"), Mapping) else {}
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    str(row.get("benchmark_id")),
-                    str(row.get("study_id")),
-                    str(row.get("case_id")),
-                    str(row.get("arm_role")),
-                    str(row.get("arm_id")),
-                    _format_orchestrator_runtime(row.get("orchestrator_runtime")),
-                    str(row.get("status")),
-                    _format_metric(primary if isinstance(primary, Mapping) else None),
-                    _format_metric(reward if isinstance(reward, Mapping) else None),
-                    str(countability.get("integrity_qualified")),
-                    str(countability.get("score_countable")),
-                    str(row.get("treatment_fidelity")),
-                    str(effort.get("agent_steps", "n/a")),
-                    str(effort.get("estimated_cost_usd", "n/a")),
-                    str(insight.get("status", "pending")),
-                ]
-            )
-            + " |"
-        )
-    if not payload.get("runs"):
-        lines.append(
-            "| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |"
-        )
 
-    lines.extend(
-        [
-            "",
-            "## Comparisons",
-            "",
-            "| Case | Candidate role | Candidate arm | Primary delta | Countable | Reasons | Warnings |",
-            "| --- | --- | --- | ---: | --- | --- | --- |",
-        ]
-    )
-    for item in payload.get("comparisons", []) or []:
-        if not isinstance(item, Mapping):
+    run_rows: list[list[str]] = []
+    for raw_row in _as_list(payload.get("runs")):
+        if not isinstance(raw_row, Mapping):
             continue
-        deltas = (
-            item.get("metric_deltas")
-            if isinstance(item.get("metric_deltas"), Mapping)
-            else {}
+        row = _as_map(raw_row)
+        metrics = _as_map(row.get("metrics"))
+        primary_key = row.get("primary_metric")
+        primary = metrics.get(primary_key) if isinstance(primary_key, str) else None
+        countability = _as_map(row.get("countability"))
+        effort = _as_map(row.get("effort"))
+        insight = _as_map(row.get("insight"))
+        run_rows.append(
+            [
+                str(row.get("benchmark_id")),
+                str(row.get("study_id")),
+                str(row.get("case_id")),
+                str(row.get("arm_role")),
+                str(row.get("arm_id")),
+                _format_orchestrator_runtime(row.get("orchestrator_runtime")),
+                str(row.get("status")),
+                _format_metric(primary),
+                _format_metric(metrics.get("reward")),
+                str(countability.get("integrity_qualified")),
+                str(countability.get("score_countable")),
+                str(row.get("treatment_fidelity")),
+                str(effort.get("agent_steps", "n/a")),
+                str(effort.get("estimated_cost_usd", "n/a")),
+                str(insight.get("status", "pending")),
+            ]
         )
-        primary_delta = deltas.get(item.get("primary_metric"))
+    lines.extend(
+        _render_table_section(
+            "Runs",
+            [
+                "Benchmark", "Study", "Case", "Role", "Arm", "Orchestrator", "Status",
+                "Primary", "Reward", "Integrity", "Countable", "Fidelity", "Steps",
+                "Cost USD", "Insight",
+            ],
+            [
+                "---", "---", "---", "---", "---", "---", "---",
+                "---:", "---:", "---", "---", "---", "---:", "---:", "---",
+            ],
+            run_rows,
+        )
+    )
+
+    comparison_rows: list[list[str]] = []
+    for raw_item in _as_list(payload.get("comparisons")):
+        if not isinstance(raw_item, Mapping):
+            continue
+        item = _as_map(raw_item)
+        deltas = _as_map(item.get("metric_deltas"))
+        primary_key = item.get("primary_metric")
+        primary_delta = deltas.get(primary_key) if isinstance(primary_key, str) else None
         delta_value: str | float = "n/a"
         if isinstance(primary_delta, Mapping):
             value = benchmark_metric_comparison_value(primary_delta)
             if value is not None:
                 delta_value = f"{value * 100:g} pp" if "delta_rate" in primary_delta else value
-        reasons = (
-            ", ".join(str(value) for value in item.get("reason_codes", []) or [])
-            or "none"
+        comparison_rows.append(
+            [
+                str(item.get("case_id")),
+                str(item.get("candidate_arm_role")),
+                str(item.get("candidate_arm_id")),
+                str(delta_value),
+                str(item.get("matched_pair_countable")),
+                _join_codes(item.get("reason_codes")),
+                _join_codes(item.get("warning_codes")),
+            ]
         )
-        warnings = (
-            ", ".join(str(value) for value in item.get("warning_codes", []) or [])
-            or "none"
-        )
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    str(item.get("case_id")),
-                    str(item.get("candidate_arm_role")),
-                    str(item.get("candidate_arm_id")),
-                    str(delta_value),
-                    str(item.get("matched_pair_countable")),
-                    reasons,
-                    warnings,
-                ]
-            )
-            + " |"
-        )
-    if not payload.get("comparisons"):
-        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
-
     lines.extend(
-        [
-            "",
-            "## Factorial Contrasts",
-            "",
-            "| Case | Primary interaction | Countable | Reasons |",
-            "| --- | ---: | --- | --- |",
-        ]
+        _render_table_section(
+            "Comparisons",
+            [
+                "Case", "Candidate role", "Candidate arm", "Primary delta",
+                "Countable", "Reasons", "Warnings",
+            ],
+            ["---", "---", "---", "---:", "---", "---", "---"],
+            comparison_rows,
+        )
     )
-    for item in payload.get("factorial_contrasts", []) or []:
-        if not isinstance(item, Mapping):
+
+    contrast_rows: list[list[str]] = []
+    for raw_item in _as_list(payload.get("factorial_contrasts")):
+        if not isinstance(raw_item, Mapping):
             continue
-        interaction = (
-            item.get("interaction_contrast")
-            if isinstance(item.get("interaction_contrast"), Mapping)
-            else {}
+        item = _as_map(raw_item)
+        metrics = _as_map(_as_map(item.get("interaction_contrast")).get("metric_contrasts"))
+        primary_key = item.get("primary_metric")
+        primary = metrics.get(primary_key) if isinstance(primary_key, str) else None
+        interaction_value: object = "n/a"
+        if isinstance(primary, Mapping):
+            rate = primary.get("difference_in_differences_rate")
+            if isinstance(rate, (int, float)) and not isinstance(rate, bool):
+                interaction_value = f"{rate * 100:g} pp"
+            else:
+                interaction_value = primary.get("difference_in_differences", "n/a")
+        contrast_rows.append(
+            [
+                str(item.get("case_id")),
+                str(interaction_value),
+                str(item.get("factorial_contrast_countable")),
+                _join_codes(item.get("reason_codes")),
+            ]
         )
-        metrics = (
-            interaction.get("metric_contrasts")
-            if isinstance(interaction.get("metric_contrasts"), Mapping)
-            else {}
-        )
-        primary = metrics.get(item.get("primary_metric"))
-        interaction_value = (
-            primary.get("difference_in_differences", "n/a")
-            if isinstance(primary, Mapping)
-            else "n/a"
-        )
-        if isinstance(primary, Mapping) and "difference_in_differences_rate" in primary:
-            interaction_value = f"{primary['difference_in_differences_rate'] * 100:g} pp"
-        reasons = (
-            ", ".join(str(value) for value in item.get("reason_codes", []) or [])
-            or "none"
-        )
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    str(item.get("case_id")),
-                    str(interaction_value),
-                    str(item.get("factorial_contrast_countable")),
-                    reasons,
-                ]
-            )
-            + " |"
-        )
-    if not payload.get("factorial_contrasts"):
-        lines.append("| n/a | n/a | n/a | n/a |")
-
-    guidance = (
-        payload.get("agent_guidance")
-        if isinstance(payload.get("agent_guidance"), Mapping)
-        else {}
-    )
     lines.extend(
-        [
-            "",
-            "## Agent Lifecycle",
-            "",
-        ]
+        _render_table_section(
+            "Factorial Contrasts",
+            ["Case", "Primary interaction", "Countable", "Reasons"],
+            ["---", "---:", "---", "---"],
+            contrast_rows,
+        )
     )
-    for step in guidance.get("required_sequence", []) or []:
+
+    guidance = _as_map(payload.get("agent_guidance"))
+    lines.extend(["", "## Agent Lifecycle", ""])
+    for step in _as_list(guidance.get("required_sequence")):
         lines.append(f"- `{step}`")
     lines.extend(
         [

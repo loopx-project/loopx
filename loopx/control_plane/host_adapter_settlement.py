@@ -374,8 +374,17 @@ def _run_provider_plan(
 ) -> list[dict[str, str]]:
     outcomes: list[dict[str, str]] = []
     for step in steps:
+        args = list(step.args)
+        if step.step_kind == "quota_spend":
+            # Forward the source from the preceding identity-checked writeback.
+            # The quota command still verifies the requested debit.
+            writeback = json.loads(outcomes[-1]["output"])
+            source = _path_value(writeback, ["settlement_progress", "quota_spend_source"])
+            if not isinstance(source, str) or "--source" in args:
+                raise RuntimeError("TypeScript host provider spend source shape mismatch")
+            args.extend(("--source", source))
         output = run_cli(
-            list(step.args),
+            args,
             legacy_args=(list(step.legacy_args) if step.legacy_args else None),
         )
         outcomes.append({"step_kind": step.step_kind, "output": output})

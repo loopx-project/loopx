@@ -36,6 +36,7 @@ export default defineConfig({
       "/ssh-hosts": chatProxy,
       "/api/chat": chatProxy,
       "/api/actions": chatProxy,
+      "/api/goals": chatProxy,
       "/api/ssh-source": chatProxy,
     },
   },

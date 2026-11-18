@@ -122,7 +122,7 @@ For contributors and registered peers working on LoopX itself, keep using a
 real checkout:
 
 ```bash
-git clone https://github.com/huangruiteng/loopx ~/loopx
+git clone https://github.com/loopx-project/loopx ~/loopx
 ~/loopx/scripts/install-local.sh
 loopx doctor
 loopx-canary doctor

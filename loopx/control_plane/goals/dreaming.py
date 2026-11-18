@@ -53,7 +53,8 @@ def compact_dreaming_proposal(
     classification = str(run.get("classification") or "")
     if classification not in dreaming_advisory_classifications:
         return None
-    raw = run.get("dreaming") if isinstance(run.get("dreaming"), dict) else {}
+    raw_dreaming = run.get("dreaming")
+    raw = raw_dreaming if isinstance(raw_dreaming, dict) else {}
     proposal: dict[str, Any] = {
         "schema_version": "dreaming_proposal_v0",
         "classification": classification,

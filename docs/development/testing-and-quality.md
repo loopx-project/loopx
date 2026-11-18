@@ -2505,7 +2505,7 @@ reasoning、timeout 与重复次数。任一不匹配或不完整都 fail closed
 
 Current benchmark studies follow the
 [research RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
-and live in the repository-level [benchmark workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md).
+and live in the repository-level [benchmark workspace](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md).
 Legacy release reducers are archived and no longer form an active CLI or release
 qualification surface.
 

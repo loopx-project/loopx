@@ -336,25 +336,29 @@ operation. Monitoring requires the separate explicit setting below.
 
 ### Native status monitoring
 
-If the host restarts before a native watch observes anything, the original
-idle pump can create one separately correlated Chat continuation. It preserves
-the failed request and uses the same native observation identity and deadline.
-For a bound steward, this also covers a portfolio read explicitly refused
-because its authorization snapshot changed. The exact original failure and a
-single empty `external_authorization_changed` context must both be present.
-An App identity read that fails before context publication can also qualify,
-but only with its exact original error, one recorded `manager_context` phase,
-no published context and the independent no-effect checks below. The current
-provider must verify successfully before acceptance; a matching error alone,
-other runtime errors or missing, conflicting or unreadable evidence do not qualify.
+If the host restarts before a native watch observes anything, the existing
+idle pump can create a Chat Turn linked to the stopped attempt. A later
+continuation can proceed from the latest failed Turn when another proven host
+restart occurs before observation. Each continuation retains the previous
+failed Turns, native observation identity and deadline. Admission checks each
+attempt independently.
+
+For a bound steward, the first continuation can also recover a portfolio read
+explicitly refused because its authorization snapshot changed. The exact
+original failure and a single empty `external_authorization_changed` context
+must both be present. An App identity read can qualify for the first
+continuation with its exact original error, one recorded `manager_context`
+phase, no published context and the independent no-effect checks below. The
+current provider must verify successfully before acceptance.
+
 The shared typed admission requires an untouched observation-only request, an
-available original worker lock, complete event/history reads and no pending or
-committed native poll receipt. It rechecks current authority, lease generation
-and user work; it never starts a model, repeats business or spends execution
-quota. Unknown effects, unreadable history, an active old worker, revoked or
-paused watches and another failed continuation remain held for reconciliation.
-This bounded recovery applies to both local managed Sessions and the prepared
-steward through the existing host, without another scheduler or consumer.
+available original worker lock, complete event and history reads, and no
+pending or committed native poll receipt. It rechecks current authority, lease
+generation and queued user work. This recovery is observation-only and uses
+zero execution quota. Unknown effects, unreadable history, an active old
+worker, revoked or paused watches and all other continuation failures remain
+held for reconciliation. The existing host applies these rules to both local
+managed Sessions and the prepared steward.
 
 After preparation, choose **Enable monitoring** in the same connection panel.
 The native continuous-monitor Todo owns enable/pause, the 30–1440 minute cadence,
@@ -548,10 +552,11 @@ Chat Turn and task lease. It does not select a continuous monitor as a heartbeat
 advancement task, so open executable work does not prevent a due observation.
 Fresh source, user-gate, capability, deadline and lease checks still apply; the
 poll keeps its stable Turn identity and does not invoke a model or spend a slot.
-The earlier adapter's exact pre-poll selection rejection can receive one
-separately correlated attempt only when its failed Turn has no native start,
-answer, delta or poll event. The original failure remains; unknown failures,
-interruptions and a failed recovery do not trigger a retry loop.
+The earlier adapter's exact pre-poll selection rejection qualifies for a single
+correlated attempt when its failed Turn has no native start, answer, delta or
+poll event. The original failure remains in history. The
+[native status monitoring rules](#native-status-monitoring) govern recovery
+after a proven restart before observation.
 
 ## Daily portfolio report
 

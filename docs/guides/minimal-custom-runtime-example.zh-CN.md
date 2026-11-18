@@ -80,4 +80,4 @@ python3 examples/loopx-turn-fake-host-walkthrough-smoke.py
 - [Custom agent runner integration](custom-agent-runner-integration.md)
 - [Runtime connector catalog](../integrations/runtime-connector-catalog.md)
 - [Host integration surface v0](../reference/protocols/host-integration-surface-v0.md)
-- [LoopX Turn fake-host walkthrough smoke](https://github.com/huangruiteng/loopx/blob/main/examples/loopx-turn-fake-host-walkthrough-smoke.py)
+- [LoopX Turn fake-host walkthrough smoke](https://github.com/loopx-project/loopx/blob/main/examples/loopx-turn-fake-host-walkthrough-smoke.py)

@@ -1,4 +1,4 @@
-﻿"""The premerge boundary check fails on an input the scan could not read.
+"""The premerge boundary check fails on an input the scan could not read.
 
 `_public_boundary_changed_files_run` reads `scan_public_boundary`'s result, so a
 directory the scan could not list has to fail this check the way a recorded hit

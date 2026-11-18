@@ -148,7 +148,7 @@ def assert_community_casebook_is_bilingual() -> None:
                 "https://github.com/huangruiteng/loopx/discussions/3069",
                 "https://github.com/huangruiteng/loopx/issues/2353",
                 "https://github.com/huangruiteng/loopx/issues/3549",
-                "https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md",
+                "https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md",
             ),
         ),
         (
@@ -156,9 +156,9 @@ def assert_community_casebook_is_bilingual() -> None:
             protocol_map_en,
             "rfc-review-lab",
             (
-                "https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/README.md",
+                "https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/README.md",
                 "https://github.com/huangruiteng/loopx/discussions/3157",
-                "https://github.com/huangruiteng/loopx/blob/main/docs/community/open-strategy-reviews.md",
+                "https://github.com/loopx-project/loopx/blob/main/docs/community/open-strategy-reviews.md",
             ),
         ),
         (

@@ -22,6 +22,37 @@ if TYPE_CHECKING:
 _SOURCE_URL = re.compile(r"https://[^\s<>()\[\]\"，。；！？]+")
 
 
+_MARKDOWN_CODE_SPAN = re.compile(r"((?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\2(?!\x60))")
+_ANSWER_IMAGE = re.compile(r"""(?<!\\)!\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^\s<>()]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)""")
+
+
+def private_answer_images(text: str) -> tuple[str, list[str]]:
+    """Remove image previews from provider prose, leaving the canonical answer alone."""
+    lines, targets = [], []
+    fence = None
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(\x60{3,}|~{3,})(.*)$", line)
+        if marker and fence is None:
+            fence = marker[1]
+        elif marker and fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+            fence = None
+        elif not fence and not line.startswith(("    ", "\t")):
+            def link(match: re.Match[str]) -> str:
+                url = match[2] or match[3]
+                if url not in targets:
+                    targets.append(url)
+                caption = match[1] or f"图片 {targets.index(url) + 1}"
+                return f"[{caption}](<{url}>)" if url.startswith("https://") and " " in url else (
+                    f"[{caption}]({url})" if url.startswith("https://") else caption)
+
+            start, chunks = 0, []
+            for span in _MARKDOWN_CODE_SPAN.finditer(line):
+                chunks.extend((_ANSWER_IMAGE.sub(link, line[start:span.start()]), span[0]))
+                start = span.end()
+            line = "".join((*chunks, _ANSWER_IMAGE.sub(link, line[start:])))
+        lines.append(line)
+    return "".join(lines), targets
+
 def allowed_answer_image_urls(source: str, targets: list[str], *, deadline: float) -> set[str]:
     """Authorize exact owner URLs and images listed by the original same-host article."""
     from urllib.parse import urlsplit

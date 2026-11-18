@@ -6,9 +6,11 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.quota.heartbeat_receipt import (
+    bind_replan_successor_heartbeat_receipt,
     find_heartbeat_receipt,
     heartbeat_receipt_view,
     requalify_bound_heartbeat_receipt,
+    retain_pending_heartbeat_action_selection,
     upgrade_identityless_heartbeat_receipt,
 )
 from loopx.rollout_event_log import (
@@ -97,6 +99,74 @@ def test_identityless_receipt_upgrade_rejects_conflicting_selected_todo(
         _upgrade(tmp_path, todo_id="todo_conflicting")
 
     assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL_ID))) == 2
+
+
+def test_replan_binding_rechecks_identity_inside_the_lock(
+    tmp_path: Path,
+) -> None:
+    _append_receipt(tmp_path, todo_id=TODO_ID, effect_id=EFFECT_ID)
+
+    with pytest.raises(ValueError):
+        bind_replan_successor_heartbeat_receipt(
+            tmp_path,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            turn_instance_id=TURN_ID,
+            replan_obligation_id="replan-2222222222222222",
+        )
+
+    assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL_ID))) == 1
+
+
+def test_replan_binding_preserves_concurrent_effective_details(
+    tmp_path: Path,
+) -> None:
+    obligation_id = "replan-2222222222222222"
+    original = build_rollout_event(
+        goal_id=GOAL_ID,
+        event_kind="quota_should_run",
+        agent_id=AGENT_ID,
+        run_id=TURN_ID,
+        status="autonomous_replan_required",
+        summary="identity-less autonomous replan receipt",
+        details={
+            "interaction_mode": "autonomous_replan",
+            "ok": True,
+            "should_run": True,
+            "must_attempt_work": True,
+            "delivery_allowed": False,
+            "quiet_noop_allowed": False,
+            "semantic_replan_obligation_id": obligation_id,
+        },
+    )
+    log_path = rollout_event_log_path(tmp_path, GOAL_ID)
+    append_rollout_event(log_path, original)
+    retained, retained_appended = retain_pending_heartbeat_action_selection(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID,
+        todo_id="todo_concurrent_choice",
+        reason="owner_selected_candidate",
+    )
+    assert retained_appended is True
+
+    bound, appended = bind_replan_successor_heartbeat_receipt(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID,
+        replan_obligation_id=obligation_id,
+    )
+
+    assert appended is True
+    assert retained["details"]["pending_action_selection_todo_id"] == (
+        "todo_concurrent_choice"
+    )
+    assert bound["details"]["pending_action_selection_todo_id"] == (
+        "todo_concurrent_choice"
+    )
+    assert bound["details"]["replan_obligation_id"] == obligation_id
 
 
 def test_the_receipt_view_says_when_the_turn_still_owes_its_binding(
