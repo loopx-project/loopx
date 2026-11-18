@@ -8,15 +8,19 @@ import hashlib
 import json
 import re
 import subprocess
+import time
+from collections.abc import Mapping
 from contextlib import ExitStack, contextmanager
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from .cli_resolution import run_lark_command_with_dispatch_guard
 from .inbox_reply import _default_runner, _json_object, _message
 from .outbound import normalize_lark_outbound_text
 from .presentation.markdown_post import lark_markdown_readback_attachment_keys, lark_markdown_readback_matches
+from ...capabilities.native_chat.file_discovery import read_reply_image, reply_image_attachment
 from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane.collaboration.inbox import _hash, _read, _root, _write
 from ...control_plane.collaboration.result_files import read_result_file
@@ -30,6 +34,50 @@ RESULT_FILE_KEY_PATTERN = re.compile(r"file_[A-Za-z0-9_-]{1,240}")
 CHAT_IMAGE_KEY_PATTERN = re.compile(r"img_[A-Za-z0-9_-]{1,240}")
 LARK_APP_SCOPE_NOT_APPLIED = 99991672
 
+
+def _private_answer_image(url: str, *, allowed_urls: set[str], deadline: float, index: int) -> dict[str, Any]:
+    # Reuse anonymous HTTPS address pinning, redirect checks and byte limits.
+    # No local file, signed-in browser or model tool authority is involved.
+    from urllib.parse import urlsplit
+
+    from ..public_source_reader import fetch
+
+    host = urlsplit(url).hostname
+    same_host_urls = {candidate for candidate in allowed_urls if urlsplit(candidate).hostname == host}
+    _, mime, data = fetch(url, deadline=deadline, allowed_urls=same_host_urls)
+    return reply_image_attachment(data, mime, index)
+
+
+def read_answer_images(source: str, targets: list[str | dict[str, Any] | None], cached: list | None,
+                        delivery: Mapping[str, Any], *, local_scope: tuple[Path, str] | None = None
+                        ) -> list[dict[str, Any]]:
+    if (delivery.get("started") and not delivery.get("attempt")) or (delivery.get("attempt") and cached is None):
+        raise ValueError("image delivery acknowledgement or frozen bytes are unavailable")
+    from .private_delivery_discovery import allowed_answer_image_urls
+
+    deadline = time.monotonic() + 15
+    remote_targets = [target for target in targets if isinstance(target, str)]
+    allowed_urls = allowed_answer_image_urls(source, remote_targets, deadline=deadline) if remote_targets else set()
+    if remote_targets and not allowed_urls:
+        raise ValueError("image was not referenced by the original source")
+
+    images = []
+    for index, target in enumerate(targets, 1):
+        if isinstance(target, str):
+            images.append(_private_answer_image(target, allowed_urls=allowed_urls, deadline=deadline, index=index))
+            continue
+        if local_scope is None or not isinstance(target, dict) or set(target) != {"name", "sha256"}:
+            raise ValueError("reply image was not captured in the original Turn")
+        mime, data = read_reply_image(*local_scope, target["name"])
+        if hashlib.sha256(data).hexdigest() != target["sha256"]:
+            raise ValueError("original reply image bytes changed")
+        images.append(reply_image_attachment(data, mime, index))
+    images = normalize_chat_image_attachments(images)
+    # Older queued bytes were fetched before redirect authorization. Keep
+    # any recorded provider intent tied to the same bytes.
+    if cached is not None and cached != images:
+        raise ValueError("unverified cached image bytes changed")
+    return images
 
 def _image_upload_scope_rejected(result):
     """Recognize the CLI's explicit App rejection before resource creation."""

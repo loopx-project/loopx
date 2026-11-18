@@ -1100,18 +1100,12 @@ class ChatExternalConversations:
     def execute_turn(controller: Any, adapter: Any, session: dict[str, Any], turn: dict[str, Any],
                      message: str, event_sink: Callable) -> dict[str, Any]:
         """Narrow a reserved format review; preserve ordinary adapter dispatch."""
-        from .codex_adapter import CodexAppServerAdapter
+        from .codex_adapter import CodexAppServerAdapter, start_bound_project_turn
+
         if session.get("project_context") and controller.project_contexts.conversation_bindings is not None:
-            external = ChatExternalConversations(controller)
-            review = external._checked_completed_result_review(session, turn)
-            if review is not None:
-                if not isinstance(adapter, CodexAppServerAdapter) or not adapter.session.read_only_review:
-                    raise ValueError("a completed result review requires its original read-only project adapter")
-                response = adapter.start_turn(message, event_sink)
-                external._checked_completed_result_review(session, turn)
-                if any(response.get(key) for key in
-                       ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work")):
-                    raise ValueError("a result review cannot admit actions or replace the retained work obligation")
+            response = start_bound_project_turn(ChatExternalConversations(controller), adapter, session, turn,
+                                                message, event_sink)
+            if response is not None:
                 return response
         if (session.get("agent_id") not in {"antigravity", "codex"} or session.get("steward_context") is None
                 or controller.project_contexts.conversation_bindings is None):

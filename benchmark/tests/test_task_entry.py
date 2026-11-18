@@ -1240,8 +1240,7 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         assert ("--complete-turn" in body) is complete
         if checkpoint_preflight:
             original = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
-            assert json.loads(original.read_bytes()).get("schema_version") == (
-                "loopx_turn_envelope_v1" if complete else None)
+            assert json.loads(original.read_bytes())["schema_version"] == "loopx_turn_envelope_v1"
             assert "Do not repeat the initial guard below" in body
         assert current["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
     # Runtime clocks remain internal and never change task/completion authority.

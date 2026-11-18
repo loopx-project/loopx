@@ -648,7 +648,6 @@ export function createEffectRuntimeHandlers(
     ["collaboration.conversation.request", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({planBoundConversationRequest}) => planBoundConversationRequest)],
     ["collaboration.conversation.agent_target", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({resolveConversationAgentTarget}) => resolveConversationAgentTarget)],
     ["collaboration.peer.context_access", lazyHandler(() => import("./collaboration/peer_context.ts"), ({requirePeerContextAccess}) => requirePeerContextAccess)],
-    ["collaboration.source.recipients", lazyHandler(() => import("./collaboration/source_grants.ts"), ({resolveSourceRecipients}) => resolveSourceRecipients)],
     ["collaboration.source.context_authority", lazyHandler(() => import("./collaboration/source_grants.ts"), ({resolveSourceContextAuthority}) => resolveSourceContextAuthority)],
     ["collaboration.source.ingress", lazyHandler(() => import("./collaboration/source_grants.ts"), ({validateSourceIngress}) => validateSourceIngress)],
     ["collaboration.source.execution_bindings", lazyHandler(() => import("./collaboration/source_grants.ts"), ({sourceExecutionBindings}) => sourceExecutionBindings)],
@@ -815,8 +814,8 @@ export function createEffectRuntimeHandlers(
       "settlement.plan_payload",
       (params) => settlementPlanPayload(settlementPlanInput(params.plan, "plan")),
     ],
-    ["settlement.turn_scoped_cli_plan", lazyHandler(() => import("./quota/settlement_plan.ts"), ({turnScopedCliSettlementPlan}) => (params) =>
-      settlementPlanPayload(turnScopedCliSettlementPlan(params)))],
+    ["settlement.turn_scoped_cli_plan", lazyHandler(() => import("./quota/settlement_plan.ts"),
+      ({turnScopedCliSettlementPlanPayload}) => turnScopedCliSettlementPlanPayload)],
     ["settlement.native_cli_projection", lazyHandler(() => import("./quota/settlement_plan.ts"),
       ({nativeCliSettlementProjection}) => nativeCliSettlementProjection)],
     [

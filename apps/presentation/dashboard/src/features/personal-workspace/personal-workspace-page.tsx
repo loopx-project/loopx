@@ -69,7 +69,7 @@ import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
 import { GoalVitals, GoalVitalsSkeleton, type GoalVitalRegion } from "./goal-masthead";
 import { GoalWorkspacePanels } from "./goal-workspace-panels";
 import {GoalWorkBrowseProvider, readGoalWorkBrowse, type GoalWorkBrowseState} from "./goal-work-browse";
-import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
+import { localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import {returnedAnswerStart} from "./message-reading";
 import type {
   PersonalWorkspaceCallbacks,
@@ -869,7 +869,6 @@ export function PersonalWorkspacePage({
   model,
   researchApi,
   readOnly: sourceReadOnly = false,
-  typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
   selectedAgentModelId,
   selectedAgentModelReadback,
@@ -2649,7 +2648,6 @@ export function PersonalWorkspacePage({
     }
   }
 
-  const selectedAgentLabel = agents.find((agent) => agent.agentId === selectedAgentId)?.label ?? selectedAgentId;
 
 
   async function selectImages(files: FileList | readonly File[] | null) {

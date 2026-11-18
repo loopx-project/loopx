@@ -9,7 +9,7 @@ not need these documents to start LoopX.
 
 ## Start Here / 从这里开始
 
-1. Read [Contributing](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md) for repository boundaries and the
+1. Read [Contributing](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md) for repository boundaries and the
    pull-request checklist.
 2. Read [Current technical directions](../project/technical-directions.md) to
    choose an active program, understand its maturity, and find its tracker.
@@ -34,7 +34,7 @@ not need these documents to start LoopX.
 10. Follow the [documentation layout policy](documentation-layout.md) before
    adding or moving public documentation.
 
-1. 先阅读[贡献指南](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md)，了解仓库边界和 PR 检查项。
+1. 先阅读[贡献指南](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md)，了解仓库边界和 PR 检查项。
 2. 阅读[当前技术方向](../project/technical-directions.zh-CN.md)，选择活跃计划、了解
    成熟度并找到对应 tracker。
 3. 按顺序阅读[开发者手册](/loopx/docs/book/)，从控制面基础到项目接入和开发者贡献。
@@ -69,7 +69,7 @@ not need these documents to start LoopX.
 | Quota and spend semantics / Quota 与 spend 语义 | [Quota allocation](../quota-allocation.md) |
 | Model-behavior shadow qualification / 模型行为影子验证 | [Model behavior qualification v0](../reference/protocols/model-behavior-qualification-v0.md) |
 | Release promotion / 发布晋级 | [Release readiness](../product/release-readiness.md) |
-| Benchmark research / Benchmark 研究 | [Benchmark workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md) · [Research RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md) |
+| Benchmark research / Benchmark 研究 | [Benchmark workspace](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md) · [Research RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md) |
 
 ## Change Loop / 变更闭环
 

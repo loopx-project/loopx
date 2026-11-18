@@ -229,6 +229,11 @@ def assert_agent_scoped_user_gate_override_contract() -> None:
             "the open user gate is scoped to another agent via blocks_agent or claimed_by; "
             "this agent still has an executable in-scope todo"
         ),
+        "item_patch": {
+            "status": "active_state_agent_todo",
+            "waiting_on": "codex",
+            "recommended_action": "[P1] Continue product capability characterization.",
+        },
     }, override
 
     blocked = _agent_scoped_user_todo_override(

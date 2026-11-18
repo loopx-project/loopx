@@ -1156,7 +1156,15 @@ def refresh_state_run(
             settlement_guard_scoped=(
                 settlement_replan_guard.get("scope") == "turn_guard"
             ),
-            receipt_bound_guard_recorded_at=(settlement_readback.heartbeat_receipt or {}).get("recorded_at") if settlement_readback else None,
+            receipt_bound_guard_recorded_at=(
+                settlement_readback.admission_recorded_at
+                if settlement_readback is not None and settlement_readback.admission_recorded_at
+                else (settlement_readback.heartbeat_receipt or {}).get("recorded_at")
+                if settlement_readback else None
+            ),
+            admission_event_id=(
+                settlement_readback.admission_event_id if settlement_readback is not None else None
+            ),
             receipt_bound_guard_turn_instance_id=(settlement_identity.turn_instance_id if settlement_identity else None),
             receipt_bound_replan_review=settlement_replan_guard.get("selected_review_source"),
             settlement_guard_semantic_replan_obligation_id=(

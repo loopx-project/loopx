@@ -22,8 +22,8 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from loopx.presentation.chat_bundle import source_digest, validate_bundle
-from loopx.cli_commands.update_artifact import RUNTIME_ARTIFACT_SCHEMA_VERSION, validate_manifest
+from loopx.presentation.chat_bundle import source_digest, validate_bundle  # noqa: E402
+from loopx.cli_commands.update_artifact import RUNTIME_ARTIFACT_SCHEMA_VERSION, validate_manifest  # noqa: E402
 
 PATHS = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps/presentation",
          ".github", "README.md", "LICENSE", "NOTICE", "LICENSE-MIT", "pyproject.toml", "setup.py", "MANIFEST.in")

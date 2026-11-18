@@ -4,7 +4,13 @@ import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { createLoopxGoalPlugin, createFileBindingStore } from "../loopx/opencode_goal_mode/goal-bridge-runtime.mjs"
+import {
+  createLoopxGoalPlugin,
+  createFileBindingStore,
+  createFileLockStore,
+  pidIsAlive,
+  waitPlan,
+} from "../loopx/opencode_goal_mode/goal-bridge-runtime.mjs"
 
 
 function fakeTool(spec) {
@@ -857,4 +863,65 @@ test("filesystem binding preserves pause across bridge recreation", async () => 
     assert.equal(second.calls.event, 1)
     await restored.dispose()
   } finally { await fs.rm(root, { recursive: true, force: true }) }
+})
+
+
+test("waitPlan supports real scheduler_hint cold_path_detail and limits contract", () => {
+  const decision = {
+    should_run: false,
+    scheduler_hint: {
+      action: "backoff_waiting_for_user",
+      reset_policy: { reset_token: "hint-tok" },
+      cold_path_detail: {
+        local_scheduler: {
+          recommended_interval_minutes: 3,
+          example_progression_minutes: [3, 6, 12],
+        },
+      },
+      unchanged_poll: {
+        limits: { local_scheduler: 2 },
+        after_limits: { local_scheduler: "stop_tick_loop" },
+      },
+    },
+  }
+  const first = waitPlan(decision, { schedulerToken: "", unchangedPolls: 0 })
+  assert.deepEqual(first, {
+    stop: false,
+    minutes: 3,
+    schedulerToken: "hint-tok",
+    unchangedPolls: 1,
+  })
+  const second = waitPlan(decision, first)
+  assert.deepEqual(second, { stop: true })
+  assert.deepEqual(
+    waitPlan(
+      {
+        should_run: false,
+        scheduler_hint: {
+          cold_path_detail: { local_scheduler: { recommended_interval_minutes: 3 } },
+          unchanged_poll: { local_scheduler: "stop_until_context_repaired" },
+        },
+      },
+      { schedulerToken: "", unchangedPolls: 0 },
+    ),
+    { stop: true },
+  )
+})
+
+
+test("file lock store ignores pid <= 0 lock payloads and cleans up safely", async () => {
+  assert.equal(pidIsAlive(0), false)
+  assert.equal(pidIsAlive(-1), false)
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-lock-pid-"))
+  try {
+    await fs.writeFile(
+      path.join(root, "ses_zero.lock"),
+      `${JSON.stringify({ pid: 0, heartbeatAt: new Date().toISOString() })}\n`,
+      "utf8",
+    )
+    const store = createFileLockStore({ root })
+    assert.equal(await store.read("ses_zero"), null)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })

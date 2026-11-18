@@ -556,6 +556,43 @@ test("semantic closeout retains the strict material vision checkpoint", () => {
   ]);
 });
 
+test("material closeout leaves an invalid path decision recoverable", () => {
+  const packet = (outcome: string) => ({
+    state: "vision_patch_proposed",
+    vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
+    path_delta: {
+      outcome,
+      prior_assumption: "The current route remained valid.",
+      observed_reality: "Fresh evidence confirms the bounded next step.",
+      retained: ["Continue from the verified evidence."],
+      evidence_refs: ["evidence:verified-result"],
+    },
+  });
+  const prepared = (outcome: string) =>
+    buildVisionCheckpoint(prepareRequest({
+      agent_vision_packet: packet(outcome),
+    })).agent_vision;
+
+  for (const outcome of ["continue", "no_change", "replan"]) {
+    const result = buildVisionCheckpoint(finalizeRequest({agent_vision: prepared(outcome)}));
+    assert.equal(result.decision, "patched");
+    assert.equal(result.satisfied, true);
+  }
+  for (const outcome of ["wait", "ask_human", "stop"]) {
+    const result = buildVisionCheckpoint(finalizeRequest({agent_vision: prepared(outcome)}));
+    assert.equal(result.decision, "missing_required");
+    assert.equal(result.satisfied, false);
+    assert.deepEqual(result.unqualified_components, ["path_outcome_valid"]);
+    assert.deepEqual(result.required_resolution, ["write_vision_patch"]);
+  }
+
+  const reportedGap = buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap",
+    agent_vision: prepared("replan"),
+  }));
+  assert.equal(reportedGap.decision, "patched");
+});
+
 test("missing checkpoint offers unchanged only with a persisted vision", () => {
   const baseline = {state: "vision_active", generated_at: "2026-09-01T10:00:00Z"};
   const missing = buildVisionCheckpoint(finalizeRequest({

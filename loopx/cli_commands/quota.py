@@ -17,7 +17,6 @@ from ..control_plane.quota.error_codes import (
 from ..usage_goal import observe_quota_result as observe_quota_result  # noqa: PLC0414
 from .quota_capture import handle_native_context_command, prepare_quota_capture
 from .quota_presentation import (
-    _compose_explicit_turn_context as _compose_explicit_turn_context,
     _project_native_cli_settlement as _project_native_cli_settlement,
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,

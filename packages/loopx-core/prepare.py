@@ -14,7 +14,7 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 # These are distribution exclusions, not an authority or activation policy.
 EXCLUDED_TREES = ("loopx/chat/", "loopx/web/", "loopx/canary/")
 EXCLUDED_MODULES = {"loopx/cli.py", "loopx/chat.py"}
-SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md"}
+SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
 
 
 def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
@@ -48,7 +48,7 @@ def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
     for name in ("LICENSE", "LICENSE-MIT", "NOTICE"):
         shutil.copyfile(repository / name, output / name)
     (output / "MANIFEST.in").write_text(
-        "recursive-include loopx *.py *.ts *.json *.mjs *.js *.md\n", encoding="utf-8",
+        "recursive-include loopx *.py *.ts *.json *.mjs *.js *.md *.toml\n", encoding="utf-8",
     )
     return output
 

@@ -406,17 +406,3 @@ def build_app_automation_scheduler_failure_hint(
 
 def build_codex_app_scheduler_ack_hint(**kwargs: Any) -> dict[str, Any]:
     return _followup("legacy_ack", kwargs)
-
-
-def build_codex_app_scheduler_failure_hint(**kwargs: Any) -> dict[str, Any]:
-    return _followup("legacy_failure", kwargs)
-
-
-def build_codex_app_scheduler_fallback_hint(
-    *,
-    goal_id: Any,
-    agent_id: Any,
-    automation_id: Any,
-    turn_instance_id: Any = "${LOOPX_TURN:?}",
-) -> dict[str, Any]:
-    return _followup("fallback", dict(locals()))

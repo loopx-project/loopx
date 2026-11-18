@@ -508,3 +508,63 @@ def test_exact_goal_instance_same_second_ack_uses_its_own_writeback(tmp_path: Pa
     assert packet["semantic_delta"]["outcomes"] == [FRESH_VISION_PATH_OUTCOME]
     with pytest.raises(Exception, match="conflicts with the current autonomous replan"):
         decision_for(None)
+
+
+def test_same_turn_receipt_upgrade_keeps_writeback_after_original_admission() -> None:
+    """A later same-Turn upgrade must not become the admission log index.
+
+    The compact ACK stamp is the admission second. Its refresh writeback is
+    after the original quota_should_run and before the upgrade. Passing the
+    upgrade's recorded_at, which is what the latest receipt exposes, still
+    has to order that writeback after the first bound receipt.
+    """
+
+    turn = "guided-start:later"
+    guard_turn = "guided-start:original"
+    binding = {
+        "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID,
+        "settlement_effect_id": "effect-original",
+    }
+    retired = {
+        "event_kind": "quota_should_run", "event_id": "evt-retired",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "run_id": guard_turn,
+        "recorded_at": "2026-07-01T00:00:00.000000Z",
+        "goal_ref": {
+            "goal_id": GOAL_ID,
+            "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        "details": {
+            "replan_obligation_id": "replan-ffffffffffffffff",
+            "settlement_effect_id": "effect-retired",
+        },
+    }
+    admission = {
+        "event_kind": "quota_should_run", "event_id": "evt-admission",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "run_id": guard_turn,
+        "recorded_at": "2026-08-01T00:00:01.500000Z", "details": binding,
+    }
+    upgrade = {
+        "event_kind": "quota_should_run", "event_id": "evt-upgrade",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "run_id": guard_turn,
+        "recorded_at": "2026-08-01T00:00:05.000000Z",
+        "causality": {"source_event_id": "evt-admission", "caused_by": "evt-admission"},
+        "details": {**binding, "settlement_receipt_revision": "work_admission"},
+    }
+    todo_event = {
+        "event_kind": "refresh_state", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "run_id": turn, "recorded_at": "2026-08-01T00:00:01.900000Z",
+        "details": {
+            "autonomous_replan_recorded": True,
+            "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID,
+        },
+    }
+    candidate = {"turn_instance_id": turn, "generated_at": "2026-08-01T00:00:01Z"}
+    attach_historical_ack_writeback_order(
+        [candidate], [retired, admission, todo_event, upgrade],
+        goal_id=GOAL_ID, agent_id=AGENT_ID, obligation_id=LONG_CHAIN_OBLIGATION_ID,
+        guard_recorded_at=upgrade["recorded_at"], guard_turn_instance_id=guard_turn,
+        admission_event_id=admission["event_id"],
+    )
+    assert candidate["writeback_recorded_at"] == todo_event["recorded_at"]
+    assert candidate["writeback_follows_admission"] is True
+    assert candidate["writeback_obligation_id"] == LONG_CHAIN_OBLIGATION_ID

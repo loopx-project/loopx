@@ -20,7 +20,6 @@ from ..control_plane.quota.heartbeat_receipt import (
 )
 from ..file_lock import LockAcquireTimeoutError
 from ..rollout_event_log import RolloutAppendPreconditionChanged
-from .quota_capture import native_context_activation
 
 if TYPE_CHECKING:
     from .quota_action_selection import RequestedQuotaActionSelection
@@ -96,10 +95,7 @@ def dispatch_quota_turn_start_hooks(
             )
         # A preview still needs the current local Inbox and preferences. These
         # hooks observe existing context without recording reads or delivery.
-        model_read = (
-            not getattr(args, "scheduler_observation", False)
-            and native_context_activation(args)["progressive_enabled"]
-        )
+        model_read = not getattr(args, "scheduler_observation", False)
         context_dispatch = dispatch_turn_start_hooks(
             (
                 turn_start_hook(
@@ -370,21 +366,15 @@ def execute_quota_should_run(
         agent_id=args.agent_id,
         todo_id=args.todo_id,
     )
-    progressive = (
-        not getattr(args, "scheduler_observation", False)
-        and native_context_activation(args)["progressive_enabled"]
-    )
+    complete_context = not getattr(args, "scheduler_observation", False)
     payload = export("build_live_quota_should_run_decision")(
         status_payload,
         goal_id=args.goal_id,
         agent_id=args.agent_id,
-        inline_goal_source=progressive,
+        inline_goal_source=complete_context,
         available_capabilities=args.available_capabilities,
         include_scheduler_detail="scheduler" in detail_sections,
-        include_agent_todo_detail=(
-            "agent-todos" in detail_sections
-            and not bool(getattr(args, "turn_envelope", False))
-        ),
+        include_agent_todo_detail="agent-todos" in detail_sections,
         codex_app_current_rrule=args.app_automation_current_rrule,
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -406,9 +396,7 @@ def execute_quota_should_run(
         interaction_projection_hooks=interaction_projection_hooks,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         turn_context_projector=context_projector,
-        context_navigation=(
-            progressive and not bool(getattr(args, "turn_envelope", False))
-        ),
+        context_navigation=complete_context,
         goal_ref=goal_ref,
     )
     execution.payload = payload

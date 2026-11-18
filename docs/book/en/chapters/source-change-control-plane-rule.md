@@ -69,9 +69,9 @@ Misclassifying amplifies the cost of every later step: turning an implementation
 additive change attaches a long compatibility promise to what should have been a one-line fix.
 
 This chapter's case is an implementation repair. Existing
-[`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
+[`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
 already makes Gates scoped authority. The public
-[State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
+[State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
 already route ambiguous scope toward repair.
 
 If implementation turns ambiguity into global wait, repair implementation. Do not add a compatibility flag
@@ -428,7 +428,7 @@ requirement, not an estimate. A genuine additive protocol change can legitimatel
 implementation repair usually should not.
 
 **Boundary one: full validation does not fit in one sitting, by design.** The repository
-[PR baseline](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md) includes lint, type, an output-budget smoke, layered `pytest`, `loopx canary premerge --from-git-diff`,
+[PR baseline](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md) includes lint, type, an output-budget smoke, layered `pytest`, `loopx canary premerge --from-git-diff`,
 and a public/private scan; real-path validation such as the PostgreSQL integration suites needs a
 disposable isolated instance. Start development from the most focused command and do not wait for the
 widest matrix. The full public smoke fleet exists for broad coverage and health, not for each PR's
@@ -465,7 +465,7 @@ can be derived without running the implementation at all.
 
 **Rebuilding a TypeScript-side rule inside the Python facade.** This is the second error from the top of
 the chapter. `loopx canary premerge --from-git-diff` can expose drift between the two sides, and the
-[TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
+[TypeScript Control-Plane Migration RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
 decides who owns a piece of logic: is it already a domain-owned decision or effect receipt? If it is,
 the change belongs on the TypeScript side and Python only adapts or projects it compatibly.
 

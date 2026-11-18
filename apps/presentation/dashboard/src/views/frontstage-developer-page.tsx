@@ -7,7 +7,6 @@ import {
   FileJson,
   GitCompareArrows,
   LayoutDashboard,
-  ListChecks,
   ShieldCheck,
   TestTube2,
 } from "lucide-react";

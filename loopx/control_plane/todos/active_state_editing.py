@@ -8,7 +8,6 @@ from .contract import (
     TODO_STATUS_OPEN,
     build_todo_id,
     normalize_todo_status,
-    parse_todo_metadata_line,
     todo_done_for_status,
     todo_marker_for_status,
 )
@@ -52,21 +51,6 @@ def find_todo_block(
             if block.get("todo_id") == todo_id:
                 return candidate_role, section, start, end, block
     return None
-
-
-def todo_metadata_would_change(
-    lines: list[str],
-    block: dict[str, Any],
-    metadata_line: str | None,
-) -> bool:
-    if not metadata_line:
-        return False
-    start = int(block["start"])
-    end = int(block["end"])
-    for index in range(start + 1, end):
-        if parse_todo_metadata_line(lines[index]) is not None:
-            return lines[index] != metadata_line
-    return True
 
 
 def set_todo_marker(lines: list[str], block: dict[str, Any], status: str) -> bool:
