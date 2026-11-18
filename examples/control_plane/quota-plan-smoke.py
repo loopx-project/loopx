@@ -30,7 +30,7 @@ from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     scheduler_execution_context_for_runtime_profile,
 )
 
-from quota_plan_fixtures import (  # noqa: E402
+from examples.control_plane.quota_plan_fixtures import (  # noqa: E402
     _nested_value,
     _short_hash,
     assert_dry_run_left_cli_fixture_unchanged,

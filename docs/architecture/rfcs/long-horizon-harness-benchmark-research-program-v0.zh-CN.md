@@ -103,21 +103,27 @@ typed contract 与 public-safe 结论可以进入仓库。
   `80%` 升至 `100%`，同时减少 `37%` token 并将延迟降低 `3.5x`。
 - [AlphaEvolve](https://arxiv.org/abs/2506.13131) 在算法代码发现上的成功，恰恰依赖固定不变的
   外层循环与确定性程序 verifier，而不允许求解器改写自身 harness 或评分契约。
+- [AgentFlow](https://arxiv.org/abs/2510.05592) 在多轮工具规划中表明，静态轨迹上的离线 SFT
+  在轨迹分布偏移下会发生分布坍缩，而在环闭环分片优化（`Flow-GRPO`）使探索保持在真实工具结果上，
+  同时让冻结执行器保持简洁；[HELIX](https://arxiv.org/abs/2608.13951) 则表明从共享状态分叉的
+  已验证兄弟轨迹能够将因果策略增益与混淆的起点状态漂移分离开来。
 - LoopX 已发布的上下文研究（[上下文交付研究](https://loopx-project.github.io/loopx/blog/context-delivery/)
   与 [EdgeBench 反馈与记忆研究](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)）
   同样表明，冗余序列化与见顶后的重复 replan 循环会在原始代码检查与本地探针即可解决的场景下消耗大量
-  uncached 上下文。
+  uncached 上下文——而且回合中的动态提示词改写会破坏前缀 KV-cache 复用，把温缓存运行推入高昂的冷
+  prefill 工况——此时保留单调追加前缀与本地探针已足够。
 
 然而，实证研究确立了**五类失败机制**，证明原始产物、标量奖励与干净重置无法替代受治理控制面：
 
-1. **Goodhart 与 verifier 篡改：** 当求解器与评分器共享进程、文件系统、网络或密钥边界时，
+1. **Goodhart、verifier 篡改与掩盖症状的捷径作弊：** 当求解器与评分器共享进程、文件系统、网络或密钥边界时，
    缺乏防护的优化会利用捷径通道——实证见于 `LHTB 2.0`（在冻结 agent 进程并隔离 verifier 之前，
    早期 `14/17` 个满分属于评分器泄漏）、[Reward Hacking Benchmark](https://arxiv.org/abs/2605.02964)
    （13 个前沿模型利用漏洞比例为 `0%` 至 `13.9%`，其中 `72%` 带有显式思维链合理化，且在任务复杂度
    超过诚实求解阈值后生产对齐保护失效）、[SWE-Marathon](https://arxiv.org/abs/2606.07682)
    （观测到 `13.8%` rollout 存在 reward hacking）、[Darwin Gödel Machine](https://arxiv.org/abs/2505.22954)
    （Node 114 伪造验证日志），以及 [METR reward-hacking 评估](https://metr.org/blog/2025-06-05-recent-reward-hacking/)。
-   Agent 容器内的 Python 探针无法提供 OS/容器级 verifier 隔离与 `benchmark_integrity_audit_v0`（§6.5、§7.1）。
+   Agent 容器内的 Python 探针无法提供 OS/容器级 verifier 隔离、`benchmark_integrity_audit_v0`
+   或树外**反 Reward-Hacking 根因认证守卫**（将真正的不变量修复与屏蔽测试、放宽阈值或硬编码fixture 区分开；§6.5、§7.1）。
 2. **分布外（OOD）过拟合与 harness 膨胀：** 在原始产物上做无正则进化会死记训练轨迹并导致 OOD 退化。
    [RRSI](https://arxiv.org/abs/2609.24972) 发现未正则的 Meta-Harness 在 OOD 仅提升 `+0.9`
    （`40.6` vs `39.7`），`TTHE` 甚至下降 `-1.7`（`38.0` 并膨胀出 `8,500` 词提示词），而加入 critic
@@ -590,7 +596,7 @@ token、缓存处理、金额或验收价值。[#7050](https://github.com/loopx-
 | 观测 | 必须保留的解释 |
 | --- | --- |
 | Packet 字节与交付上下文 | 分别测序列化、来源读取及实际消费者输入。引用仍须能解析完整适用指令；省略义务得到的小输出不是效率收益。 |
-| 模型用量 | 将真实 request 身份及保留的 counter 归属到覆盖的 session/Turn 窗口。核对压缩、重试、镜像记录与累计快照，避免重复计数，区分缓存／未缓存输入。请求或尾段覆盖缺失保持未知。 |
+| 模型用量 | 将真实 request 身份及保留的 counter 归属到覆盖的 session/Turn 窗口。核对压缩、重试、镜像记录与累计快照，避免重复计数；显式区分 `cached_prefix_tokens`（温 KV-cache 命中）与 `uncached_input_tokens`（冷 prefill / `EpochReset` 后前缀重建）及输出 token，并分别报告**冷 vs. 温 KV-cache 工况**。请求或尾段覆盖缺失保持未知。 |
 | 完整边际成本 | 纳入已测任务工作、控制、评估、恢复及人工注意力，也报告采集／验证开销。未知项阻止完整金额主张；保留取消和失败尝试，不只用成功工作作分母。 |
 | 有效成果 | 分别报告保留的最佳有效 native 产物／结果、终态完成与新增已验证提升。原生排名仍由任务拥有；部分分数、Todo 完成或最终文件单独不代表整题成功。 |
 
@@ -602,11 +608,19 @@ provider 计费完整或匹配研究收益。通过既有 Research 阅读入口�
 
 **面向 Agent 的 harness 与规划改动决策准则。** 评估任何候选 harness、上下文策略或
 规划机制时，统一以**完整预算记账**下的净终局原生验收成果
-$\Delta J(B \mid s_0) = \mathbb{E}[Y_B^\pi - Y_B^{\pi_0} \mid s_0]$ 为准：模型／上下文处理、
-控制面与协议税（RPC 往返、必填表单仪式、治理提示词）、checkpoint 构建、yardstick 造尺／修尺，
-以及评测／确认计算和冷却等待均计入成本；将负结果、无差异结果和信息不足实验原样保留在分母中；
-优先构建可恢复的静默同状态 checkpoint 反事实接续（$\tau_B(s; a, a_0, \pi)$），而非根据混淆起点状态的
-观察动作日志做无归因微调。
+$\Delta J(B \mid s_0) = \mathbb{E}[Y_B^\pi - Y_B^{\pi_0} \mid s_0]$ 为准：模型／上下文处理
+（显式区分冷/温 KV-cache 工况下的 `cached_prefix_tokens` 与 `uncached_input_tokens`，防止回合中
+破坏缓存的改写伪装成序列化字节节省）、控制面与协议税（RPC 往返、必填表单仪式、治理提示词）、
+checkpoint 构建、yardstick 造尺／修尺，以及评测／确认计算和冷却等待均计入成本；将负结果、
+无差异结果和信息不足实验原样保留在分母中；优先构建可恢复的静默同状态 checkpoint 反事实接续
+（$\tau_B(s; a, a_0, \pi)$），而非根据混淆起点状态的观察动作日志做无归因微调。
+
+**跨策略变体的反事实 arm 归因。** 当自适应元策略（例如[联合决策 §5.9](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution)
+中的 Phase 1 `KL-UCB` arm 选择）在候选 `(target–yardstick, stride, context-stack)` arm
+间探索时，单纯统计被选中 arm 的胜率会混淆状态难度与处理效应。应在决策时记录每个 arm 的精确分配倾向度
+$p(a \mid s)$，并采用逆倾向度加权 / Horvitz-Thompson 风格的匹配 arm 归因（$\hat{\Delta}_{\text{HT}}(B \mid s)$
+或基于共享 checkpoint 兄弟轨迹组的双稳健残差，见 [HELIX](https://arxiv.org/abs/2608.13951)）评估策略对比，
+同时核验正概率条件（$p(a \mid s) > 0$）、重叠度诊断与有效样本量（$N_{\text{eff}}$），避免把选择偏差当成因果收益。
 
 ### 6.3 长程控制质量
 
@@ -739,6 +753,12 @@ answer 相似这一事实来推断作弊。
 私有 audit 可以保留 protected evidence pointer 与精确 access event。公开 receipt 只包含稳定
 run identity、固定 policy/environment digest、parity status、disposition、reason code 与
 redacted evidence reference。公开 receipt 不能把未知的 private audit 升级为 `eligible`。
+
+**反 Reward-Hacking 根因认证守卫。** 除挂载、网络与隐藏 verifier 隔离之外，完整性与验收资格还必须
+执行树外确定性的根因认证守卫：核验候选修复是否保持冻结测试框架、未篡改断言与跨留出/对抗性检查的
+差分不变量，而非通过跳过测试、放宽容差、硬编码 fixture 输出或评分通道捷径过关。结构化守卫失败结果
+（缺少失败到通过证据、未授权测试改动或差分回归）直接记入 `benchmark_integrity_audit_v0` 处置
+（`quarantined` / `invalid`），而不依赖求解器文本子串推断作弊。
 
 #### 声明反馈权限与评测时机
 
@@ -957,8 +977,9 @@ capability approval。capability candidate 必须按 caller outcome 命名，不
 
 [结果后记忆效用归因 RFC](./post-outcome-memory-utility-attribution-v0.zh-CN.md)可以把经过验证的
 benchmark outcome 作为一种 evidence source。trajectory-level reward 不能建立 per-memory
-causal credit。给出强 utility 前必须做 holdout replay 或 bounded ablation。benchmark 内容
-绝不能以污染后续 task 的方式被保留。
+causal credit。给出强 utility 前必须做 holdout replay、记录倾向度的反事实 arm 归因（§6.2），
+或针对受 Semantic Duplicate Gate 去重保护的批屏障 `add / revise / retire` 记忆迁移开展有界消融。
+benchmark 内容绝不能以污染后续 task 的方式被保留。
 
 <a id="edgebench-budgeted-planning"></a>
 
@@ -1073,7 +1094,10 @@ workspace。按预先声明的处理保留正确性失败、未完成评分、�
 把行动前预测与真实方法、资源、中间证据及终局结果对照，区分预测价值、实际采用、
 信息与确认收益。分析延迟收益时关联相关工作序列，不自动只归给最后一步；观察关联
 仍不是因果结论。只有具体疑问值得时，再增加可负担的 lookahead 深度或校准消融，
-不一开始铺开全因子矩阵。
+不一开始铺开全因子矩阵。在对比 Phase 1（`KL-UCB` + 批屏障记忆）与 Phase 2 Checkpoint-Forked
+`Segment Flow-GRPO`（基于 $O(1)$ 状态投影的 $\Delta T$ rollout；[联合决策 §5.9](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution)）
+或评估 `KeepRaw` / `FoldToReceipt` / `EpochReset` 策略时，须与原生终局分数一并报告倾向度加权
+Horvitz-Thompson arm 对比（§6.2）、冷/温 KV-cache token 拆分及反 Reward-Hacking 根因认证通过率。
 
 重复终局收益达到冻结的界限与不确定性要求，且无不可接受的正确性、资源或权限
 回归，才扩大实验。保留负结果及不确定结果。冻结选中策略后再测 held-out 任务和
@@ -1537,6 +1561,8 @@ promotion 或修改 LoopX default。
 - [Self-Harness](https://arxiv.org/abs/2606.09498)
 - [Reward Hacking Benchmark (RHB)](https://arxiv.org/abs/2605.02964)
 - [DuoDiscover 论文](https://arxiv.org/abs/2610.17184)
+- [AgentFlow 论文](https://arxiv.org/abs/2510.05592)
+- [HELIX 论文](https://arxiv.org/abs/2608.13951)
 - [AlphaEvolve 论文](https://arxiv.org/abs/2506.13131)
 - [Darwin Gödel Machine (DGM) 论文](https://arxiv.org/abs/2505.22954)
 - [Darwin Gödel Machine 仓库](https://github.com/jennyzzt/dgm)
