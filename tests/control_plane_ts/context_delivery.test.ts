@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {compactTodoContextSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
-
+import {prepareProgressiveContextDelivery} from "../../loopx/control_plane/quota/progressive_context.ts";
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {updateNativeContextLifecycle} from "../../loopx/control_plane/quota/native_context_lifecycle.ts";
 
@@ -26,6 +26,40 @@ test("only the provider-qualified native replay can retain a complete resume bas
     assert.equal(result.candidate, undefined);
   }
   assert.equal(state.context_epoch, "original");
+});
+
+test("warm progressive edits copy only numbers present in the captured input", () => {
+  const goalBody = "Keep the original requirements, recorded evidence and stop conditions. ".repeat(180);
+  const original = {goal_id: "goal", goalBody, live_count: 7};
+  const initial = {...original, live_count: 6, outcome_requirements_index: {revision: 1, goalBody}};
+  const view = {...original, outcome_requirements_index: {revision: 2, goalBody}};
+  const source = {scope, capture_id: "next", surface: "quota_packet", context: original,
+    native_projection: {path: "decision.json", sha256: "c".repeat(64)}};
+  const baseline = prepareContextDelivery({...source, capture_id: "previous", context: initial});
+  const request = {...source, baseline, source_edits: true,
+    continuity: {basis: "captured_file", capture_bytes_verified: true, target: baseline.target}};
+  const plan = {staged_context: view, deferred: [], instructions: []};
+  const {changes} = prepareProgressiveContextDelivery(request, [], [], plan) as {
+    changes: {path: (string | number)[]; from?: (string | number)[]; value?: unknown; remove?: true}[];
+  };
+  const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>((node, key) => {
+    assert.ok(node !== null && typeof node === "object" && Object.hasOwn(node, key), `Missing field ${path.join(".")}`);
+    return (node as Record<string | number, unknown>)[key];
+  }, root);
+  const wire: JsonObject = structuredClone(request);
+  for (const edit of changes) {
+    const parent = at(wire, edit.path.slice(0, -1)) as Record<string | number, unknown>;
+    const key = edit.path.at(-1)!;
+    if (edit.remove) delete parent[key];
+    else parent[key] = structuredClone(edit.from ? at(request, edit.from) : edit.value);
+  }
+  const delta = wire.delivery as JsonObject;
+  assert.equal(delta.mode, "delta");
+  assert.ok(changes.some(edit => edit.path[0] === "delivery" && edit.from?.join(".") === "context.live_count"));
+  const current = prepareContextDelivery({...source, context: wire.context});
+  const restored = restoreContextDelivery({delivery: delta, baseline, current});
+  assert.equal(restored.mode, "delta");
+  assert.deepEqual(restored.context, {...view, context_details: {path: "decision.json", sha256: "c".repeat(64)}});
 });
 
 test("a tool workdir can report an exact selected read without changing the native workspace", () => {
