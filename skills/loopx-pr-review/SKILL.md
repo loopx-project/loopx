@@ -134,14 +134,13 @@ owner/GitHub authority, preserving discussion and unresolved reviews. Merge rout
 `loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
 Immediately before every merge, run `loopx --format json pr-review --repo OWNER/REPO
---check-merge-readiness NUMBER@HEAD_OID` (pass explicit `--registry` and
-`--goal-id GOAL` on Goal-managed work so `wait_for_ci=false` is honored without
-waiting on remote CI; standalone work needs no Goal). `ready=true` permits
-immediate merge (including `--admin` for author-owned `COMMENTED` approvals or
-unconsulted status checks when `wait_for_ci=false`); explicit maintainer
-authorization means admin bypass may override a readiness or GitHub policy hold,
-never missing exact-head review, validation, unresolved threads, a changed head,
-an unmergeable conflict, or absent merge authority.
+--check-merge-readiness NUMBER@HEAD_OID` (pass explicit `--registry` and `--goal-id GOAL` on
+Goal-managed work so `wait_for_ci=false` is honored without waiting on remote CI; standalone work
+needs no Goal). `ready=true` with `wait_for_ci=false` clears CI waiting when an authorized merge or
+maintainer-authorized self-merge runs (never implying automatic self-merge without authorization);
+explicit maintainer authorization means admin bypass may override a readiness or GitHub policy hold,
+never missing exact-head review, validation, unresolved threads, a changed head, an unmergeable
+conflict, or absent merge authority.
 
 ## Full PR Review And Bilingual Format
 

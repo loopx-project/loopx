@@ -67,14 +67,20 @@ sets `pull_request_review.wait_for_ci=false`, callers pass `--registry` and
 `--goal-id GOAL` to `loopx pr-review` and `--check-merge-readiness`, resolving
 `ci_policy="not_consulted"` so local `pytest`/`ruff`/`mypy` checks,
 `loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`, and
-exact-head review complete merge readiness without waiting on or polling CI.
-Standalone or unconfigured callers keep the safe default `wait_for_ci=true`.
+exact-head review complete merge readiness without waiting on or polling remote CI
+once local gates pass. `ci_policy="not_consulted"` separates CI waiting from
+merge and self-merge authority: it never authorizes merging or auto-self-merging
+ready PRs, and the default remains leaving PRs open for maintainer/owner
+authorization. Standalone or unconfigured callers keep the safe default
+`wait_for_ci=true`.
 
 当本地确定性验证已完整通过时，远端 CI 作为异步安全兜底，而不应成为串行阻塞点。对于配置了
 `pull_request_review.wait_for_ci=false` 的受管 Goal，调用 `loopx pr-review` 与
 `--check-merge-readiness` 时须显式传入 `--registry` 与 `--goal-id GOAL`（解析为
-`ci_policy="not_consulted"`），以本地测试、`loopx canary premerge` 和精确头评审直接完成
-就绪判断与合入，不再等待或轮询远端 CI；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
+`ci_policy="not_consulted"`），在本地测试、`loopx canary premerge` 与精确头评审等本地
+门禁通过后即可完成就绪判断，不再等待或轮询远端 CI。`ci_policy="not_consulted"` 仅控制
+CI 等待策略，合入与自合并授权仍保持独立：它不会自动批准或触发自合并，默认仍保持 PR 开启等待
+维护者或所有者授权；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
 
 Tests first judge whether the state and rule are correct, then whether the
 implementation conforms. Expected outcomes come from an independently reviewed
