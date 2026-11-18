@@ -8413,15 +8413,14 @@ def test_completed_todo_reentry_preserves_original_settlement_commands(
     assert cli["spend_allowed_now"] is False
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert state_path.read_bytes() == completed_state
-    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
-    assert cli["next_cli_actions"] == [commands["durable_writeback"], commands["quota_spend"]]
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-    envelope = build_turn_envelope(resumed)
-    assert envelope["writeback"]["settlement_plan"] == plan
-    assert envelope["writeback"]["next_cli_actions"] == cli["next_cli_actions"]
-    assert envelope["writeback"]["spend_allowed_now"] is False
-    refresh = commands["durable_writeback"].replace(
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    steps = {step["kind"]: step for step in plan["ordered_steps"]}
+    assert steps["quota_spend"]["owner"] == "runtime"
+    assert "command_template" not in steps["quota_spend"]
+    writeback = steps["durable_writeback"]["command_template"]
+    assert cli["next_cli_actions"] == [writeback]
+    assert {"--settle-turn", "--settlement-receipt"} <= set(shlex.split(writeback))
+    refresh = writeback.replace(
         "<validated_progress>", "completed_read_only_result",
     ).replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
     refresh += (
@@ -8430,17 +8429,18 @@ def test_completed_todo_reentry_preserves_original_settlement_commands(
         " --no-global-sync --suppress-external-sinks"
     )
     rc, written = _run_generated_cli(refresh, registry_path=registry_path)
-    assert rc == 0, written
+    assert rc == 0 and written["settlement_identity"] == plan["identity"], written
+    receipts = written["settlement_result"]["receipts"]
+    assert [(row["step_kind"], row["effect_id"], row["status"]) for row in receipts] == [
+        (kind, plan["identity"]["effect_id"], "committed")
+        for kind in ("validation", "durable_writeback", "quota_spend")
+    ]
+    assert written["settlement_progress"]["state"] == "settled"
+    assert "settlement_owed" not in written
     rc, replayed = _run_generated_cli(refresh, registry_path=registry_path)
-    assert rc == 0, replayed
+    assert rc == 0 and replayed["idempotent_replay"] and not replayed["appended"], replayed
+    assert replayed["settlement_result"] == written["settlement_result"]
     assert _classification_count(runtime, "completed_read_only_result") == 1
-    rc, owed = _run_cli(registry_path, runtime, *guard_args)
-    assert rc == 0, owed
-    assert owed["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
-    assert owed["settlement_owed"]["todo_id"] == TODO_ID
-    for command in (owed["settlement_owed"]["command"], commands["quota_spend"]):
-        rc, spent = _run_generated_cli(command, registry_path=registry_path)
-        assert rc == 0, spent
     assert _spend_run_count(runtime) == 1
     rc, settled = _run_cli(registry_path, runtime, *guard_args)
     assert rc == 0, settled
