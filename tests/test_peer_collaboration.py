@@ -531,6 +531,107 @@ def test_operation_replay_conflicts_and_independent_requests(scenario):
         )
 
 
+@pytest.mark.parametrize("registered_locally", [False, True])
+@pytest.mark.parametrize("surface", ["codex-app", "codex-app-ssh"])
+def test_cli_cross_goal_peer_failure_is_typed_and_records_no_delivery(
+    scenario, registered_locally, surface
+):
+    root, registry, brief, *_ = scenario
+    data = json.loads(registry.read_text())
+    if not registered_locally:
+        data["goals"][0]["coordination"]["registered_agents"].remove("reviewer")
+    data["goals"].append({
+        "id": "other-goal", "repo": str(root),
+        "coordination": {
+            "registered_agents": ["reviewer"],
+            "thread_agent_bindings": [{
+                "agent_id": "reviewer", "host_surface": surface,
+                "thread_id": "foreign-review-task",
+            }],
+        },
+    })
+    registry.write_text(json.dumps(data))
+    registry_before = registry.read_bytes()
+    brief_path = root / "cross-goal-review.json"
+    brief_path.write_text(json.dumps(brief))
+    ledger = _root(root)
+    before = {path.relative_to(ledger): path.read_bytes() for path in ledger.rglob("*.json")}
+    assert before, "The fixture must contain a real Inbox record before checking no writes."
+
+    result = cli(
+        root,
+        registry,
+        "builder",
+        "request",
+        "--peer-agent-id",
+        "reviewer",
+        "--require-host-route",
+        "--peer-thread-link",
+        "codex://threads/foreign-review-task",
+        "--peer-host-surface",
+        surface,
+        "--operation-id",
+        "cross-goal-review",
+        "--brief-file",
+        str(brief_path),
+        ok=False,
+    )
+
+    assert result["error_code"] == "peer_request_same_goal_required"
+    assert result["host_delivery"]["status"] == "not_attempted"
+    assert "next Turn" in result["recommended_action"]
+    assert "submission receipt" in result["recommended_action"]
+    assert "request_id" not in result
+    after = {path.relative_to(ledger): path.read_bytes() for path in ledger.rglob("*.json")}
+    assert after == before
+    assert registry.read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "case", ["unknown", "invalid", "wrong-agent", "ambiguous", "wrong-surface", "no-host-selection"]
+)
+def test_cli_unconfirmed_foreign_link_keeps_original_route_refusal(scenario, case):
+    root, registry, brief, *_ = scenario
+    data = json.loads(registry.read_text())
+    foreign = {
+        "id": "other-goal", "repo": str(root),
+        "coordination": {
+            "registered_agents": ["reviewer", "analyst"],
+            "thread_agent_bindings": [{
+                "agent_id": "analyst" if case == "wrong-agent" else "reviewer",
+                "host_surface": "codex-app", "thread_id": "foreign-review-task",
+            }],
+        },
+    }
+    data["goals"].append(foreign)
+    if case == "ambiguous":
+        data["goals"].append({**foreign, "id": "third-goal"})
+    registry.write_text(json.dumps(data))
+    registry_before = registry.read_bytes()
+    ledger = _root(root)
+    before = {path.relative_to(ledger): path.read_bytes() for path in ledger.rglob("*.json")}
+    path = root / "unconfirmed-review.json"
+    path.write_text(json.dumps(brief))
+    link = {
+        "unknown": "codex://threads/unknown-review-task",
+        "invalid": "codex://settings",
+    }.get(case, "codex://threads/foreign-review-task")
+    route_args = [] if case == "no-host-selection" else ["--require-host-route"]
+    if case == "wrong-surface":
+        route_args += ["--peer-host-surface", "codex-app-ssh"]
+    result = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+                 "--operation-id", "unconfirmed-review", "--brief-file", str(path),
+                 "--peer-thread-link", link, *route_args, ok=False)
+
+    assert "error_code" not in result
+    expected = ("peer host selection requires" if case == "no-host-selection" else
+                "invalid_thread_link" if case == "invalid" else "thread_not_bound_to_peer")
+    assert expected in result["error"]
+    assert "request_id" not in result and "recommended_action" not in result
+    assert {p.relative_to(ledger): p.read_bytes() for p in ledger.rglob("*.json")} == before
+    assert registry.read_bytes() == registry_before
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -719,13 +820,18 @@ def test_consumption_rejects_corrupt_reply_and_receipt(scenario):
 def test_special_file_read_is_bounded_and_stopped_goal_remains_readable(scenario):
     import os
     from loopx.control_plane.collaboration.peers import read_inbox
+    from loopx.control_plane.goals.activation import GoalActivationState, build_goal_activation
 
     root, registry, brief, *_ = scenario
     (root / "inputs/demand.csv").unlink()
     os.mkfifo(root / "inputs/demand.csv")
     assert input_readiness(registry, "delivery", brief)[0]["status"] == "unavailable"
     config = json.loads(registry.read_text())
-    config["goals"][0]["status"] = "stopped"
+    config["goals"][0]["activation"] = build_goal_activation(
+        state=GoalActivationState.STOPPED,
+        updated_at="2026-10-06T00:00:00Z",
+        reason="Owner stopped the Goal.",
+    )
     registry.write_text(json.dumps(config))
     assert read_inbox(root, registry, "delivery", "builder")["items"]
     with pytest.raises(ValueError, match="stopped"):

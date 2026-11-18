@@ -1035,6 +1035,19 @@ loopx manager-inbox request --goal-id allocation --agent-id builder \
   --brief-file review.json --parent-request-id <received-request-id>
 ```
 
+If an exact Codex task link resolves to an Agent of another Goal, this command
+returns `error_code=peer_request_same_goal_required` and
+`host_delivery.status=not_attempted`; it does not write an Inbox entry. Use an
+authorized host task-message operation for that exact task and require its
+submission receipt. The receiving task may process the message when its next
+Turn starts. Do not register either Agent to the other Goal solely to bypass
+this boundary: a cross-Goal message carries coordination context, not Goal
+authority, priority, lease or write scope.
+
+For a name registered locally, only an unambiguous exact binding to that same
+Agent in a different Goal receives this scoped refusal. Unknown, malformed,
+ambiguous, mismatched-Agent or mismatched-host links retain their route error.
+
 To inspect an original source by its saved request identity, including a concluded
 request, use the same registered Goal and receiving Agent:
 
