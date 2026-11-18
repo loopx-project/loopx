@@ -4,12 +4,7 @@ import json
 import os
 from pathlib import Path
 from ..agent_registry import registered_agent_ids_for_goal
-from ..capabilities.manager_context import (
-    acknowledge,
-    configure_delivery_target,
-    configure_delivery_scope,
-    configure_evidence_scope,
-)
+from ..control_plane.collaboration.inbox import acknowledge
 from ..control_plane.projects.registry_codec import load_project_registry
 from ..control_plane.collaboration.peers import InboxReadResponseAmbiguous
 from ..presentation.answer_instruction import collaboration_answer_instruction
@@ -333,6 +328,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
         if args.manager_inbox_action != "configure-delivery-scope" and (local_delivery_scope is not None or sender_id is not None):
             raise ValueError("--local-delivery-scope and --sender-id are only supported for configure-delivery-scope")
         if args.manager_inbox_action == "configure-delivery-scope":
+            from ..capabilities.manager_context import configure_delivery_scope
+
             result = configure_delivery_scope(runtime_root, channel=args.channel_id or "",
                 local_delivery_scope=local_delivery_scope or "", sender_id=sender_id,
                 execute=args.execute)
@@ -363,6 +360,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.manager_inbox_action == "configure-read-scope":
+            from ..capabilities.manager_context import configure_evidence_scope
+
             result = configure_evidence_scope(
                 runtime_root,
                 registry_path,
@@ -374,6 +373,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.manager_inbox_action in {"grant-delivery-target", "revoke-delivery-target"}:
+            from ..capabilities.manager_context import configure_delivery_target
+
             result = configure_delivery_target(
                 runtime_root,
                 registry_path,

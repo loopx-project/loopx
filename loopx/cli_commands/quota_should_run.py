@@ -67,7 +67,7 @@ def dispatch_quota_turn_start_hooks(
             agent_id=args.agent_id,
         )
     if args.agent_id:
-        from ..capabilities.manager_context import turn_start_hook
+        from ..control_plane.collaboration.inbox_turn_start import turn_start_hook
         from ..capabilities.semantic_preference.agent_preferences import (
             extend_turn_start_dispatch as extend_preferences,
         )

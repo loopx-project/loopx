@@ -461,9 +461,12 @@ def top_level_help_requested(argv: list[str]) -> bool:
     return True
 
 
-def render_concise_help(program: str = "loopx", *, standalone_core: bool = False) -> str:
+def render_concise_help(
+    program: str = "loopx", *, standalone_core: bool = False, workspace_installed: bool = False,
+) -> str:
     program = _program_name(program)
     if standalone_core:
+        workspace = ["  loopx dashboard                Open the local workspace."] if workspace_installed else []
         return "\n".join([
             "LoopX keeps long-running agent work moving with durable state and evidence.",
             "", "Usage:", f"  {program} [global options] <command> [command options]",
@@ -478,6 +481,7 @@ def render_concise_help(program: str = "loopx", *, standalone_core: bool = False
             "  loopx turn inspect-journal --help",
             "                                Inspect an original attempt before resuming it.",
             "  loopx status                   Read current work and its next action.",
+            *workspace,
             "  loopx doctor --installation-only",
             "                                Check this installation.",
             "", "Global options: --registry PATH   --runtime-root PATH   --format markdown|json   --cli-bin PROGRAM",
