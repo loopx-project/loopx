@@ -543,6 +543,7 @@ def assert_inherited_maintainability_red_is_advisory_only() -> None:
             {
                 "ok": False,
                 "status": "failed",
+                "returncode": 1,
                 "command": "python3 examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
                 "stdout_tail": (
                     "- unreviewed finding: dependency_debt:loopx.status->"
@@ -567,6 +568,7 @@ def assert_inherited_maintainability_red_is_advisory_only() -> None:
             {
                 "ok": False,
                 "status": "failed",
+                "returncode": 1,
                 "command": "python3 examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
                 "stdout_tail": (
                     "- unreviewed finding: dependency_debt:loopx.status->"
@@ -588,6 +590,7 @@ def assert_inherited_maintainability_red_is_advisory_only() -> None:
             {
                 "ok": False,
                 "status": "failed",
+                "returncode": 1,
                 "command": "python3 examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
                 "stdout_tail": (
                     "- unreviewed finding: oversized_decision_function:"

@@ -849,6 +849,10 @@ def downgrade_inherited_baseline_failures(
     for check in run.get("selected_checks", []):
         if not isinstance(check, dict) or check.get("ok") or check.get("status") != "failed":
             continue
+        # The maintainability ratchet exits 1 when its report contains findings.
+        # Partial output from an interrupted or invalid invocation cannot qualify.
+        if check.get("returncode") != 1:
+            continue
         command = str(check.get("command") or "")
         if not any(token in command for token in INHERITED_BASELINE_COMMANDS):
             continue

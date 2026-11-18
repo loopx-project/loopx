@@ -58,6 +58,7 @@ def test_incomplete_ratchet_stays_failed(status: str, diagnostic: str) -> None:
         "selected_checks": [{
             "ok": False,
             "status": status,
+            "returncode": None if status == "timed_out" else 1,
             "command": "python3 examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
             "stdout_tail": diagnostic,
         }],
