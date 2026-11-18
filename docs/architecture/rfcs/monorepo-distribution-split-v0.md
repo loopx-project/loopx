@@ -671,23 +671,18 @@ diaries in this RFC.
 
 #### 3. Concrete retirement backlog and ratchet rules
 
-1. **Pre-Turn pilot CLI subcommands and top-level modules.** Retire the `15`
-   superseded pre-Turn `codex-cli-*` pilot/proof subcommands replaced by
-   `loopx turn` (`turn_driver/codex_cli.py`), `start-goal`, and `codex_app`
-   heartbeat (`14` with zero non-pilot callers plus `codex-cli-session-probe`
-   referenced only as a hint in `loopx/project_prompt.py`), along with the `4`
-   top-level `loopx/codex_cli_*.py` modules (`3,767` LOC) and `6`
-   `loopx/cli_commands/starter_*.py` wrappers (`859` LOC). Keep live
-   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py`.
-2. **Remaining top-level `chat_*` and `*_goal_mode` migrations with strict
-   downward ratchet.** Complete M1/M2 by migrating the remaining `20` top-level
-   `loopx/chat_*.py` modules (`20,562` LOC) into `loopx/chat/` and the `9`
-   `loopx/*_goal_mode/` directories (`59` files / `17,655` lines; `33` `.py` /
-   `7,062` LOC) into `loopx/hosts/`. Every PR deleting or moving top-level
-   modules must ratchet `max_top_level_modules` in
-   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
-   (currently `127`) strictly downward; keeping permanent top-level shim files
-   that freeze the count does not clear M1/M2.
+1. **Pre-Turn pilot CLI retirement.** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   retired 15 superseded pilot commands and four flat `loopx/codex_cli_*.py`
+   modules, and lowered the top-level budget from 127 to 124. The live
+   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py` still have callers.
+2. **Remaining top-level `chat_*` and `*_goal_mode` migrations.** M1 places
+   the internal action normalization and Goal lifecycle action modules under
+   `loopx/chat/`. This removes two flat names and lowers the budget from 124
+   to 122. M1 still needs to migrate the remaining Chat modules under I3.
+   M2 still moves host mode packages under `loopx/hosts/`. Each net removal
+   lowers [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   by the same count in that PR. The Core wheel already excludes both Chat
+   paths, so this move reduces the source directory count.
 3. **Unreferenced `examples/` scripts and source-text-pinning smokes.** Prune
    unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
    `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on

@@ -181,7 +181,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.periodic_report.review",
     "loopx.capabilities.progress_review.receipt",
     "loopx.chat.result_files_api",
-    "loopx.chat_action_normalization",
+    "loopx.chat.action_normalization",
     "loopx.capabilities.manager_context.chat_history",
     "loopx.cli_commands.quota_context_reader",
     "loopx.cli_commands.update_artifact",

@@ -6,11 +6,11 @@ from datetime import timedelta
 import re
 from typing import Any, Mapping
 
-from .agent_registry import registered_agent_ids_for_goal
-from .control_plane.content_digest import BARE_SHA256_PATTERN
-from .control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
-from .control_plane.todos.contract import require_supported_todo_resume_when
-from .registry import registry_goals
+from ..agent_registry import registered_agent_ids_for_goal
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
+from ..control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
+from ..control_plane.todos.contract import require_supported_todo_resume_when
+from ..registry import registry_goals
 
 
 _AUTHORITY_PRINCIPAL = re.compile(r"^[a-z][a-z0-9._-]{0,30}:[A-Za-z0-9._:-]{1,200}$")
@@ -33,7 +33,7 @@ class ChatActionNormalizationMixin:
     ) -> dict[str, Any]:
         # Imported lazily to retain the compatibility helpers in chat_actions
         # without introducing a module initialization cycle.
-        from .chat_actions import (
+        from ..chat_actions import (
             ProtectedActionGate,
             _digest,
             _normalize_cadence,
@@ -174,15 +174,15 @@ class ChatActionNormalizationMixin:
                 "agent_session",
                 "managed_turn",
             }:
-                from .control_plane.collaboration.goal_instance_scope import (
+                from ..control_plane.collaboration.goal_instance_scope import (
                     collaboration_goal_scope,
                 )
-                from .control_plane.effect_runtime import (
+                from ..control_plane.effect_runtime import (
                     EffectRuntimeRejected,
                     effect_runtime_result,
                 )
-                from .control_plane.goals.activation import goal_is_stopped
-                from .thread_agent_binding import resolve_registry_thread_agent_binding
+                from ..control_plane.goals.activation import goal_is_stopped
+                from ..thread_agent_binding import resolve_registry_thread_agent_binding
 
                 try:
                     executor = dict(
@@ -227,7 +227,7 @@ class ChatActionNormalizationMixin:
                         raise ValueError("agent operation Goal is stopped")
                     origin_goal_ref = scope.current_goal_ref
                     if executor["kind"] == "managed_turn":
-                        from .control_plane.collaboration.operation_handoff import (
+                        from ..control_plane.collaboration.operation_handoff import (
                             managed_operation_binding_current,
                         )
 
@@ -260,8 +260,8 @@ class ChatActionNormalizationMixin:
                 raise ValueError("source route selection requires a managed executor")
             source_route = None
             if managed_source:
-                from .control_plane.effect_runtime import effect_runtime_result
-                from .thread_agent_binding import (
+                from ..control_plane.effect_runtime import effect_runtime_result
+                from ..thread_agent_binding import (
                     collect_accepted_bindings,
                     resolve_thread_agent_binding,
                 )
@@ -583,7 +583,7 @@ class ChatActionNormalizationMixin:
                 if values.get(field):
                     result[field] = _text(values[field], field=field, limit=1000)
             if "permission" in values or "start_execution" in values:
-                from .control_plane.effect_runtime import effect_runtime_result
+                from ..control_plane.effect_runtime import effect_runtime_result
                 result.update(effect_runtime_result("goal.creation.execution.normalize", values))
             if result.get("open_session") is False and result.get("start_execution"):
                 # start_execution queues the original task as the first Turn of the Session the
@@ -721,10 +721,10 @@ class ChatActionNormalizationMixin:
                 raise ValueError("heartbeat edit requires a configuration change")
             return result
         if action_kind == "team.plan":
-            from .control_plane.todos.contract import (
+            from ..control_plane.todos.contract import (
                 TODO_ACTION_KIND_ADVANCEMENT_VALUES,
             )
-            from .control_plane.work_items.governed_transition_proposal import (
+            from ..control_plane.work_items.governed_transition_proposal import (
                 validate_steward_team_plan_preview,
             )
 
