@@ -15,6 +15,11 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 EXCLUDED_TREES = ("loopx/chat/", "loopx/web/", "loopx/canary/")
 EXCLUDED_MODULES = {"loopx/cli.py", "loopx/chat.py"}
 SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
+# Keep recall's declaration and admission readback in Core.
+RECALL_IMPLEMENTATION_MODULES = {
+    "loopx/capabilities/agent_turn_recall/cli.py",
+    "loopx/capabilities/agent_turn_recall/core.py",
+}
 
 
 def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
@@ -29,6 +34,7 @@ def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
     ).split(b"\0")
     sources = [Path(name.decode("utf-8")) for name in names if name]
     sources = [path for path in sources if path.suffix in SOURCE_SUFFIXES
+               and path.as_posix() not in RECALL_IMPLEMENTATION_MODULES
                and path.as_posix() not in EXCLUDED_MODULES
                and not (path.parent == Path("loopx") and path.name.startswith("chat_"))
                and not path.as_posix().startswith(EXCLUDED_TREES)]

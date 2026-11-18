@@ -67,6 +67,12 @@ complete constraints, compaction requires recovery, and changed capture bytes
 are refused. Its native events are protocol fixtures; they do not establish
 model retention or installed-host adoption.
 
+`capability show agent-turn-recall` reports the optional recall implementation
+as unavailable in Core. Use the ordinary LoopX installation to run recall.
+If an existing Goal explicitly enables automatic recall, Core records the
+missing implementation and continues the task. Outcome ingest retains its
+independent configuration and recovery path.
+
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary
 installation by switching back to its environment; preserve task state and

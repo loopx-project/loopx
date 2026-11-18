@@ -7,23 +7,22 @@ import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
 from ...paths import PATH_SEGMENT_UNSAFE_RE
-from ..context_providers.base import ContextProvider
 from ..reward_memory.experiment import (
     resolve_reward_memory_experiment,
     resolve_reward_memory_surface_config,
 )
-from .core import (
+from .catalog_entry import (
     AGENT_TURN_RECALL_SCHEMA_VERSION,
     AGENT_TURN_RECALL_SURFACE_ID,
-    build_agent_turn_recall_preview,
-    build_agent_turn_situation,
-    run_agent_turn_recall,
 )
+
+if TYPE_CHECKING:
+    from ..context_providers.base import ContextProvider
 
 
 AGENT_TURN_RECALL_RECEIPT_SCHEMA_VERSION = "agent_turn_recall_receipt_v1"
@@ -272,6 +271,22 @@ def run_configured_agent_turn_recall(
                     "reason_code": "automatic_recall_explicitly_disabled",
                 },
             )
+        )
+
+    try:
+        from .core import (
+            build_agent_turn_recall_preview,
+            build_agent_turn_situation,
+            run_agent_turn_recall,
+        )
+    except ModuleNotFoundError as error:
+        if error.name != f"{__package__}.core":
+            raise
+        # Recall is optional in an installed Core. Its absence must not mask
+        # the original configuration or suppress independent ingest recovery.
+        return with_reconciliation(
+            _unavailable_payload(goal_id=goal_id, agent_id=agent_id, status=experiment_status)
+            | {"status": "runtime_unavailable", "reason_code": "automatic_recall_not_installed"}
         )
 
     identity = reward_memory_turn_identity_scope(config)

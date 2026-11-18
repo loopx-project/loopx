@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +140,21 @@ def _register_declared_implementation_providers(
         )
 
 
+def _record_for_installed_recall(
+    registry: CapabilityRegistry, record: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if record is not AGENT_TURN_RECALL_CATALOG_ENTRY or find_spec(
+        "loopx.capabilities.agent_turn_recall.core"
+    ) is not None:
+        return record
+    if not any(provider["id"] == "loopx" for provider in registry.providers()):
+        registry.register_provider({"id": "loopx", "origin": "builtin", "installed": False})
+    return dict(record) | {
+        "provider_id": "loopx",
+        "next_real_step": "Use the ordinary LoopX installation for agent-turn recall.",
+    }
+
+
 def build_capability_registry(
     extension_manifest_paths: Iterable[str | Path] = (),
     *,
@@ -156,7 +172,7 @@ def build_capability_registry(
         }
     )
     for record in BUILTIN_CAPABILITIES:
-        registry.register_capability(record)
+        registry.register_capability(_record_for_installed_recall(registry, record))
     for record in BUILTIN_CAPABILITIES:
         _register_declared_implementation_providers(registry, record)
     for manifest in extension_catalog_entries(

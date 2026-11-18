@@ -311,6 +311,11 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 不能因为 packet 更小，就认为 executor 已掌握前文。连续性未知时走所属契约的恢复路径。
 Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导。
 
+独立 Core 安装包保留 `agent-turn-recall` 的目录声明和准入回读，普通发行版提供命令和执行代码。
+发现能力时只读取声明，显式启用自动回忆后才加载执行实现。启用了自动回忆的 Core Turn 会回读
+实现缺失并继续普通任务。独立启用的结果入库沿用既有恢复路径。这为 Standard 的一项能力划出了
+安装包边界，完整的 Standard 预设仍需完成装配和安装态验收。
+
 可选 observer 消费已提交事件或有界投影。除非现有契约明确要求它的 receipt，
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟
 authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/租约决策。

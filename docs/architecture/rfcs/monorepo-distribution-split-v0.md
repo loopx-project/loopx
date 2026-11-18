@@ -450,6 +450,15 @@ packet cannot be treated as proof the executor has the prior context. Recover
 through the owning contract when continuity is unknown. Capability instructions
 are supplied when applicable; authority is never inferred from prompt text.
 
+The standalone Core artifact keeps the `agent-turn-recall` catalog and
+admission readback. The ordinary distribution supplies its command and
+execution code. Discovery reads the declaration without loading recall, and
+automatic recall loads its implementation after explicit opt-in. A Core Turn
+with that opt-in records the missing implementation and continues ordinary work.
+Independently enabled outcome ingest keeps its existing recovery path. This is
+one artifact boundary for a Standard capability. The complete Standard preset
+still needs package composition and installed qualification.
+
 Optional observers consume committed events or bounded projections. Their
 latency must not enter admission/settlement transactions unless the existing
 contract explicitly requires their receipt. Batch best-effort telemetry only;

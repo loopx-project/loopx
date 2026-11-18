@@ -179,8 +179,21 @@ def test_disabled_turn_recall_does_not_select_execution_helpers(configured: bool
         assert result['quota_spend_performed'] is False
         assert result['external_writes_performed'] is False
         assert result['grants_new_action_authority'] is False
+        assert 'loopx.capabilities.agent_turn_recall.core' not in sys.modules
         assert 'loopx.capabilities.reward_memory.runtime_hooks' not in sys.modules
         assert 'loopx.capabilities.reward_memory.read_authority' not in sys.modules
+    """)
+
+
+def test_turn_recall_catalog_discovery_does_not_load_execution() -> None:
+    _run("""
+        import sys
+        from loopx.capabilities.catalog import build_capability_registry
+        recall = build_capability_registry().get('agent-turn-recall')
+        assert recall['default_enabled'] is False
+        assert recall['provider_state']['ready'] is True
+        for module in ('core', 'runtime', 'cli'):
+            assert 'loopx.capabilities.agent_turn_recall.' + module not in sys.modules, module
     """)
 
 
