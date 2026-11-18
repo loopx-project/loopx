@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from importlib.metadata import Distribution, PackageNotFoundError, PackagePath
+from importlib.metadata import Distribution, PackageNotFoundError, PackagePath, distribution
+from importlib.util import find_spec
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,37 @@ def verified_distribution_console(recorded: Path) -> Path | None:
     except (OSError, RuntimeError):
         pass
     return None
+
+
+def builtin_capability_installed(
+    distribution_name: str,
+    modules: tuple[str, ...],
+    *,
+    builtin_cli_present: bool | None = None,
+) -> bool:
+    """Check import locations and matching installed wheel ownership without loading code."""
+    origins = [
+        Path(spec.origin).resolve()
+        for module in modules
+        if (spec := find_spec(module)) is not None and spec.origin is not None
+    ]
+    if len(origins) != len(modules):
+        return False
+    if builtin_cli_present is None:
+        builtin_cli_present = find_spec("loopx.cli") is not None
+    if builtin_cli_present:
+        return True
+    try:
+        implementation = distribution(distribution_name)
+        if implementation.version != distribution("loopx-core").version:
+            return False
+    except PackageNotFoundError:
+        return False
+    recorded = {
+        distribution_record_path(path).resolve()
+        for path in implementation.files or ()
+    }
+    return all(origin in recorded for origin in origins)
 
 
 @dataclass(frozen=True)

@@ -450,18 +450,20 @@ packet cannot be treated as proof the executor has the prior context. Recover
 through the owning contract when continuity is unknown. Capability instructions
 are supplied when applicable; authority is never inferred from prompt text.
 
-The first Standard capability artifact is the release-coupled
-`loopx-capability-agent-turn-recall` wheel. It supplies the two existing built-in
-command and execution modules in the same environment as matching Core. Core's
-catalog and admission readback, the capability ID, and the original source-tree
-owner govern both installations. The wheels own disjoint files and use the exact
-Core release version for this built-in split. Independent provider packages use
-the public capability boundary described above. Discovery reads metadata without
-loading recall. Automatic recall loads its implementation only after the existing
-Goal/Agent opt-in. Core alone reports the missing implementation and continues
-ordinary work. Independently enabled outcome ingest retains its recovery path.
-The remaining Standard capabilities and the full preset need installed
-qualification.
+Standard has two source-built capability wheel candidates,
+`loopx-capability-agent-turn-recall` and `loopx-capability-pull-request-review`.
+Install each alongside the matching Core release. Core and each add-on own
+disjoint files and keep the existing capability IDs, configuration and runtime
+owners. Independent provider packages use the public capability boundary above.
+
+Discovery reads metadata without loading either implementation. Core can report
+unavailable recall and continue ordinary work. The existing Goal/Agent opt-in
+loads recall when installed, and outcome ingest retains its own recovery path.
+Core keeps PR review catalog and settings. An explicit `pr-review` invocation
+loads the matching wheel and uses the existing exact-head queue, action boundary
+and checkpoint. Removing the wheel leaves saved settings and checkpoints
+available to a later installation. Issue-fix and the full Standard preset still
+need installation qualification.
 
 Optional observers consume committed events or bounded projections. Their
 latency must not enter admission/settlement transactions unless the existing

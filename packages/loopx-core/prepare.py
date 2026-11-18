@@ -1,4 +1,4 @@
-"""Prepare the standalone Core or its matching built-in recall distribution.
+"""Prepare standalone Core and its matching built-in capability distributions.
 
 Build the returned directory with a PEP 517 frontend. No runtime code is copied
 back into the repository and the ordinary distribution remains unchanged.
@@ -16,19 +16,47 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 EXCLUDED_TREES = ("loopx/chat/", "loopx/web/", "loopx/canary/")
 EXCLUDED_MODULES = {"loopx/cli.py", "loopx/chat.py"}
 SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
-# Keep recall's declaration and admission readback in Core.
-RECALL_IMPLEMENTATION_MODULES = {
-    "loopx/capabilities/agent_turn_recall/cli.py",
-    "loopx/capabilities/agent_turn_recall/core.py",
-}
 RECALL_DISTRIBUTION = "loopx-capability-agent-turn-recall"
+PR_REVIEW_DISTRIBUTION = "loopx-capability-pull-request-review"
+PR_REVIEW_DIRECTORY = Path("loopx/capabilities/pr_review_queue")
+PR_REVIEW_CORE_FILES = {
+    "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
+    "order.py", "scheduling.py", "README.md",
+}
+CAPABILITY_ENTRY_MODULES = {
+    RECALL_DISTRIBUTION: {
+        Path("loopx/capabilities/agent_turn_recall/cli.py"),
+        Path("loopx/capabilities/agent_turn_recall/core.py"),
+    },
+    PR_REVIEW_DISTRIBUTION: {
+        Path("loopx/cli_commands/pr_review.py"),
+        Path("loopx/pr_review.py"),
+        Path("loopx/pr_review_merge_readiness.py"),
+        PR_REVIEW_DIRECTORY / "core.py",
+    },
+}
+
+
+def _optional_capability_sources(sources: list[Path]) -> dict[str, set[Path]]:
+    tracked = set(sources)
+    review_sources = {
+        path for path in sources
+        if path.is_relative_to(PR_REVIEW_DIRECTORY)
+        and path.relative_to(PR_REVIEW_DIRECTORY).as_posix() not in PR_REVIEW_CORE_FILES
+        and path.suffix in SOURCE_SUFFIXES
+    }
+    return {
+        RECALL_DISTRIBUTION: tracked & CAPABILITY_ENTRY_MODULES[RECALL_DISTRIBUTION],
+        PR_REVIEW_DISTRIBUTION: review_sources | (tracked & CAPABILITY_ENTRY_MODULES[PR_REVIEW_DISTRIBUTION]),
+    }
 
 
 def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
     repository = repository.resolve()
     sources = _tracked_loopx_sources(repository)
+    optional = set().union(*_optional_capability_sources(sources).values())
     sources = [path for path in sources if path.suffix in SOURCE_SUFFIXES
-               and path.as_posix() not in RECALL_IMPLEMENTATION_MODULES
+               and path not in optional
                and path.as_posix() not in EXCLUDED_MODULES
                and not (path.parent == Path("loopx") and path.name.startswith("chat_"))
                and not path.as_posix().startswith(EXCLUDED_TREES)]
@@ -69,14 +97,15 @@ def _tracked_loopx_sources(repository: Path) -> list[Path]:
     return [Path(name.decode("utf-8")) for name in names if name]
 
 
-def prepare_turn_recall_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
+def prepare_capability_source(
+    output: Path, distribution: str, *, repository: Path = REPOSITORY,
+) -> Path:
     repository = repository.resolve()
-    sources = [path for path in _tracked_loopx_sources(repository)
-               if path.as_posix() in RECALL_IMPLEMENTATION_MODULES]
-    if {path.as_posix() for path in sources} != RECALL_IMPLEMENTATION_MODULES:
-        raise ValueError("the complete built-in Turn recall source is required")
+    sources = _optional_capability_sources(_tracked_loopx_sources(repository))[distribution]
+    if not CAPABILITY_ENTRY_MODULES[distribution].issubset(sources):
+        raise ValueError(f"the complete {distribution} source is required")
     version = run_path(str(repository / "loopx/__init__.py"))["__version__"]
-    output = _stage_source(output, repository, RECALL_DISTRIBUTION, sources)
+    output = _stage_source(output, repository, distribution, sorted(sources))
     (output / "VERSION").write_text(f"{version}\n", encoding="utf-8")
     (output / "requires-core.txt").write_text(f"loopx-core=={version}\n", encoding="utf-8")
     return output
@@ -85,10 +114,13 @@ def prepare_turn_recall_source(output: Path, *, repository: Path = REPOSITORY) -
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--distribution", choices=["loopx-core", RECALL_DISTRIBUTION], default="loopx-core")
+    parser.add_argument("--distribution", choices=["loopx-core", *CAPABILITY_ENTRY_MODULES], default="loopx-core")
     args = parser.parse_args()
-    prepare = prepare_turn_recall_source if args.distribution == RECALL_DISTRIBUTION else prepare_core_source
-    print(prepare(args.output))
+    output = (
+        prepare_core_source(args.output) if args.distribution == "loopx-core"
+        else prepare_capability_source(args.output, args.distribution)
+    )
+    print(output)
     return 0
 
 

@@ -2,6 +2,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...python_install_owner import builtin_capability_installed
+
+PR_REVIEW_DISTRIBUTION = "loopx-capability-pull-request-review"
+PR_REVIEW_INSTALL_HINT = f"Install the matching {PR_REVIEW_DISTRIBUTION} wheel in this Core environment."
+
+
+def pull_request_review_installed(*, builtin_cli_present: bool | None = None) -> bool:
+    return builtin_capability_installed(
+        PR_REVIEW_DISTRIBUTION,
+        ("loopx.cli_commands.pr_review", "loopx.pr_review", "loopx.pr_review_merge_readiness", f"{__package__}.core"),
+        builtin_cli_present=builtin_cli_present,
+    )
+
+
 PR_REVIEW_CATALOG_ENTRY: dict[str, Any] = {
     "id": "pull-request-review",
     "origin": "builtin",
