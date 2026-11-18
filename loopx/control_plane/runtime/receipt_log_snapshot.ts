@@ -33,6 +33,15 @@ export interface ReceiptLogSnapshot {
    */
   readonly malformedLines: readonly MalformedLineMembers[];
   readonly firstErrorLine: number | null;
+  /**
+   * Physical line of an unterminated final row that still decoded, or null.
+   *
+   * The row never received the newline its writer must append to commit it,
+   * and the next append drops those bytes.  Deduplication and freshness may
+   * read the record for diagnosis, but only a newline-terminated row is a
+   * committed receipt.
+   */
+  readonly unterminatedRecordLine: number | null;
 }
 
 interface Prefix extends ReceiptLogSnapshot {
@@ -200,7 +209,7 @@ export async function readReceiptLogSnapshot(
       records: Object.freeze(records),
       recordLines: Object.freeze(recordLines),
       malformedLines: Object.freeze(malformedLines),
-      firstErrorLine, lines,
+      firstErrorLine, lines, unterminatedRecordLine: null,
       bytes: completeBytes, digest: digest(bytes.subarray(0, completeBytes)),
     });
   }
@@ -212,6 +221,7 @@ export async function readReceiptLogSnapshot(
       recordLines: prefix.recordLines,
       malformedLines: prefix.malformedLines,
       firstErrorLine: prefix.firstErrorLine ?? prefix.lines + 1,
+      unterminatedRecordLine: null,
     });
   }
   if (!tail.trim()) return prefix;
@@ -221,6 +231,7 @@ export async function readReceiptLogSnapshot(
       recordLines: Object.freeze([...prefix.recordLines, prefix.lines + 1]),
       malformedLines: prefix.malformedLines,
       firstErrorLine: prefix.firstErrorLine,
+      unterminatedRecordLine: prefix.lines + 1,
     });
   } catch {
     return Object.freeze({
@@ -228,6 +239,7 @@ export async function readReceiptLogSnapshot(
       recordLines: prefix.recordLines,
       malformedLines: prefix.malformedLines,
       firstErrorLine: prefix.firstErrorLine ?? prefix.lines + 1,
+      unterminatedRecordLine: null,
     });
   }
 }

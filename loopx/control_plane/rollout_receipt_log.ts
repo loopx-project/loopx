@@ -46,6 +46,8 @@ export interface GoalRolloutEventSnapshot {
     ambiguous: boolean;
   }>[];
   readonly firstStrictErrorLine: number | null;
+  /** A complete final row that never received its committing newline. */
+  readonly unterminatedRecordLine: number | null;
 }
 
 /** Reject a goal id that is not one path segment, before any log read. */
@@ -103,6 +105,7 @@ export async function readGoalRolloutEventSnapshot(
     eventLines: snapshot.recordLines,
     malformedLines: snapshot.malformedLines,
     firstStrictErrorLine: snapshot.firstErrorLine,
+    unterminatedRecordLine: snapshot.unterminatedRecordLine,
   };
 }
 
@@ -356,8 +359,11 @@ export async function heartbeatReceiptStatus(params: {
     params.agentId,
     goalRef,
   );
+  // An unterminated final row never committed; the next append drops those
+  // bytes, so it can neither be this Turn's receipt nor supersede it.
   const receiptLines = snapshot.events
     .map((event, index) => ({ event, line: snapshot.eventLines[index] }))
+    .filter(({ line }) => line !== snapshot.unterminatedRecordLine)
     .filter(({ event }) => receipts.includes(event));
   const firstIndex = receiptLines.findIndex(
     ({ event }) => event.run_id === params.turnInstanceId,

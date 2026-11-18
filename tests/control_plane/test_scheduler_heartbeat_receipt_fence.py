@@ -13,7 +13,11 @@ from examples.control_plane.quota_plan_fixtures import (
 from loopx.cli_commands import quota_scheduler_followup
 from loopx.control_plane.quota.scheduler_ack import _run_native_followup
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
-from loopx.rollout_event_log import build_rollout_event, rollout_event_log_path
+from loopx.rollout_event_log import (
+    append_rollout_event,
+    build_rollout_event,
+    rollout_event_log_path,
+)
 
 
 GOAL_ID = "receipt-fence"
@@ -834,6 +838,138 @@ def test_foreign_duplicate_identity_with_damaged_summary_is_tolerated(
     assert result["ok"] is True
     assert result["scheduler_state_mutated"] is True
     assert log_path.read_bytes() == before
+
+
+def _write_unterminated_receipt(
+    log_path: Path, goal_id: str, turn_id: str
+) -> bytes:
+    """Append complete JSON whose writer never wrote the committing newline."""
+    row = build_rollout_event(
+        goal_id=goal_id,
+        event_kind="quota_should_run",
+        agent_id=SCOPED_AGENT_ID,
+        run_id=turn_id,
+        summary=f"heartbeat quota receipt committed for turn={turn_id}",
+        details={"quota_command": "should-run"},
+    )
+    encoded = json.dumps(row, sort_keys=True, ensure_ascii=False).encode()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as handle:
+        handle.write(encoded)
+    return encoded
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
+def test_uncommitted_successor_row_does_not_retire_the_older_turn(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-uncommitted-successor",
+        scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    code, guard = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--app-automation-current-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--turn-instance-id",
+        "turn-1",
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    # The successor's bytes are complete JSON; only the committing newline is
+    # missing, and the next append drops those bytes.
+    _write_unterminated_receipt(log_path, goal_id, "turn-2")
+    before = log_path.read_bytes()
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        "turn-1",
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # The uncommitted row never admitted a Turn, so the current return writes.
+    assert code == 0, result
+    assert result["ok"] is True
+    assert result["scheduler_state_mutated"] is True
+    assert log_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "command", ["scheduler-ack-current", "scheduler-fail-current"],
+)
+def test_uncommitted_original_row_is_not_a_receipt_before_or_after_repair(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / f"{provider}-{command}-uncommitted-original",
+        scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_bytes(
+        _write_unterminated_receipt(log_path, goal_id, "turn-1")
+    )
+
+    operation_args = ("--use-current-hint",) if command == "scheduler-ack-current" else ()
+
+    def run():
+        return run_json_cli_result(
+            "quota",
+            command,
+            "--goal-id",
+            goal_id,
+            "--agent-id",
+            SCOPED_AGENT_ID,
+            "--trae_app",
+            "--turn-instance-id",
+            "turn-1",
+            "--execute",
+            *operation_args,
+            registry_path=registry,
+            runtime_root=runtime_root,
+            cwd=project,
+        )
+
+    code, result = run()
+    assert code == 1, result
+    assert result["status"] == "heartbeat_receipt_missing"
+    assert result["scheduler_state_mutated"] is False
+    # The next append drops the uncommitted row; the answer must not change.
+    append_rollout_event(
+        log_path,
+        build_rollout_event(goal_id=goal_id, event_kind="todo_complete"),
+    )
+    code, result = run()
+    assert code == 1, result
+    assert result["status"] == "heartbeat_receipt_missing"
+    assert result["scheduler_state_mutated"] is False
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

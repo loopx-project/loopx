@@ -687,6 +687,58 @@ test("a completed row missing only its newline stays uncommitted after repair", 
   }
 });
 
+test("an unterminated successor does not retire the older turn", async (t) => {
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      const runtimeRoot = await tempRuntime(t);
+      await appendReceipt(runtimeRoot, "turn-followup-1");
+      const path = receiptLogPath(runtimeRoot);
+      // Complete JSON whose writer never finished the row: the next append
+      // drops these bytes, so they cannot retire the committed Turn.
+      await appendFile(path, Buffer.from(receiptRow("turn-followup-2")));
+      const before = await readFile(path);
+      const result = await evaluateSchedulerHeartbeatFollowup(
+        followupRequest(runtimeRoot, operation),
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.scheduler_state_mutated, true);
+      assert.deepEqual(await readFile(path), before);
+      const statePath = schedulerStatePath(runtimeRoot, {
+        goalId: scope.goal_id,
+        agentId: scope.agent_id,
+        surface: scope.surface,
+        stateKey: scope.state_key,
+      });
+      const persisted = JSON.parse(await readFile(statePath, "utf8"));
+      assert.equal(persisted.heartbeat_commit.operation, operation);
+    });
+  }
+});
+
+test("an unterminated original row is not a receipt before or after repair", async (t) => {
+  for (const operation of OPERATIONS) {
+    await t.test(operation, { timeout: 30_000 }, async (t) => {
+      const runtimeRoot = await tempRuntime(t);
+      const path = receiptLogPath(runtimeRoot);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, receiptRow("turn-followup-1"));
+      const rejected = await evaluateSchedulerHeartbeatFollowup(
+        followupRequest(runtimeRoot, operation),
+      );
+      assert.equal(rejected.status, "heartbeat_receipt_missing");
+      assert.equal(rejected.scheduler_state_mutated, false);
+      // The next append drops the uncommitted row, and the answer must not
+      // change: it was never a receipt.
+      await runPython(t, PYTHON_UNRELATED_APPEND, [runtimeRoot, scope.goal_id]);
+      const afterRepair = await evaluateSchedulerHeartbeatFollowup(
+        followupRequest(runtimeRoot, operation),
+      );
+      assert.equal(afterRepair.status, "heartbeat_receipt_missing");
+      assert.equal(afterRepair.scheduler_state_mutated, false);
+    });
+  }
+});
+
 test("receipt append cannot split freshness from ACK or host-failure persistence", async (t) => {
   for (const operation of OPERATIONS) {
     await t.test(operation, { timeout: 30_000 }, async (t) => {

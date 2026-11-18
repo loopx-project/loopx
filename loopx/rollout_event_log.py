@@ -211,6 +211,7 @@ def _iter_rollout_event_lines(
     log_path: Path,
     *,
     strict: bool = False,
+    committed_only: bool = False,
 ) -> Iterator[tuple[int, str]]:
     try:
         handle = log_path.open("rb")
@@ -218,6 +219,11 @@ def _iter_rollout_event_lines(
         return
     with handle:
         for line_number, encoded_line in enumerate(handle, start=1):
+            # A row is committed only after its writer terminated it.  Bytes
+            # after the last newline are abandoned by the next append, so
+            # deduplication must not treat them as an existing record.
+            if committed_only and not encoded_line.endswith(b"\n"):
+                continue
             try:
                 line = encoded_line.decode("utf-8")
             except UnicodeDecodeError:
@@ -476,7 +482,7 @@ def append_rollout_event(log_path: Path, event: Mapping[str, Any]) -> dict[str, 
     with exclusive_cross_runtime_file_lock(
         log_path, operation="append_rollout_event"
     ):
-        for _, line in _iter_rollout_event_lines(log_path):
+        for _, line in _iter_rollout_event_lines(log_path, committed_only=True):
             if event_id not in line:
                 continue
             try:
@@ -527,7 +533,7 @@ def append_rollout_event_once(
     with exclusive_cross_runtime_file_lock(
         log_path, operation="append_rollout_event_once"
     ):
-        for _, line in _iter_rollout_event_lines(log_path):
+        for _, line in _iter_rollout_event_lines(log_path, committed_only=True):
             try:
                 existing = json.loads(line)
             except json.JSONDecodeError:
