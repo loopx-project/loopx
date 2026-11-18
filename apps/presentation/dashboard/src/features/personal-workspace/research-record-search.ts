@@ -8,6 +8,30 @@ export type ResearchRecordDisplay = {
   sections?: ReadonlyMap<string, ExploreFindingSections | null>;
 };
 
+/** Local reading selection, fenced to the same Goal and physical source. It
+ * carries no records, status judgment, source connection or execution grant. */
+export type ResearchRecordsLocation = {open: boolean; query: string; status: string; expanded: string[]; limit: number};
+export const defaultResearchRecordsLocation: ResearchRecordsLocation = {open: false, query: "", status: "", expanded: [], limit: 50};
+
+export function readResearchRecordsLocation(search: URLSearchParams, scope: string): ResearchRecordsLocation {
+  try {
+    const entries = search.getAll("research_records");
+    if (entries.length !== 1) return {...defaultResearchRecordsLocation};
+    const value = JSON.parse(entries[0]!);
+    if (!value || value.scope !== scope || typeof value.open !== "boolean" || typeof value.query !== "string"
+        || typeof value.status !== "string" || !Array.isArray(value.expanded)
+        || !value.expanded.every((id: unknown) => typeof id === "string" && id)
+        || !Number.isSafeInteger(value.limit) || value.limit < 50) return {...defaultResearchRecordsLocation};
+    return {open: value.open, query: value.query, status: value.status, expanded: [...new Set<string>(value.expanded)], limit: value.limit};
+  } catch {return {...defaultResearchRecordsLocation};}
+}
+
+export function writeResearchRecordsLocation(search: URLSearchParams, scope: string, value: ResearchRecordsLocation) {
+  const next = new URLSearchParams(search);
+  next.set("research_records", JSON.stringify({scope, ...value}));
+  return next;
+}
+
 /** A node and its sole linked finding may describe the same research entry.
  * Multiple finding identities or conflicting runs leave the records separate.
  * Keep original records, including revisions, in their recorded order. */

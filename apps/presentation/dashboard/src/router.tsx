@@ -38,6 +38,7 @@ const researchSearchShape = {
   research_parent_group: z.unknown().optional(),
   research_question: z.unknown().optional(),
   research_return: z.unknown().optional(),
+  research_records: z.unknown().optional(),
   research_pack: z.unknown().optional(),
   research_compare: z.unknown().optional(),
   research_analysis: z.unknown().optional(),

@@ -1,36 +1,76 @@
 import {ResearchRecordComparison} from "./research-record-comparison";
 import {CircleHelp, TriangleAlert} from "lucide-react";
 import {ContextHelp} from "./context-help";
-import {useMemo, useState, type ReactNode} from "react";
+import {useEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent, ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
-import {researchRecordGroups, searchResearchRecords, type ResearchRecordDisplay} from "./research-record-search";
+import {readResearchRecordsLocation, writeResearchRecordsLocation, researchRecordGroups, searchResearchRecords, type ResearchRecordDisplay, type ResearchRecordsLocation} from "./research-record-search";
 import {exportResearchRecords} from "./research-record-export";
 import {exportResearchReport} from "./research-record-report";
 import {downloadReport} from "./report-download";
 
+/** Reuse the research URL owner for reload and Back/Forward. Native App window
+ * reopen remains a separate preference boundary. */
+export function useResearchRecordsLocation(scope: string) {
+  const read = () => readResearchRecordsLocation(new URLSearchParams(window.location.search), scope);
+  const [location, setLocation] = useState(() => ({scope, value: read(), navigation: 0}));
+  const value = location.scope === scope ? location.value : read();
+  const current = useRef(value);
+  current.current = value;
+  useEffect(() => {
+    const changed = () => {current.current = read(); setLocation(previous => ({scope, value: current.current, navigation: previous.navigation + 1}));};
+    changed(); window.addEventListener("popstate", changed);
+    return () => window.removeEventListener("popstate", changed);
+  }, [scope]);
+  const update = (patch: Partial<ResearchRecordsLocation>, replace = true) => {
+    const next = {...current.current, ...patch};
+    if (JSON.stringify(next) === JSON.stringify(current.current)) return;
+    current.current = next;
+    const url = new URL(window.location.href);
+    url.search = writeResearchRecordsLocation(url.searchParams, scope, next).toString();
+    window.history[replace ? "replaceState" : "pushState"](window.history.state, "", url);
+    setLocation(previous => ({scope, value: next, navigation: previous.navigation}));
+  };
+  return {value, update, navigation: location.navigation};
+}
+
 /** Local read controls over the existing validated history snapshot. */
-export function ResearchRecordSearch({goalId, events, nodes, displayEvents, displaySections, renderBody, renderSummary, complete, stale, busy, zh, stateLabel, timeLabel}: {
+export function ResearchRecordSearch({goalId, events, nodes, displayEvents, displaySections, renderBody, renderSummary, complete, stale, busy, zh, stateLabel, timeLabel, reading}: {
   goalId: string;
   displayEvents?: readonly ExploreHistoryEvent[]; renderBody?: (event: ExploreHistoryEvent) => ReactNode;
   displaySections?: ResearchRecordDisplay["sections"];
   renderSummary?: (event: ExploreHistoryEvent) => ReactNode;
   events: readonly ExploreHistoryEvent[]; nodes: readonly ExploreHistoryNode[]; complete: boolean; stale: boolean; busy: boolean; zh: boolean;
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
+  reading: ReturnType<typeof useResearchRecordsLocation>;
 }) {
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("");
-  const [limit, setLimit] = useState(50);
+  const {query, status, limit, expanded} = reading.value;
+  const root = useRef<HTMLDivElement>(null);
+  const focusNavigation = useRef(-1);
   const [downloadFailed, setDownloadFailed] = useState(false);
   const [format, setFormat] = useState("json");
   const displayed = useMemo(() => new Map(displayEvents?.map(event => [event.event_id, event])), [displayEvents]);
   const display = useMemo(() => ({events: displayed, sections: displaySections}), [displayed, displaySections]);
   const matches = useMemo(() => searchResearchRecords(events, query, status, display), [events, query, status, display]);
   const groups = useMemo(() => researchRecordGroups(matches, complete ? nodes : []), [matches, nodes, complete]);
+  const allGroups = useMemo(() => researchRecordGroups(events, complete ? nodes : []), [events, nodes, complete]);
+  useEffect(() => {
+    if (!complete || busy || focusNavigation.current === reading.navigation) return;
+    focusNavigation.current = reading.navigation;
+    const row = [...(root.current?.querySelectorAll<HTMLElement>("[data-research-record]") ?? [])]
+      .find(element => expanded.includes(element.dataset.researchRecord!));
+    const target = row?.querySelector<HTMLElement>("summary");
+    target?.focus({preventScroll: true}); target?.scrollIntoView({block: "nearest"});
+  }, [complete, busy, reading.navigation, groups, expanded]);
+  const missing = complete && expanded.some(id => !allGroups.some(group => group.id === id));
   const statuses = [...new Set(events.map(event => event.status).filter(Boolean))].sort();
   const groupCount = zh ? `${groups.length} 个条目` : `${groups.length} ${groups.length === 1 ? "entry" : "entries"}`;
   const countLabel = zh ? `匹配 ${matches.length} / ${events.length} 条已读记录 · ${groupCount}` : `${matches.length} matches in ${events.length} loaded records · ${groupCount}`;
   const readState = busy ? (zh ? "读取中" : "Reading") : stale ? (zh ? "刷新失败" : "Refresh failed") : "";
-  const reset = () => {setQuery(""); setStatus(""); setLimit(50);};
+  const reset = () => reading.update({query: "", status: "", limit: 50});
+  const toggle = (id: string, open: boolean) => {
+    if (expanded.includes(id) === open) return;
+    reading.update({expanded: open ? [...expanded, id] : expanded.filter(value => value !== id)}, false);
+  };
   const originalContent = (event: ExploreHistoryEvent) => {
     const shown = displayed.get(event.event_id) ?? event;
     return <>
@@ -55,13 +95,13 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
         zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/>
     </>;
   };
-  return <div className="research-record-search">
+  return <div className="research-record-search" ref={root}>
     <div className="research-record-filters">
       <input type="search" aria-label={zh ? "搜索研究记录" : "Search research records"}
         placeholder={zh ? "正文、来源引用或 ID" : "Text, source reference or ID"} value={query}
-        onChange={event => {setQuery(event.target.value); setLimit(50);}}/>
+        onChange={event => reading.update({query: event.target.value, limit: 50})}/>
       <select aria-label={zh ? "记录状态" : "Recorded status"} value={status}
-        onChange={event => {setStatus(event.target.value); setLimit(50);}}>
+        onChange={event => reading.update({status: event.target.value, limit: 50})}>
         <option value="">{zh ? "所有状态" : "All statuses"}</option>
         {[...new Set([...statuses, ...(status ? [status] : [])])].map(item => <option key={item} value={item}>{stateLabel(item)}</option>)}
       </select>
@@ -97,34 +137,36 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
           : (zh ? "已读部分没有匹配记录；其余历史尚未核验。" : "No matches in the loaded records; the remaining history is not verified.")}</p> : null}
       </ContextHelp>
     </div>
+    {missing ? <p role="status">{zh ? "原先展开的条目在当前分组中不可用，其他原始记录仍可查阅。" : "A previously opened entry is unavailable in the current grouping. Other original records remain readable."}</p> : null}
     <ol className="research-history-records">{groups.slice(0, limit).map(group => {
       const event = group.events[0]!;
       const shown = displayed.get(event.event_id) ?? event;
-      return <li key={group.id}>
+      return <li key={group.id} data-research-record={group.id}>
         {group.node && group.events.length > 1
           ? <GroupedResearchRecord title={(displayed.get(group.node.latest.event_id) ?? group.node.latest).title}
-            events={group.events} displayed={displayed} renderRecord={originalContent} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/>
-          : <details className="research-record-entry">
+            events={group.events} displayed={displayed} renderRecord={originalContent} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}
+            open={expanded.includes(group.id)} onOpen={open => toggle(group.id, open)}/>
+          : <details className="research-record-entry" open={expanded.includes(group.id)} onToggle={event => toggle(group.id, event.currentTarget.open)}>
             <summary><strong>{shown.title}</strong><span>{timeLabel(event.recorded_at)} · {stateLabel(event.status)}</span></summary>
             {originalContent(event)}
           </details>}
     </li>;})}</ol>
-    {limit < groups.length ? <button type="button" onClick={() => setLimit(value => value + 50)}>{zh ? "显示更多条目" : "Show more entries"} · {limit} / {groups.length}</button> : null}
+    {limit < groups.length ? <button type="button" onClick={() => reading.update({limit: limit + 50})}>{zh ? "显示更多条目" : "Show more entries"} · {limit} / {groups.length}</button> : null}
   </div>;
 }
 
-function GroupedResearchRecord({title, events, displayed, renderRecord, zh, stateLabel, timeLabel}: {
+function GroupedResearchRecord({title, events, displayed, renderRecord, zh, stateLabel, timeLabel, open, onOpen}: {
   title: string; events: readonly ExploreHistoryEvent[]; displayed: ReadonlyMap<string, ExploreHistoryEvent>;
   renderRecord: (event: ExploreHistoryEvent) => ReactNode; zh: boolean;
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
+  open: boolean; onOpen: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const findings = events.filter(event => event.event_kind === "finding");
   const lifecycle = events.filter(event => event.event_kind === "node").at(-1)?.status;
   const statuses = [...new Set(findings.map(event => event.status))].filter(Boolean).map(stateLabel);
   if (lifecycle) statuses.push(stateLabel(lifecycle));
   const summary = [timeLabel(events.at(-1)!.recorded_at), ...statuses, zh ? `${events.length} 条记录` : `${events.length} records`];
-  return <details className="research-record-entry" onToggle={event => setOpen(event.currentTarget.open)}
+  return <details className="research-record-entry" open={open} onToggle={event => onOpen(event.currentTarget.open)}
     onKeyDown={event => {
       if (event.key !== "Escape" || !event.currentTarget.open || !(event.target instanceof Element)
           || event.target.closest("details") !== event.currentTarget) return;
