@@ -250,11 +250,11 @@ work-context sources, while the full result text remains behind the existing
 does not interrupt an active Turn or treat visibility as consumption.
 
 Ordinary peer results may wait for the next work Turn. Cancellation, blocking
-and priority-control paths keep their immediate handling. The invocation-bound
-`read_context` tool records a `model_turn` supply fact for the results it
-returns. The required CLI read and its paged recovery record transport delivery.
-Peer results stay eligible for the next Turn until a bound Turn accepts or
-rejects them.
+and priority-control paths keep their immediate handling. Use the invocation-bound
+`read_peer_returns` tool when only the peer results need review. It records the
+same `model_turn` supply fact as the full `read_context` tool. The required CLI
+read and its paged recovery record transport delivery. Peer results stay
+eligible for the next Turn until a bound Turn accepts or rejects them.
 
 Outgoing requests to an original project conversation use the same typed address
 reader as explicit peer returns. The agenda retains that conversation recipient
@@ -1153,9 +1153,11 @@ granting execution, changing priorities or broadening the return audience.
 The peer independently acknowledges a request and reports a conclusion
 through the same commands as a manager request. The original requester can
 inspect it under `peer_returns` in `manager-inbox read`. In a host with the
-invocation-bound tools configured, use `read_context` to receive the result and
-`consume_peer_result` after checking it. The result also carries a CLI
-acknowledgement command for that exact delivery:
+invocation-bound tools configured, call `read_peer_returns` for the results alone
+and `consume_peer_result` after evaluating them. A read records delivery and
+leaves the results pending. A true `has_more` indicates that additional results
+are pending beyond the current window. The full `read_context` response also
+carries a CLI acknowledgement command for each exact delivery:
 
 ```sh
 loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
@@ -1224,9 +1226,10 @@ the normal governed Turn arguments:
 ```
 
 Use the Python interpreter with this LoopX checkout/release installed and
-absolute configuration paths. Each server exposes only `read_context`,
+absolute configuration paths. Each server exposes `read_context`,
 `assess_request`, `link_work`, `request_peer`, `return_result` and `consume_peer_result`.
-The managed invocation supplies the current Turn key to the scoped tool process.
+A managed invocation supplies the current Turn key to the scoped tool process.
+Only a bound process also exposes `read_peer_returns`.
 Identity and filesystem roots are host-bound. Every call rechecks the
 registered actor. The server has no shell, Todo/lease
 writer, credential tools or network listener. Installing/configuring it does not

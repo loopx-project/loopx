@@ -52,8 +52,13 @@ from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
 from loopx.collaboration_mcp import main
 transport = inbox.read_inbox_transaction
 records = 0
+lost_peer_read = False
 def interrupted(root, query, **kwargs):
-    global records
+    global records, lost_peer_read
+    if query["operation"] == "returns" and not lost_peer_read:
+        lost_peer_read = True
+        transport(root, query, **kwargs)
+        raise EffectRuntimeResponseAmbiguous("collaboration.inbox.read", timeout=10)
     if query["operation"] == "record_read":
         records += 1
         if records == 2:
@@ -109,6 +114,19 @@ main()
             disposition = {"request_id": rid, "disposition": "accepted"}
             refused = await session.call_tool("consume_peer_result", disposition)
             assert refused.isError and "read the peer conclusion" in refused.content[0].text
+
+            failed_peer_read = await session.call_tool("read_peer_returns", {})
+            assert failed_peer_read.isError and "Repeat the same peer result read in this work Turn" in failed_peer_read.content[0].text
+            assert "Private peer conclusion" not in failed_peer_read.content[0].text
+            delivery = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
+            receipt = delivery.read_bytes()
+            assert json.loads(receipt)["model_turn"]["turn_instance_id"] == turn_key
+            recovered_peer = await session.call_tool("read_peer_returns", {})
+            assert not recovered_peer.isError
+            result, = json.loads(recovered_peer.content[0].text)["peer_returns"]["items"]
+            assert result["request_id"] == rid and result["text"] == "Private peer conclusion"
+            assert delivery.read_bytes() == receipt
+            assert [_receipt(tmp_path, "reads", row)[0] for row in tail] == receipts
             recovered = await session.call_tool("read_context", {"cursor": cursor})
             assert not recovered.isError
             assert {row["request_id"] for row in json.loads(recovered.content[0].text)["items"]} == {row["request_id"] for row in tail}
@@ -129,6 +147,8 @@ main()
             revoked = await session.call_tool("read_context", {"cursor": cursor})
             assert revoked.isError and "requires registered Agents" in revoked.content[0].text
             assert '"recovery"' not in revoked.content[0].text
+            blocked_peer_read = await session.call_tool("read_peer_returns", {})
+            assert blocked_peer_read.isError and "requires registered Agents" in blocked_peer_read.content[0].text
 
     asyncio.run(exercise())
 
@@ -282,6 +302,84 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
                 },
             )
             assert result.isError
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_bound_peer_read_preserves_result_without_resupplying_inbox(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.collaboration.inbox import _root, acknowledge
+    from loopx.control_plane.collaboration.peers import request, return_result
+    from loopx.control_plane.turn_driver.codex_cli import (
+        LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME, collaboration_mcp_turn_environment,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, root, _ = promoted_create_fixture(tmp_path, provider=provider)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["coordination"]["registered_agents"].append("agent-b")
+    registry.write_text(json.dumps(config))
+    brief = {"schema_version": "collaboration_brief_v0", "purpose": "Inspect the artifact",
+        "context": "Review the evidence.", "constraints": [], "inputs": [],
+        "acceptance": ["Return the verified finding"], "return_requirement": "Report the result"}
+    unrelated = {**brief, "context": "Unrelated Inbox evidence. " * 150}
+    incoming = {
+        request(root, registry, "goal-a", "agent-b", "agent-a", f"inbox-{index}", unrelated)["request_id"]
+        for index in range(6)
+    }
+    rid = request(root, registry, "goal-a", "agent-a", "agent-b", "peer-review", brief)["request_id"]
+    acknowledge(root, "goal-a", "agent-b", rid, "adopt", "Review the artifact", registry=registry)
+    return_result(root, "goal-a", "agent-b", rid, "One finding needs a follow-up.", registry=registry)
+    delivery = _root(root) / "replies" / rid / "conclusion.delivery.json"
+
+    opening = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+        "--registry", str(registry), "--runtime-root", str(root), "manager-inbox", "read",
+        "--goal-id", "goal-a", "--agent-id", "agent-a"], capture_output=True, timeout=30, check=True)
+    opening_view = json.loads(opening.stdout)
+    assert {row["request_id"] for row in opening_view["items"]} == incoming
+    assert "read_peer_returns" in opening_view["followthrough"]
+    assert "model_turn" not in json.loads(delivery.read_text())
+
+    turn = "sha256:" + "e" * 64
+    bound_environment = collaboration_mcp_turn_environment(
+        {"name": LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME}, turn_key=turn,
+        lineage={"goal_id": "goal-a", "agent_id": "agent-a"}, project=tmp_path,
+    )
+    params = StdioServerParameters(command=sys.executable, args=[
+        "-m", "loopx.collaboration_mcp", "--runtime-root", str(root),
+        "--registry", str(registry), "--goal-id", "goal-a", "--agent-id", "agent-a", "--workspace", str(tmp_path),
+    ], env={**os.environ, **bound_environment})
+
+    async def exercise():
+        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            args = {"request_id": rid, "disposition": "accepted"}
+            unproved = await session.call_tool("consume_peer_result", args)
+            assert unproved.isError and "in this work Turn" in unproved.content[0].text
+
+            result = await session.call_tool("read_peer_returns", {})
+            assert not result.isError
+            narrow = json.loads(result.content[0].text)
+            assert set(narrow) == {"peer_returns"}
+            peer, = narrow["peer_returns"]["items"]
+            assert peer == opening_view["peer_returns"]["items"][0]
+            assert peer["request_id"] == rid and peer["text"] == "One finding needs a follow-up."
+            assert json.loads(delivery.read_text())["model_turn"]["turn_instance_id"] == turn
+            assert not list((_root(root) / "replies" / rid).glob("*.consumed.json"))
+
+            full = await session.call_tool("read_context", {})
+            assert not full.isError
+            full_view = json.loads(full.content[0].text)
+            assert {row["request_id"] for row in full_view["items"]} == incoming
+            previous_peer, = full_view["peer_returns"]["items"]
+            assert {key: value for key, value in previous_peer.items() if key != "acknowledge_command"} == peer
+
+            consumed = await session.call_tool("consume_peer_result", args)
+            assert not consumed.isError and json.loads(consumed.content[0].text)["status"] == "consumed"
+            empty = await session.call_tool("read_peer_returns", {})
+            assert not empty.isError
+            assert json.loads(empty.content[0].text) == {"peer_returns": {"items": [], "has_more": False}}
 
     asyncio.run(exercise())
 

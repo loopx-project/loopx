@@ -74,6 +74,7 @@ from .control_plane.collaboration.peers import (
     read_inbox,
     request,
     require_operation_id,
+    read_turn_peer_returns,
 )
 from .presentation.answer_instruction import (
     collaboration_answer_instruction,
@@ -283,6 +284,20 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             raise ToolError(json.dumps(exc.result, ensure_ascii=False)) from exc
         result["instruction"] += " " + collaboration_answer_instruction()
         return result
+
+    if turn_instance_id is not None:
+        @server.tool()
+        def read_peer_returns() -> dict:
+            """Read only peer results awaiting review by this bound work Turn.
+
+            Evaluate the returned result and use consume_peer_result to accept,
+            defer or reject it. A read leaves the result pending. If has_more
+            is true, more results are still pending beyond this bounded window.
+            """
+            return {"peer_returns": read_turn_peer_returns(
+                root, registry, goal_id, agent_id,
+                turn_instance_id=turn_instance_id, caller_goal_ref=caller_goal_ref,
+            )}
 
     @server.tool()
     def assess_request(

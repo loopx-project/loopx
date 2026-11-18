@@ -326,12 +326,34 @@ def request(
 
 
 
-def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
+def returns(root, goal_id, agent_id, *, mark_read=False, scope=None, turn_instance_id=None):
+    """Read outgoing peer results through the shared Inbox transaction."""
     from .inbox import read_inbox_transaction
 
-    return read_inbox_transaction(root, {
+    query = {
         "operation": "returns", "goal_id": goal_id, "agent_id": agent_id, "mark_read": mark_read,
-    }, scope=scope)
+    }
+    if turn_instance_id is not None:
+        query["turn_instance_id"] = turn_instance_id
+    return read_inbox_transaction(root, query, scope=scope)
+
+
+def read_turn_peer_returns(root, registry, goal_id, agent_id, *,
+                           turn_instance_id: str, caller_goal_ref):
+    """Supply pending peer results under the host's current Goal and Turn."""
+    from ..effect_runtime import EffectRuntimeResponseAmbiguous
+
+    try:
+        with collaboration_goal_scope(
+            registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref,
+        ) as scope:
+            return returns(root, goal_id, agent_id, mark_read=True, scope=scope,
+                           turn_instance_id=turn_instance_id)
+    except EffectRuntimeResponseAmbiguous as exc:
+        raise ValueError(
+            "Peer result delivery is uncertain. Repeat the same peer result read in this work Turn "
+            "before acknowledging it."
+        ) from exc
 
 
 def _deferred_acknowledgement(
@@ -764,8 +786,8 @@ def read_inbox(
             )
         else:
             result["followthrough"] += (
-                " Peer conclusions stay pending after this read. Use the current host-bound "
-                "read_context tool to receive them for acknowledgement when it is available."
+                " Peer conclusions stay pending after this read. In a bound work Turn, use "
+                "read_peer_returns and then consume_peer_result after evaluating each result."
             )
     if result.get("native_child_results", {}).get("items"):
         result["followthrough"] += (
