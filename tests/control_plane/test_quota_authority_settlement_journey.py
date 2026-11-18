@@ -247,18 +247,19 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
     assert not recovery["normal_delivery_allowed"]
     assert not recovery.get("selected_todo")
     assert channel["spend_allowed_now"] is False
-    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-    envelope = build_turn_envelope(recovery)
-    assert envelope["writeback"]["settlement_plan"] == plan
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    steps = {step["kind"]: step for step in plan["ordered_steps"]}
+    assert steps["quota_spend"]["owner"] == "runtime"
+    assert "command_template" not in steps["quota_spend"]
+    writeback = steps["durable_writeback"]["command_template"]
+    assert channel["next_cli_actions"] == [writeback]
     code, refused = cli._run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
         "--todo-id", "todo_ready_0", "--turn-instance-id", cli.TURN_ID, cwd=project,
     )
     assert code == 1 and refused["error_code"] == "heartbeat_receipt_identity_conflict", refused
-    refresh = commands["durable_writeback"].replace(
+    refresh = writeback.replace(
         "<validated_progress>", "validated_progress",
     ).replace("<scale>", "implementation").replace("<outcome>", "outcome_progress")
     refresh += (
@@ -270,20 +271,15 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
     assert code == 0, refreshed
     assert refreshed["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
     assert refreshed["vision_checkpoint"]["satisfied"] is True
-    code, owed = cli._run_cli(
-        registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
-        "--turn-instance-id", cli.TURN_ID, cwd=project,
-    )
-    assert code == 0 and owed["unsettled_host_turn_recovery"]["repair"] == "quota_spend", owed
-    assert owed["settlement_owed"]["command"] == refreshed["settlement_owed"]["command"]
-    for replayed in (False, True):
-        code, spent = _execute(owed["settlement_owed"]["command"], project, runtime, registry)
-        assert code == 0, spent
-        if replayed:
-            assert spent["idempotent_replay"] and not spent["appended"], spent
-        else:
-            assert spent["settlement_progress"]["state"] == "settled", spent
+    assert refreshed["settlement_identity"] == original
+    assert refreshed["settlement_progress"]["state"] == "settled"
+    assert [row["step_kind"] for row in refreshed["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    assert "settlement_owed" not in refreshed
+    code, retried = _execute(refresh, project, runtime, registry)
+    assert code == 0 and retried["idempotent_replay"] and not retried["appended"], retried
+    assert retried["settlement_result"] == refreshed["settlement_result"]
     assert cli._classification_count(runtime, "validated_progress") == 1
 
     readback = read_heartbeat_settlement(
