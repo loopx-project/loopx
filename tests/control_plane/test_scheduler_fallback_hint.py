@@ -168,7 +168,7 @@ def test_settled_cadence_omits_fallback_hint(tmp_path: Path) -> None:
     assert "fallback_hint" not in second["codex_app"]
 
 
-def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
+def test_fallback_hint_cli_route_binds_registry_and_runtime(tmp_path: Path) -> None:
     payload = {
         "scheduler_hint": {
             "app_automation": {
@@ -189,22 +189,25 @@ def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
         }
     }
     registry_path = tmp_path / "registry.json"
+    runtime_root = tmp_path / "runtime"
     bind_scheduler_followup_cli_routes(
         payload,
         registry_path=registry_path,
-        runtime_root=tmp_path / "runtime",
+        runtime_root=runtime_root,
     )
     fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
-    assert fallback["cli_args"][:3] == [
+    assert fallback["cli_args"][:5] == [
         "loopx-apply-rrule",
         "--registry",
         str(registry_path.resolve()),
+        "--runtime-root",
+        str(runtime_root.resolve()),
     ]
     assert fallback["route_binding"]["schema_version"] == (
         "codex_app_scheduler_fallback_route_v0"
     )
     assert fallback["route_binding"]["registry_bound"] is True
-    assert fallback["route_binding"]["runtime_root_bound"] is False
+    assert fallback["route_binding"]["runtime_root_bound"] is True
 
 
 def _fallback_payload() -> dict:

@@ -518,6 +518,8 @@ def bind_scheduler_followup_cli_routes(
                     cli_args[0],
                     "--registry",
                     str(registry_path.expanduser().resolve()),
+                    "--runtime-root",
+                    str(runtime_root.expanduser().resolve()),
                     *cli_args[1:],
                 ]
                 safe_turn_instance_id = str(turn_instance_id or "").strip()
@@ -539,7 +541,7 @@ def bind_scheduler_followup_cli_routes(
                     "schema_version": "codex_app_scheduler_fallback_route_v0",
                     "source": source,
                     "registry_bound": True,
-                    "runtime_root_bound": False,
+                    "runtime_root_bound": True,
                     "turn_instance_bound": bool(safe_turn_instance_id),
                 }
                 continue
