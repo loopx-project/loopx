@@ -1076,8 +1076,19 @@ def _workspace_installed() -> bool:
 
 	return builtin_capability_installed(
 		WORKSPACE_DISTRIBUTION,
-		("loopx.chat_server", "loopx.dashboard_launcher", "loopx.cli_commands.support_control_chat"),
+		(
+			"loopx.chat_server",
+			"loopx.dashboard_launcher",
+			"loopx.cli_commands.support_control_chat",
+			"loopx.capabilities.native_chat.session_calendar_tasks",
+			"loopx.capabilities.native_chat.steward_managed_mode",
+			"loopx.capabilities.native_chat.steward_monitor",
+			"loopx.capabilities.native_chat.steward_reports",
+			"loopx.capabilities.native_chat.steward_turn",
+			"loopx.extensions.lark.steward_reports",
+		),
 		builtin_cli_present=False,
+		resources=("loopx/control_plane/collaboration/steward_reports.ts",),
 	)
 
 

@@ -19,9 +19,17 @@ EXCLUDED_TREES = ("loopx/web/", "loopx/canary/")
 WORKSPACE_DISTRIBUTION = "loopx-workspace"
 WORKSPACE_MODULES = {
     "loopx/chat.py",
+    # Native session adapters use the Workspace store and original conversation.
+    "loopx/capabilities/native_chat/session_calendar_tasks.py",
+    "loopx/capabilities/native_chat/steward_managed_mode.py",
+    "loopx/capabilities/native_chat/steward_monitor.py",
+    "loopx/capabilities/native_chat/steward_reports.py",
+    "loopx/capabilities/native_chat/steward_turn.py",
     "loopx/dashboard_launcher.py",
     "loopx/cli_commands/support_control_chat.py",
     "loopx/cli_commands/support_control_chat_endpoint.py",
+    "loopx/control_plane/collaboration/steward_reports.ts",
+    "loopx/extensions/lark/steward_reports.py",
     "loopx/presentation/research_analysis_api.py",
     "loopx/presentation/runtime_workspace.py",
 }

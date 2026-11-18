@@ -98,13 +98,16 @@ def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
                 {"ok": False, "error_code": error_code, "error": str(exc)}
             ) from exc
 
-    from ...cli import build_parser
+    if not argv or argv[0] not in {"quota", "todo", "task-lease"}:
+        raise ValueError("unsupported native steward operation")
+
+    from ...cli_runtime import _build_selected_parser
     from ...cli_rollout import append_cli_rollout_event
     from ...cli_commands.quota import handle_quota_command
     from ...cli_commands.todo import handle_todo_command
     from ...cli_commands.task_lease import handle_task_lease_command
 
-    args = build_parser().parse_args(["--format", "json", *argv])
+    args = _build_selected_parser(argv[0]).parse_args(["--format", "json", *argv])
     code: int | None
     result: dict[str, Any] = {}
     kwargs: dict[str, Any] = {"registry_path": controller.registry_path,
@@ -116,10 +119,8 @@ def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
     elif args.command == "quota":
         code = handle_quota_command(args, **kwargs,
             append_cli_rollout_event=append_cli_rollout_event)
-    elif args.command == "task-lease":
-        code = handle_task_lease_command(args, **kwargs, output_format=lambda *_a, **_kw: "json")
     else:
-        raise ValueError("unsupported native steward operation")
+        code = handle_task_lease_command(args, **kwargs, output_format=lambda *_a, **_kw: "json")
     if code or result.get("ok") is not True:
         raise NativeStewardCommandError(result)
     return result

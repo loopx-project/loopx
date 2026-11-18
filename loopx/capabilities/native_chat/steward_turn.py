@@ -931,7 +931,7 @@ class StewardTurnHost:
         stopped_proof: dict[str, Any],
         raw_candidate: dict[str, Any],
     ) -> dict[str, Any]:
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
         from ..periodic_report.private_generation import validate_private_generation
@@ -957,7 +957,7 @@ class StewardTurnHost:
                 "--turn-instance-id", saved_instance_id, "--todo-id", todo["todo_id"], "--execute"]
         if request.get("validation_command") is not None:
             argv += ["--validation-command-json", json.dumps(request["validation_command"])]
-        args = build_parser().parse_args(argv)
+        args = _build_selected_parser("turn").parse_args(argv)
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict[str, Any] = {}
         host_runner = self._build_replay_runner(_normalize_report_kernel_candidate(raw_candidate))
@@ -982,7 +982,7 @@ class StewardTurnHost:
         journal owner must authorize a no-host continuation; its existing
         effect readbacks reconcile ambiguous writeback/debit outcomes.
         """
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
         from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
@@ -1049,7 +1049,7 @@ class StewardTurnHost:
                 if contract_recovery is not None
                 else no_model
             )
-            args = build_parser().parse_args(["turn", "run-once", "--goal-id", actor["goal_id"],
+            args = _build_selected_parser("turn").parse_args(["turn", "run-once", "--goal-id", actor["goal_id"],
                 "--agent-id", actor["agent_id"], "--project", admitted["workspace_path"],
                 "--host", "generic-cli", "--resume-turn-key", key, "--retry-failed-turn", "--execute"])
             args.host, args.session_scope = "codex-app-server", "agent"
@@ -1318,7 +1318,7 @@ class StewardTurnHost:
 
     def _governance_replan_context(self, actor: Mapping[str, Any], authority: Mapping[str, Any]) -> dict[str, Any]:
         """Project public-safe review/writeback/vision context for text-only Steward replanning."""
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.quota_native_context import read_replan_view
         from ...control_plane.goals.goal_frontier import latest_agent_vision_from_status_payload
         from ...control_plane.todos.list_readback import list_goal_todos
@@ -1340,7 +1340,7 @@ class StewardTurnHost:
             try:
                 tokens = shlex.split(cmd_str)
                 q_idx = tokens.index("quota")
-                parsed = build_parser().parse_args(tokens[q_idx:])
+                parsed = _build_selected_parser("quota").parse_args(tokens[q_idx:])
                 view = read_replan_view(parsed)
                 if isinstance(view, Mapping) and view.get("ok") is True:
                     return dict(view)
@@ -1502,7 +1502,7 @@ class StewardTurnHost:
     def execute(self, *, session_id: str, turn_id: str, adapter: Any,
                 event_sink: Any, context: dict[str, Any]) -> dict[str, Any]:
         """Run in the original Chat worker, through all native settlement owners."""
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt, parse_model_json, build_result
         from .antigravity_adapter import AntigravityAdapter
@@ -1795,7 +1795,7 @@ class StewardTurnHost:
             argv += ["--todo-id", request["todo_id"]]
         if request["validation_command"] is not None:
             argv += ["--validation-command-json", json.dumps(request["validation_command"])]
-        args = build_parser().parse_args(argv)
+        args = _build_selected_parser("turn").parse_args(argv)
         # This connection is host-owned, not a command path supplied by a model.
         # The kernel records the actual app-server host and independent profile.
         args.host, args.session_scope = "codex-app-server", "agent"

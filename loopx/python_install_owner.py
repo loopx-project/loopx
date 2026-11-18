@@ -54,8 +54,18 @@ def builtin_capability_installed(
     modules: tuple[str, ...],
     *,
     builtin_cli_present: bool | None = None,
+    resources: tuple[str, ...] = (),
 ) -> bool:
     """Check import locations and matching installed wheel ownership without loading code."""
+    if builtin_cli_present is None:
+        builtin_cli_present = find_spec("loopx.cli") is not None
+    if not builtin_cli_present:
+        try:
+            implementation = distribution(distribution_name)
+            if implementation.version != distribution("loopx-core").version:
+                return False
+        except PackageNotFoundError:
+            return False
     origins = [
         Path(spec.origin).resolve()
         for module in modules
@@ -63,21 +73,17 @@ def builtin_capability_installed(
     ]
     if len(origins) != len(modules):
         return False
-    if builtin_cli_present is None:
-        builtin_cli_present = find_spec("loopx.cli") is not None
     if builtin_cli_present:
         return True
-    try:
-        implementation = distribution(distribution_name)
-        if implementation.version != distribution("loopx-core").version:
-            return False
-    except PackageNotFoundError:
-        return False
     recorded = {
         distribution_record_path(path).resolve()
         for path in implementation.files or ()
     }
-    return all(origin in recorded for origin in origins)
+    package_parent = Path(__file__).resolve().parent.parent
+    return all(origin in recorded for origin in origins) and all(
+        (package_parent / resource) in recorded and (package_parent / resource).is_file()
+        for resource in resources
+    )
 
 
 WORKSPACE_DISTRIBUTION = "loopx-workspace"

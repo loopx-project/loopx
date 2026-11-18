@@ -5,6 +5,11 @@ Add the local Chat and Dashboard to a matching source-built
 and runtime state. Installing the wheel adds the commands and web assets. Start
 the service explicitly when you want to use it.
 
+The Workspace wheel also owns the native Steward session, monitor and report
+adapters and the managed Session calendar. Existing App and Lark bindings use
+the same session store and typed Core authority. Standalone Core provides the
+peer Inbox and its result readback.
+
 Build the frontend and the Workspace wheel from the same checkout.
 
 ```sh
