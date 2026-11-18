@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
 import { SettingsSection } from './PageNavigation';
 import {
-  createLoginLink, fetchAuthKind, listLoginLinks, loginLinkUrl, revokeLoginLink,
+  createLoginLink, fetchAuthKind, listLoginLinks, loginLinkUrl, normalizeTokenInput, revokeLoginLink,
   AuthKindError, type AuthKind, type IssuedLink,
 } from '../link-auth';
 
@@ -47,7 +47,7 @@ export function AccessSettings({ token, auth, onReplaced }: {
   useEffect(reload, [token, auth?.kind]);
 
   const check = async () => {
-    const candidate = value.trim();
+    const candidate = normalizeTokenInput(value);
     if (!candidate || checking) return;
     setChecking(true); setError(null); setOk(false);
     try {

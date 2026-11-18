@@ -1129,6 +1129,14 @@ export function saveToken(token: string): void {
   } catch {
     // Storage unavailable: the token is kept in memory for this page only.
   }
+  try {
+    const manifest = typeof document !== 'undefined' ? document.querySelector<HTMLLinkElement>('link[rel="manifest"]') : null;
+    if (manifest) {
+      manifest.href = token && !/[^\x21-\x7e]/.test(token) ? `/manifest.webmanifest?token=${encodeURIComponent(token)}` : '/manifest.webmanifest';
+    }
+  } catch {
+    // Non-DOM test environment.
+  }
 }
 
 /** The hub turned the credential down. `code` says which way a login link died, when it did. */
@@ -1218,6 +1226,7 @@ export class Api {
   }
 
   protected async send<T>(method: string, url: string, body?: unknown, opts: { keepalive?: boolean; signal?: AbortSignal } = {}): Promise<T> {
+    if (/[^\x21-\x7e]/.test(this.token)) throw new AuthError('unauthorized');
     const res = await fetch(url, {
       method,
       headers: this.headers(body === undefined ? {} : { 'Content-Type': 'application/json' }),

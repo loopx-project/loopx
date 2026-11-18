@@ -210,3 +210,74 @@ test('when the steward default endpoint is missing, the failure view offers avai
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
   }
 });
+
+test('when an alternate steward session fails to open, the restricted manager_runtime change is rolled back', async () => {
+  const originalFetch = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  let renderer: ReactTestRenderer | undefined;
+  let runtimeProfile: 'trusted_owner' | 'restricted' = 'trusted_owner';
+  const rollbacks: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    if (path.endsWith('/api/chat/sessions')) {
+      const agent = typeof body.agent_id === 'string' ? body.agent_id : 'codex';
+      return new Response(JSON.stringify({
+        ok: false,
+        error: `The Agent endpoint '${agent}' cannot serve this request: executable_not_found.`,
+        error_code: 'agent_endpoint_unavailable',
+      }), { status: 424 });
+    }
+    if (path.endsWith('/api/chat/capabilities')) {
+      return json({
+        ok: true,
+        manager: {
+          runtime: { runtime_profile: runtimeProfile },
+          channel_binding: { executor_endpoint: 'codex', selection_policy: 'preferred', eligible_endpoints: [] },
+        },
+        adapters: [
+          { agent_id: 'codex', display_name: 'Codex', available: false, unavailable_reason: 'executable_not_found', executable: 'codex' },
+          { agent_id: 'claude-code', display_name: 'Claude Code', available: true, executable: 'claude' },
+        ],
+      });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/preview')) {
+      return json({ ok: true, plan_revision: 'sha256:plan-restrict' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/apply')) {
+      runtimeProfile = 'restricted';
+      return json({ ok: true, transaction_id: 'mc-tx-1' });
+    }
+    if (path.endsWith('/api/chat/machine-configuration/rollback')) {
+      rollbacks.push(body);
+      if (body.execute === true) runtimeProfile = 'trusted_owner';
+      return json({ ok: true, rollback_allowed: true, plan_revision: 'sha256:plan-rollback' });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    await act(async () => {
+      renderer = create(createElement(StewardConversation, { token: 'token-1', failure: null }), { createNodeMock: () => ({ scrollIntoView() {} }) });
+      await tick();
+      await tick();
+    });
+    const buttons = renderer!.root.findAllByType('button');
+    await act(async () => {
+      buttons[1].props.onClick();
+      await tick();
+      await tick();
+      await tick();
+    });
+    assert.equal(runtimeProfile, 'trusted_owner', 'failed alternate session restores prior trusted_owner profile');
+    assert.deepEqual(rollbacks, [
+      { transaction_id: 'mc-tx-1', execute: false },
+      { transaction_id: 'mc-tx-1', execute: true, expected_plan_revision: 'sha256:plan-rollback' },
+    ]);
+  } finally {
+    await act(async () => renderer?.unmount());
+    globalThis.fetch = originalFetch;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});

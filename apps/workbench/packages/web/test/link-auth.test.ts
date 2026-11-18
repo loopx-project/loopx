@@ -1,12 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { takeLinkToken } from '../src/link-auth.js';
+import { AuthKindError, fetchAuthKind, normalizeTokenInput, takeLinkToken } from '../src/link-auth.js';
 import { sidebarGoals } from '../src/loopx/goal-picks.js';
 import type { LoopxAttention, LoopxGoal } from '../src/loopx/status.js';
 
 test('takeLinkToken reads ?token= and scrubs it from the rest', () => {
   const found = takeLinkToken('http://x:8796/?token=dummy-a');
   assert.deepEqual(found, { token: 'dummy-a', rest: '/' });
+});
+
+test('normalizeTokenInput extracts tokens from pasted login links, env assignments and chat messages', async () => {
+  assert.equal(normalizeTokenInput('  yDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu  '), 'yDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu');
+  assert.equal(normalizeTokenInput('http://10.251.231.1:8796/#token=yDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu'), 'yDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu');
+  assert.equal(normalizeTokenInput('http://10.251.231.1:8796/#token=wl_03867ccd0fa293fe5c67145e660ae2f0bfae60a18e72b048'), 'wl_03867ccd0fa293fe5c67145e660ae2f0bfae60a18e72b048');
+  assert.equal(normalizeTokenInput('LOOCHAT_TOKEN=yDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu'), 'yDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu');
+  assert.equal(normalizeTokenInput('永久 Token：\nyDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu'), 'yDOvmXKyGAppNH6pH9dGIJQxDZ78SDTu');
+  await assert.rejects(() => fetchAuthKind('含中文的无效token'), (err: unknown) => err instanceof AuthKindError && err.reason === 'unauthorized');
 });
 
 test('takeLinkToken reads the fragment (never sent to a server): bare, and the hash route query', () => {

@@ -334,3 +334,18 @@ def test_non_login_runtime_path_appends_user_cli_directories_without_leaking_bin
     assert options["codex_bin"] == "codex"
     assert options["claude_bin"] == "claude"
     assert str(local_bin) in os.environ["PATH"].split(os.pathsep)
+
+    # An unreadable optional NVM directory must not break explicit or normal startup.
+    orig_iterdir = type(nvm_newer).iterdir
+
+    def guarded_iterdir(self):
+        if self == home / ".nvm" / "versions" / "node":
+            raise PermissionError("nvm directory is not readable")
+        return orig_iterdir(self)
+
+    monkeypatch.setattr(type(nvm_newer), "iterdir", guarded_iterdir)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    explicit = build_parser().parse_args(["chat", "--no-open", "--codex-bin", "/custom/codex"])
+    explicit_options = chat_server_options(explicit, registry_path=tmp_path / "registry.json")
+    assert explicit_options["codex_bin"] == "/custom/codex"
+    assert str(local_bin) in os.environ["PATH"].split(os.pathsep)

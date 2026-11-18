@@ -59,7 +59,6 @@ export interface ManagerCapabilities {
 }
 
 const TRUSTED_OWNER_ENDPOINTS = new Set(['codex', 'antigravity']);
-const STEWARD_DEFAULT_ENDPOINTS = new Set(['codex', 'antigravity', 'dsh']);
 
 async function call<T>(token: string | undefined, path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
@@ -120,44 +119,62 @@ export async function readManagerCapabilities(token: string | undefined, failedA
   }
 }
 
-async function applyMachineNamespace(token: string | undefined, namespace: string, namespaceConfiguration: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+async function applyMachineNamespace(token: string | undefined, namespace: string, namespaceConfiguration: Record<string, unknown>, signal?: AbortSignal): Promise<string | null> {
   const preview = await call<{ plan_revision?: unknown }>(token, '/api/loopx/api/chat/machine-configuration/preview', {
     method: 'POST',
     body: JSON.stringify({ namespace, operation: 'upsert', namespace_configuration: namespaceConfiguration }),
     signal,
   });
   const revision = typeof preview.plan_revision === 'string' ? preview.plan_revision : '';
-  if (!revision) return;
-  await call(token, '/api/loopx/api/chat/machine-configuration/apply', {
+  if (!revision) return null;
+  const applied = await call<{ transaction_id?: unknown; rollback_id?: unknown }>(token, '/api/loopx/api/chat/machine-configuration/apply', {
     method: 'POST',
     body: JSON.stringify({ namespace, operation: 'upsert', namespace_configuration: namespaceConfiguration, expected_plan_revision: revision }),
     signal,
   });
+  if (typeof applied.transaction_id === 'string' && applied.transaction_id) return applied.transaction_id;
+  if (typeof applied.rollback_id === 'string' && applied.rollback_id) return applied.rollback_id;
+  return null;
 }
 
-/** Switch the steward to an available Agent and open its session. */
+async function rollbackMachineTransaction(token: string | undefined, transactionId: string): Promise<void> {
+  try {
+    const preview = await call<{ rollback_allowed?: unknown; plan_revision?: unknown }>(token, '/api/loopx/api/chat/machine-configuration/rollback', {
+      method: 'POST',
+      body: JSON.stringify({ transaction_id: transactionId, execute: false }),
+    });
+    const revision = typeof preview.plan_revision === 'string' ? preview.plan_revision : '';
+    if (!revision || preview.rollback_allowed === false) return;
+    await call(token, '/api/loopx/api/chat/machine-configuration/rollback', {
+      method: 'POST',
+      body: JSON.stringify({ transaction_id: transactionId, execute: true, expected_plan_revision: revision }),
+    });
+  } catch {
+    // Best-effort rollback so the original session open error still surfaces.
+  }
+}
+
+/** Switch the steward to an available Agent and open its session; roll back runtime profile if opening fails. */
 export async function switchManagerAgent(
   token: string | undefined,
   agentId: string,
   capabilities?: ManagerCapabilities | null,
   signal?: AbortSignal,
 ): Promise<{ sessionId: string; messages: ManagerMessage[] }> {
+  let runtimeTransactionId: string | null = null;
   // Read-only adapters (Claude Code, Kiro CLI, DSH, API endpoints) require the restricted manager runtime profile.
   if (!TRUSTED_OWNER_ENDPOINTS.has(agentId) && capabilities?.runtimeProfile === 'trusted_owner') {
-    await applyMachineNamespace(token, 'manager_runtime', {
+    runtimeTransactionId = await applyMachineNamespace(token, 'manager_runtime', {
       schema_version: 'manager_runtime_profile_v0',
       runtime_profile: 'restricted',
     }, signal);
   }
-  if (STEWARD_DEFAULT_ENDPOINTS.has(agentId) && capabilities?.selectionPolicy !== 'pinned' && capabilities?.selectionPolicy !== 'flexible') {
-    await applyMachineNamespace(token, 'steward_executor', {
-      schema_version: 'steward_executor_machine_defaults_v1',
-      selection_policy: 'preferred',
-      executor_endpoint: agentId,
-      eligible_endpoints: [],
-    }, signal).catch(() => undefined);
+  try {
+    return await openManagerSession(token, signal, agentId);
+  } catch (cause) {
+    if (runtimeTransactionId) await rollbackMachineTransaction(token, runtimeTransactionId);
+    throw cause;
   }
-  return openManagerSession(token, signal, agentId);
 }
 
 /** The stored conversation, oldest first, ready to render before any new turn runs. */

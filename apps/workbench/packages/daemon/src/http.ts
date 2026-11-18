@@ -2,7 +2,7 @@ import type { PushService } from './push.js';
 import type { FeishuChat } from './feishu-chat.js';
 import { DEFAULT_RULES } from './autotitle.js';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { connect } from 'node:net';
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
@@ -303,6 +303,22 @@ export function createHttpServer(deps: HttpDeps): Server {
 
     if (path.startsWith('/pets/') && (method === 'GET' || method === 'HEAD') && pets.serve(path, res)) return;
     if (!path.startsWith('/api/')) {
+      if (webDir && path === '/manifest.webmanifest' && (method === 'GET' || method === 'HEAD')) {
+        const queryToken = url.searchParams.get('token')?.trim() ?? '';
+        const link = queryToken ? (deps.linkTokens?.check(queryToken) ?? null) : null;
+        if (queryToken && (tokenMatches(queryToken, token) || (link !== null && link.ok))) {
+          const manifestFile = join(webDir, 'manifest.webmanifest');
+          if (existsSync(manifestFile)) {
+            try {
+              const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as Record<string, unknown>;
+              manifest.start_url = `/#token=${encodeURIComponent(queryToken)}`;
+              res.writeHead(200, { 'Content-Type': 'application/manifest+json; charset=utf-8', 'Cache-Control': 'no-store' });
+              res.end(method === 'HEAD' ? undefined : JSON.stringify(manifest));
+              return;
+            } catch { /* fall through to static file */ }
+          }
+        }
+      }
       if (webDir && (method === 'GET' || method === 'HEAD')) return serveStatic(res, webDir, path);
       res.writeHead(404).end();
       return;

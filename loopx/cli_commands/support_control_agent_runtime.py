@@ -13,6 +13,13 @@ _SYSTEM_BIN_DIRS = (
 )
 
 
+def _safe_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def _nvm_node_bin_dirs(home: Path, environ: MutableMapping[str, str]) -> list[Path]:
     dirs: list[Path] = []
     nvm_bin = str(environ.get("NVM_BIN") or "").strip()
@@ -20,13 +27,16 @@ def _nvm_node_bin_dirs(home: Path, environ: MutableMapping[str, str]) -> list[Pa
         dirs.append(Path(nvm_bin).expanduser())
     nvm_root = Path(str(environ.get("NVM_DIR") or (home / ".nvm"))).expanduser() / "versions" / "node"
     versioned: list[tuple[tuple[int, int, int], Path]] = []
-    if nvm_root.is_dir():
-        for child in nvm_root.iterdir():
-            match = _SEMVER_DIR.fullmatch(child.name)
-            if match is not None:
-                versioned.append(
-                    ((int(match.group(1)), int(match.group(2)), int(match.group(3))), child / "bin")
-                )
+    try:
+        children = list(nvm_root.iterdir()) if _safe_is_dir(nvm_root) else []
+    except OSError:
+        children = []
+    for child in children:
+        match = _SEMVER_DIR.fullmatch(child.name)
+        if match is not None:
+            versioned.append(
+                ((int(match.group(1)), int(match.group(2)), int(match.group(3))), child / "bin")
+            )
     dirs.extend(path for _ver, path in sorted(versioned, key=lambda item: item[0], reverse=True))
     return dirs
 
@@ -38,7 +48,10 @@ def ensure_agent_runtime_path(
 ) -> str:
     """Append standard non-login user/system CLI directories missing from PATH."""
     env = os.environ if environ is None else environ
-    resolved_home = (home or Path.home()).expanduser()
+    try:
+        resolved_home = (home or Path.home()).expanduser()
+    except OSError:
+        resolved_home = Path("/")
     entries = [part for part in str(env.get("PATH") or "").split(os.pathsep) if part]
     seen = set(entries)
     candidates = [
@@ -49,7 +62,7 @@ def ensure_agent_runtime_path(
     ]
     for candidate in candidates:
         text = str(candidate)
-        if text not in seen and candidate.is_dir():
+        if text not in seen and _safe_is_dir(candidate):
             entries.append(text)
             seen.add(text)
     updated = os.pathsep.join(entries)

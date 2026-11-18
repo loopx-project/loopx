@@ -3422,3 +3422,28 @@ test('outputs diff references read each call through history detail using the ca
     assert.equal(body.output, undefined);
   }
 });
+
+test('manifest keeps a valid token in the installed start URL without caching credentials', async () => {
+  const webDir = mkdtempSync(join(tmpdir(), 'loochat-test-manifest-'));
+  const manifest = { name: 'Workbench', start_url: '/', display: 'standalone' };
+  const manifestServer = createHttpServer({ manager, token: TOKEN, webDir, version: 'test' });
+  try {
+    writeFileSync(join(webDir, 'manifest.webmanifest'), JSON.stringify(manifest));
+    await new Promise<void>((resolve) => manifestServer.listen(0, '127.0.0.1', resolve));
+    const root = `http://127.0.0.1:${(manifestServer.address() as AddressInfo).port}`;
+    for (const query of ['', '?token=wrong-token']) {
+      const response = await fetch(root + '/manifest.webmanifest' + query);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), manifest);
+    }
+    const response = await fetch(root + '/manifest.webmanifest?token=' + encodeURIComponent(TOKEN));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await response.json(), { ...manifest, start_url: `/#token=${TOKEN}` });
+    const anonymous = await fetch(root + '/manifest.webmanifest');
+    assert.deepEqual(await anonymous.json(), manifest, 'a later anonymous request must not receive credentials');
+  } finally {
+    await new Promise<void>((resolve) => manifestServer.close(() => resolve()));
+    rmSync(webDir, { recursive: true, force: true });
+  }
+});

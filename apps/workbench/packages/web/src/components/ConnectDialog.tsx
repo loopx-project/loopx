@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Api, ApiError, AuthError } from '../api';
+import { normalizeTokenInput } from '../link-auth';
 import { DialogSurface } from './Dialog';
 import { t } from '../i18n';
 
@@ -21,7 +22,7 @@ export function ConnectDialog({ reason, onConnected, onCancel }: Props) {
   useEffect(() => input.current?.focus(), []);
 
   const connect = async () => {
-    const token = value.trim();
+    const token = normalizeTokenInput(value);
     if (!token || busy) return;
     setBusy(true);
     setError(null);

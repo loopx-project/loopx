@@ -33,6 +33,39 @@ export function takeLinkToken(href: string): { token: string; rest: string } | n
   return { token, rest: u.pathname + u.search + hash };
 }
 
+/**
+ * Extracts a bare token from what a person pastes into a token field: a login link
+ * (`http://…/#token=…` or `?token=…`), an `.env` line (`LOOCHAT_TOKEN=…`), a `Bearer …` header,
+ * or a chat message containing surrounding text around the token.
+ */
+export function normalizeTokenInput(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  for (const part of trimmed.split(/\s+/)) {
+    if (/^https?:\/\//i.test(part) || part.includes('token=')) {
+      try {
+        const candidate = /^https?:\/\//i.test(part) ? part : `http://localhost/${part.startsWith('/') ? part.slice(1) : part}`;
+        const found = takeLinkToken(candidate);
+        if (found?.token) return found.token.trim();
+      } catch { /* fall through */ }
+    }
+  }
+  const envMatch = /(?:^|\s)(?:LOOCHAT_TOKEN|CALLI_TOKEN|RAH_TOKEN|Bearer)\s*[=:\s]\s*['"]?([A-Za-z0-9._~+/-]+)['"]?/i.exec(trimmed);
+  if (envMatch?.[1]) return envMatch[1];
+  if (/[^\x21-\x7e]/.test(trimmed)) {
+    const linkMatch = /\b(wl_[A-Za-z0-9]{16,})\b/.exec(trimmed);
+    if (linkMatch?.[1]) return linkMatch[1];
+    const tokenMatch = /\b([A-Za-z0-9_-]{24,128})\b/.exec(trimmed);
+    if (tokenMatch?.[1]) return tokenMatch[1];
+  }
+  return trimmed;
+}
+
+/** True when a token can be sent in an HTTP Authorization header without throwing TypeError. */
+export function isHeaderSafeToken(token: string): boolean {
+  return token.length > 0 && !/[^\x21-\x7e]/.test(token);
+}
+
 /** Runs before the app: keep the token, scrub the bar. Returns what happened, for the log only. */
 export function captureLinkToken(href: string = location.href): 'kept' | 'none' | 'dropped' {
   const found = takeLinkToken(href);
@@ -60,6 +93,7 @@ export class AuthKindError extends Error {
 
 /** What this credential is. A dead link token is an error naming the reason. */
 export async function fetchAuthKind(token: string | undefined, signal?: AbortSignal): Promise<AuthKind> {
+  if (token !== undefined && !isHeaderSafeToken(token)) throw new AuthKindError('unauthorized');
   let res: Response;
   try {
     res = await fetch('/api/auth/kind', { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal });
