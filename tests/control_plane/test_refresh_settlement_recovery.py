@@ -122,6 +122,7 @@ def test_rejected_write_and_upgrade_state_recover_original_turn_once(
     assert "settlement_recovery" not in other_agent
 
     # Execute the emitted recovery, not a hand-constructed replacement identity.
+    assert "--complete-turn" not in shlex.split(recovery["next_cli_actions"][0])
     rc, recovered = _run_generated_cli(recovery["next_cli_actions"][0], registry_path=registry, cwd=project)
     assert rc == 0 and recovered["normal_delivery_allowed"], recovered
     assert recovered["heartbeat_receipt"]["settlement_identity"] == identity
