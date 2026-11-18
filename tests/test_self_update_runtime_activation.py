@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import signal
 import subprocess
 import sys
 import threading
@@ -1071,7 +1072,10 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")
 @pytest.mark.parametrize(
-    "scenario", ["missing_helper", "switch_failure", "later_writer", "interrupted", "foreign", "split"]
+    "scenario", [
+        "missing_helper", "switch_failure", "switch_failure_without_cli",
+        "signal_after_cli", "signal_after_helper", "later_writer", "interrupted", "foreign", "split",
+    ],
 )
 def test_rollback_reconciles_only_managed_helpers(tmp_path, monkeypatch, scenario):
     from loopx.self_update import execute_rollback_plan
@@ -1095,17 +1099,24 @@ def test_rollback_reconciles_only_managed_helpers(tmp_path, monkeypatch, scenari
     )
     if scenario == "foreign":
         first_helper.touch()
-    launcher.symlink_to(current / "scripts" / launcher.name)
+    if scenario != "switch_failure_without_cli":
+        launcher.symlink_to(current / "scripts" / launcher.name)
     helper.symlink_to(os.path.relpath(first_helper, helper.parent))
-    before = (os.readlink(launcher), os.readlink(helper))
+    before = (os.readlink(launcher) if launcher.is_symlink() else None, os.readlink(helper))
+    fail_before = {"switch_failure": helper, "switch_failure_without_cli": launcher}.get(scenario)
+    interrupt_after = {"signal_after_cli": launcher, "signal_after_helper": helper}.get(scenario)
     replace_file = os.replace
 
     def replace(source, destination):
-        if scenario == "switch_failure" and destination == helper:
-            raise OSError("synthetic helper switch failure")
+        if destination == fail_before:
+            raise OSError("synthetic launcher switch failure")
         replace_file(source, destination)
+        if destination == interrupt_after and destination.resolve() == target / "scripts" / destination.name:
+            signal.raise_signal(signal.SIGINT)
 
     def run(command, **_kwargs):
+        if interrupt_after is not None:
+            assert "authority-archive" in command
         if scenario == "interrupted" and command[-1] == "doctor":
             raise KeyboardInterrupt
         if scenario == "later_writer" and command[-1] == "doctor":
@@ -1118,14 +1129,20 @@ def test_rollback_reconciles_only_managed_helpers(tmp_path, monkeypatch, scenari
     monkeypatch.setattr("loopx.self_update.os.replace", replace)
     monkeypatch.setattr("loopx.self_update.subprocess.run", run)
     payload = {"ok": True, "plan": {"selected_release_root": str(target)}}
-    if scenario == "interrupted":
+    if scenario == "interrupted" or interrupt_after is not None:
         with pytest.raises(KeyboardInterrupt):
             execute_rollback_plan(payload, home=tmp_path)
         assert (os.readlink(launcher), os.readlink(helper)) == before
         return
     result = execute_rollback_plan(payload, home=tmp_path)
 
-    if scenario in {"missing_helper", "switch_failure", "later_writer"}:
+    if scenario == "switch_failure_without_cli":
+        assert not result["ok"]
+        assert not result["execution"]["restored_previous_on_failure"]
+        assert "restore_error" not in result["execution"]
+        assert not os.path.lexists(launcher)
+        assert os.readlink(helper) == before[1]
+    elif scenario in {"missing_helper", "switch_failure", "later_writer"}:
         assert not result["ok"]
         assert result["execution"]["restored_previous_on_failure"] is (scenario != "missing_helper")
         assert os.readlink(launcher) == before[0]

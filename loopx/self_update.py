@@ -1507,7 +1507,7 @@ def execute_rollback_plan(
         "restored_previous_on_failure": False,
     }
     updated = dict(payload)
-    promoted: dict[Path, os.stat_result] = {}
+    staged_launchers: dict[Path, os.stat_result] = {}
     temporary: TemporaryDirectory[str] | None = None
     promotion_guard = None
     try:
@@ -1566,12 +1566,12 @@ def execute_rollback_plan(
                     f"LoopX launcher changed during rollback checks ({launcher.name}). "
                     "Read it back before retrying."
                 )
-            (staging / launcher.name).symlink_to(script)
-        for launcher in target_scripts:
             staged = staging / launcher.name
-            staged_stat = staged.lstat()
-            os.replace(staged, launcher)
-            promoted[launcher] = staged_stat
+            staged.symlink_to(script)
+            staged_launchers[launcher] = staged.lstat()
+        # A signal can arrive immediately after the rename. Record ownership first.
+        for launcher in staged_launchers:
+            os.replace(staging / launcher.name, launcher)
         doctor_result = subprocess.run(
             [str(loopx_bin), *route_arguments, "--format", "json", "doctor"],
             text=True, encoding="utf-8", errors="replace",
@@ -1618,7 +1618,7 @@ def execute_rollback_plan(
             updated["ok"] = False
         if doctor_result.returncode != 0:
             raise RuntimeError("Rollback target failed runtime checks; inspect the Doctor output.")
-        for launcher, staged_stat in promoted.items():
+        for launcher, staged_stat in staged_launchers.items():
             if not os.path.samestat(staged_stat, launcher.lstat()):
                 raise RuntimeError(f"LoopX launcher changed during rollback validation ({launcher.name}).")
     except BaseException as exc:
@@ -1626,9 +1626,15 @@ def execute_rollback_plan(
         updated["ok"] = False
         restore_errors = []
         if temporary is not None:
-            for launcher, staged_stat in reversed(promoted.items()):
+            for launcher, staged_stat in reversed(staged_launchers.items()):
                 try:
-                    if not os.path.samestat(staged_stat, launcher.lstat()):
+                    try:
+                        current_stat = launcher.lstat()
+                    except FileNotFoundError:
+                        if launcher == loopx_bin and primary_was_absent:
+                            continue
+                        raise
+                    if not os.path.samestat(staged_stat, current_stat):
                         continue
                     previous = previous_targets[launcher]
                     if previous is not None:
