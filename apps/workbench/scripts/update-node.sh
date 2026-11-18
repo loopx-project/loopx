@@ -40,31 +40,34 @@ fi
 [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] \
   || fail "the clone has local changes; it needs a person"
 head_branch="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
+candidate=HEAD
+upstream=''
 if [ -n "$head_branch" ]; then
   git fetch --quiet origin 2>/dev/null || fail "git fetch from origin failed (offline?)"
   upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "origin/$head_branch")"
-  if ! git merge-base --is-ancestor "$upstream" HEAD; then
-    git merge --ff-only --quiet "$upstream" 2>/dev/null || fail "the clone has moved away from $upstream; it needs a person"
-  fi
 elif [ -f .git/loochat-installed-revision ]; then
   [ "$(git rev-parse HEAD)" = "$(cat .git/loochat-installed-revision)" ] \
     || fail "the clone has local commits; it needs a person"
   git fetch --quiet --depth 1 origin main 2>/dev/null || fail "git fetch from origin failed (offline?)"
-  git checkout --detach --quiet FETCH_HEAD 2>/dev/null || fail "cannot advance detached install checkout"
-  git rev-parse HEAD >.git/loochat-installed-revision
+  candidate=FETCH_HEAD
 else
   git fetch --quiet origin 2>/dev/null || fail "git fetch from origin failed (offline?)"
   upstream="origin/main"
-  if ! git merge-base --is-ancestor "$upstream" HEAD; then
-    git merge --ff-only --quiet "$upstream" 2>/dev/null || fail "the clone has moved away from $upstream; it needs a person"
-  fi
 fi
-new="$(git rev-parse --short HEAD)"
+# The service may still run from this checkout. Select the same fast-forward target without
+# moving HEAD, its files or the install marker, even after switching to a separate release.
+if [ -n "$upstream" ] && ! git merge-base --is-ancestor "$upstream" HEAD; then
+  git merge-base --is-ancestor HEAD "$upstream" \
+    || fail "the clone has moved away from $upstream; it needs a person"
+  candidate="$upstream"
+fi
+revision="$(git rev-parse --verify "$candidate^{commit}")" || fail "cannot resolve update revision"
+new="$(git rev-parse --short "$revision")"
 
-if [ -f "$git_root/apps/workbench/package.json" ]; then
-  app_src="$git_root/apps/workbench"
-elif [ -f "$git_root/package.json" ]; then
-  app_src="$git_root"
+if git cat-file -e "$revision:apps/workbench/package.json" 2>/dev/null; then
+  app_tree="$revision:apps/workbench"
+elif git cat-file -e "$revision:package.json" 2>/dev/null; then
+  app_tree="$revision"
 else
   fail "no workbench package in $git_root"
 fi
@@ -82,9 +85,14 @@ fi
 # agents have been making by hand; the state home passed in is where the daemon keeps its data.
 snap="$HOME/.local/share/loochat-$new"
 if [ ! -d "$snap" ]; then
-  say "copying the tree into ${snap##*/}"
-  mkdir -p "$snap"
-  ( cd "$app_src" && tar --exclude=./.git --exclude=./.worktrees --exclude=./shots -cf - . ) | tar -C "$snap" -xf -
+  say "extracting the committed tree into ${snap##*/}"
+  mkdir -p "$snap" || fail "cannot create release snapshot"
+  archive="$(mktemp "$snap.archive.XXXXXX")" || fail "cannot create snapshot archive"
+  if ! git archive --format=tar --output="$archive" "$app_tree" || ! tar -C "$snap" -xf "$archive"; then
+    rm -rf "$snap" "$archive"
+    fail "cannot extract release snapshot"
+  fi
+  rm -f "$archive"
 fi
 say "building ${snap##*/}"
 if ! ( cd "$snap" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 ); then

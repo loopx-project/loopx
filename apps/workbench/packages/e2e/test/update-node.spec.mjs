@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,10 +37,14 @@ function makeFixture(t) {
     JSON.stringify({
       name: '@loopx/workbench',
       private: true,
-      scripts: { build: 'node -e "require(\'fs\').mkdirSync(\'dist\', { recursive: true }); require(\'fs\').writeFileSync(\'dist/built.txt\', \'ok\')"' },
+      scripts: {
+        start: 'node start.mjs',
+        build: 'node -e "require(\'fs\').mkdirSync(\'dist\', { recursive: true }); require(\'fs\').writeFileSync(\'dist/built.txt\', \'ok\')"',
+      },
     }, null, 2),
   );
-  const restartScript = '#!/usr/bin/env sh\necho "restart $*" >> "$LOOCHAT_TEST_STATE/restart.log"\n[ ! -e "$LOOCHAT_TEST_STATE/restart-fails" ]\n';
+  writeFileSync(join(upstream, 'apps/workbench/start.mjs'), "console.log('fixture service started');\n");
+  const restartScript = '#!/usr/bin/env sh\necho "restart $*" >> "$LOOCHAT_TEST_STATE/restart.log"\n[ ! -e "$LOOCHAT_TEST_STATE/restart-fails" ] || exit 1\ncd "$(dirname "$0")/.." && npm start --silent\n';
   writeFileSync(join(upstream, 'apps/workbench/scripts/restart.sh'), restartScript);
   chmodSync(join(upstream, 'apps/workbench/scripts/restart.sh'), 0o755);
 
@@ -112,19 +116,73 @@ exec "${realNpm}" "$@"
   return { root, home, state, upstream, clone, advanceUpstream, runUpdater };
 }
 
+// Fetch metadata may change; the installed checkout, including untracked runtime files, may not.
+function checkoutBytes(root) {
+  return Object.fromEntries(readdirSync(root, { withFileTypes: true }).filter(entry => entry.name !== '.git')
+    .flatMap(entry => entry.isDirectory()
+      ? Object.entries(checkoutBytes(join(root, entry.name))).map(([path, bytes]) => [`${entry.name}/${path}`, bytes])
+      : [[entry.name, readFileSync(join(root, entry.name)).toString('base64')]]));
+}
+
+for (const mode of ['branch', 'installed-detached', 'detached']) {
+  test(`first update with a failed build preserves the live checkout and can restart it (${mode})`, t => {
+    const { home, state, upstream, clone, advanceUpstream, runUpdater } = makeFixture(t);
+    if (mode !== 'branch') git(clone, 'checkout', '--detach', '-q', 'HEAD');
+    if (mode === 'installed-detached') {
+      git(clone, 'sparse-checkout', 'set', 'apps/workbench');
+      writeFileSync(join(clone, '.git/loochat-installed-revision'), `${git(clone, 'rev-parse', 'HEAD')}\n`);
+    }
+    const oldWorkdir = join(clone, 'apps/workbench');
+    writeFileSync(join(oldWorkdir, 'runtime-local.txt'), 'keep the installed runtime bytes\n');
+    const marker = join(clone, '.git/loochat-installed-revision');
+    const before = {
+      head: git(clone, 'rev-parse', 'HEAD'),
+      marker: existsSync(marker) ? readFileSync(marker, 'utf8') : null,
+      bytes: checkoutBytes(clone),
+    };
+    // The candidate cannot start without a successful build. A checkout/merge in place
+    // would destroy the old service's npm start even though the candidate never passed.
+    writeFileSync(join(upstream, 'apps/workbench/package.json'), JSON.stringify({
+      name: '@loopx/workbench', private: true, scripts: { build: 'exit 1' },
+    }));
+    const candidate = advanceUpstream('first-update-broken');
+    const failed = runUpdater(clone);
+    assert.equal(failed.status, 0, failed.stdout + failed.stderr);
+    assert.match(failed.stdout, /^fail build failed; the running daemon was left alone$/m);
+    assert.equal(existsSync(join(home, `.local/share/loochat-${candidate}`)), false);
+    assert.equal(existsSync(join(home, '.config/systemd/user/loochat.service.d')), false, 'no service switch before a successful build');
+    assert.equal(existsSync(join(state, 'restart.log')), false, 'the updater did not restart the active service');
+    const restarted = spawnSync(join(oldWorkdir, 'scripts/restart.sh'), ['--no-build'], {
+      env: { ...process.env, HOME: home, LOOCHAT_TEST_STATE: state }, encoding: 'utf8',
+    });
+    assert.deepEqual({
+      head: git(clone, 'rev-parse', 'HEAD'),
+      marker: existsSync(marker) ? readFileSync(marker, 'utf8') : null,
+      bytes: checkoutBytes(clone), restartStatus: restarted.status,
+    }, { ...before, restartStatus: 0 }, restarted.stderr);
+    assert.match(restarted.stdout, /fixture service started/);
+  });
+}
+
 test('update-node builds apps/workbench when given either monorepo root or apps/workbench subdirectory', (t) => {
   const { home, state, clone, advanceUpstream, runUpdater } = makeFixture(t);
 
-  // Advance upstream, run --check first (which fast-forwards the clone without switching), then run real update.
+  // --check selects the fetched revision without advancing the service's original checkout.
+  const originalHead = git(clone, 'rev-parse', 'HEAD');
+  writeFileSync(join(clone, 'apps/workbench/runtime-local.txt'), 'not release source');
   const rev2 = advanceUpstream('v2');
   const check = runUpdater(clone, '1');
   assert.match(check.stdout, new RegExp(`would update: .* -> loochat-${rev2}`));
+  assert.equal(git(clone, 'rev-parse', 'HEAD'), originalHead);
 
   const res2 = runUpdater(clone, '0');
   assert.equal(res2.status, 0, res2.stdout + res2.stderr);
   assert.match(res2.stdout, new RegExp(`done: the service runs loochat-${rev2}`));
   const snap2 = join(home, `.local/share/loochat-${rev2}`);
   assert.equal(readFileSync(join(snap2, 'dist/built.txt'), 'utf8'), 'ok');
+  assert.equal(readFileSync(join(snap2, 'revision.txt'), 'utf8'), 'v2', 'build the fetched tree, not the original checkout');
+  assert.equal(existsSync(join(snap2, 'runtime-local.txt')), false, 'untracked runtime data does not enter a release');
+  assert.equal(git(clone, 'rev-parse', 'HEAD'), originalHead, 'the old startup directory remains restartable after switching too');
   assert.equal(existsSync(join(snap2, 'unrelated')), false, 'snapshot contains workbench app root, not monorepo extras');
   const pinPath = join(home, '.config/systemd/user/loochat.service.d/90-loochat-release.conf');
   assert.match(readFileSync(pinPath, 'utf8'), new RegExp(`^WorkingDirectory=${snap2}$`, 'm'));
@@ -158,12 +216,16 @@ test('update-node leaves the active service untouched when build fails and suppo
   git(sparseClone, 'fetch', '--depth', '1', 'origin', 'main');
   git(sparseClone, 'checkout', '--detach', '-q', 'FETCH_HEAD');
   writeFileSync(join(sparseClone, '.git/loochat-installed-revision'), `${git(sparseClone, 'rev-parse', 'HEAD')}\n`);
+  const installed = readFileSync(join(sparseClone, '.git/loochat-installed-revision'), 'utf8');
   writeFileSync(join(home, '.config/systemd/user/loochat.service'), `[Service]\nWorkingDirectory=${join(sparseClone, 'apps/workbench')}\n`);
 
   const rev2 = advanceUpstream('v2-sparse');
   const ok = runUpdater('', '0');
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
   assert.match(ok.stdout, new RegExp(`done: the service runs loochat-${rev2}`));
+  assert.equal(git(sparseClone, 'rev-parse', 'HEAD'), installed.trim());
+  assert.equal(readFileSync(join(sparseClone, '.git/loochat-installed-revision'), 'utf8'), installed);
+  assert.equal(readFileSync(join(home, `.local/share/loochat-${rev2}/revision.txt`), 'utf8'), 'v2-sparse');
 
   // Break the workbench build on upstream and verify active WorkingDirectory stays on rev2.
   writeFileSync(
@@ -179,4 +241,37 @@ test('update-node leaves the active service untouched when build fails and suppo
   assert.equal(existsSync(join(home, `.local/share/loochat-${revBroken}`)), false);
   const pinPath = join(home, '.config/systemd/user/loochat.service.d/90-loochat-release.conf');
   assert.match(readFileSync(pinPath, 'utf8'), new RegExp(`^WorkingDirectory=${join(home, `.local/share/loochat-${rev2}`)}$`, 'm'));
+});
+
+test('a failed first service switch can restart the untouched original checkout', t => {
+  const { home, state, upstream, clone, advanceUpstream, runUpdater } = makeFixture(t);
+  const oldWorkdir = join(clone, 'apps/workbench');
+  const head = git(clone, 'rev-parse', 'HEAD'), bytes = checkoutBytes(clone);
+  writeFileSync(join(upstream, 'apps/workbench/scripts/restart.sh'), '#!/usr/bin/env sh\nexit 1\n');
+  advanceUpstream('cannot-start-candidate');
+  const failed = runUpdater(clone);
+  assert.equal(failed.status, 0, failed.stderr);
+  assert.match(failed.stdout, /^fail the switch failed; back on workbench$/m);
+  assert.match(failed.stdout, /fixture service started/, 'rollback executed the original npm start');
+  assert.equal(git(clone, 'rev-parse', 'HEAD'), head);
+  assert.deepEqual(checkoutBytes(clone), bytes);
+  assert.match(readFileSync(join(home, '.config/systemd/user/loochat.service.d/90-loochat-release.conf'), 'utf8'),
+    new RegExp(`^WorkingDirectory=${oldWorkdir}$`, 'm'));
+  assert.match(readFileSync(join(state, 'restart.log'), 'utf8'), /restart --no-build/);
+});
+
+test('branch selection preserves local-ahead releases and refuses divergent upstream without merging', t => {
+  const { home, clone, advanceUpstream, runUpdater } = makeFixture(t);
+  writeFileSync(join(clone, 'apps/workbench/local.txt'), 'local-ahead revision');
+  git(clone, 'add', 'apps/workbench/local.txt');
+  git(clone, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'local-ahead');
+  const head = git(clone, 'rev-parse', 'HEAD'), short = git(clone, 'rev-parse', '--short', 'HEAD');
+  const ok = runUpdater(clone);
+  assert.match(ok.stdout, new RegExp(`done: the service runs loochat-${short}`));
+  assert.equal(readFileSync(join(home, `.local/share/loochat-${short}/local.txt`), 'utf8'), 'local-ahead revision');
+  const divergent = advanceUpstream('upstream-diverged');
+  const refused = runUpdater(clone);
+  assert.match(refused.stdout, /^fail the clone has moved away from origin\/main; it needs a person$/m);
+  assert.equal(git(clone, 'rev-parse', 'HEAD'), head);
+  assert.equal(existsSync(join(home, `.local/share/loochat-${divergent}`)), false);
 });
