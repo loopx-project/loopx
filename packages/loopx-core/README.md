@@ -57,6 +57,10 @@ The installed-only qualification in
 exercises setup, independent result validation, process loss, replay and refusal.
 No model service, credentials or paid task execution is supplied by this wheel.
 
+To view the same work in your browser, install the matching
+[`loopx-workspace` wheel](../loopx-workspace/README.md) in this environment and
+start `loopx dashboard` with the original registry.
+
 Ordinary Core goal previews omit Issue Fix command templates. Install the
 [matching workflow wheel](../loopx-capability-issue-fix/README.md) to select
 `--capability-route issue-fix` or run `loopx issue-fix`. Core retains existing
@@ -123,7 +127,8 @@ It still retains built-in capability implementations, policy helpers and several
 host/CLI dependencies because the current imports are coupled. This makes it a
 workspace-free installation prerequisite, not a qualified minimal mechanism
 closure. Those dependencies are migration debt, not evidence that every
-capability belongs in the kernel. Full workspace/meta-package splitting,
-the remaining capability packages, other host/platform qualification and the
+capability belongs in the kernel. Public split-package releases,
+full workspace/meta-package splitting, independent capability packaging,
+native/IM adoption and the
 complexity/coverage hypothesis remain separate work. Smaller installation or a
 passing process fixture alone does not establish model effectiveness.

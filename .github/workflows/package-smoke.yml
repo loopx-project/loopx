@@ -5,7 +5,10 @@ on:
     paths:
       - ".github/workflows/package-smoke.yml"
       - "packages/**"
+      - "apps/presentation/dashboard/**"
+      - "scripts/chat_bundle.py"
       - "tests/test_core_distribution.py"
+      - "tests/test_core_workspace_distribution.py"
       - "tests/test_core_recall_distribution.py"
       - "tests/test_core_pr_review_distribution.py"
       - "tests/test_core_issue_fix_distribution.py"
@@ -20,8 +23,11 @@ on:
     paths:
       - ".github/workflows/package-smoke.yml"
       - "packages/**"
+      - "apps/presentation/dashboard/**"
+      - "scripts/chat_bundle.py"
       - "loopx/**"
       - "tests/test_core_distribution.py"
+      - "tests/test_core_workspace_distribution.py"
       - "tests/test_core_recall_distribution.py"
       - "tests/test_core_pr_review_distribution.py"
       - "tests/test_core_issue_fix_distribution.py"
@@ -118,6 +124,16 @@ jobs:
           uv run --extra test python -m pytest -q tests/test_core_issue_fix_distribution.py -k 'quiet or retains_bound'
           LOOPX_STANDARD_TEST_WHEELHOUSE="$RUNNER_TEMP/core-dist" uv run --extra test python -m pytest -q \
             tests/test_core_standard_distribution.py
+
+      - name: Build the matching Workspace wheel
+        run: |
+          uv run --extra test python scripts/chat_bundle.py build --install
+          uv run --extra test python packages/loopx-core/prepare.py --distribution loopx-workspace --output "$RUNNER_TEMP/workspace-source"
+          uv build --wheel "$RUNNER_TEMP/workspace-source" --out-dir "$RUNNER_TEMP/workspace-dist"
+          printf 'LOOPX_CORE_TEST_WHEEL=%s\n' "$RUNNER_TEMP"/core-dist/loopx_core-*.whl >> "$GITHUB_ENV"
+          printf 'LOOPX_WORKSPACE_TEST_WHEEL=%s\n' "$RUNNER_TEMP"/workspace-dist/loopx_workspace-*.whl >> "$GITHUB_ENV"
+      - name: Qualify Workspace readback and removal on File and SQLite
+        run: uv run --extra test python -m pytest -q tests/test_core_workspace_distribution.py
 
   codex-provider-routing:
     name: loopx-codex-provider-routing

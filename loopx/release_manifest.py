@@ -10,7 +10,7 @@ from typing import Any
 
 from . import __version__
 from .doctor_git import GitSourceState, git_source_metadata
-from .python_install_owner import distribution_record_path, installed_loopx_distribution
+from .python_install_owner import WORKSPACE_DISTRIBUTION, distribution_record_path, installed_loopx_distribution
 
 
 RELEASE_MANIFEST_SCHEMA_VERSION = "loopx_release_manifest_v0"

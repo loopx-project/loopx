@@ -254,6 +254,16 @@ This is an installation layout. CLI handlers and host facilities inside
 provider distributions keep the existing `packages/<package-id>/` convention;
 the capability-package row does not require one capability per provider.
 
+The local [Workspace wheel](../../../packages/loopx-workspace/README.md) adds
+Chat, Dashboard and the existing endpoint manager to the same release of
+`loopx-core`. It carries the verified browser bundle and opens the registry and
+runtime used by Core. Launch is explicit. Core help and task execution leave
+Workspace unloaded, and the Workspace loads the assessment executor on a
+research analysis request. Package smoke exercises a checked Core task,
+readback after installing and restarting Workspace, and Core replay after
+removal on File and SQLite. The native App, IM and split public release still
+have their own R2/M3 acceptance.
+
 Authority does not move: the kernel remains the only writer of Goal/Todo/claim/
 lease/quota/effect state. A capability package may only register providers,
 capability contracts and CLI subcommands through `CapabilityRegistry`; it never

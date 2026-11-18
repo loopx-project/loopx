@@ -80,6 +80,7 @@ def builtin_capability_installed(
     return all(origin in recorded for origin in origins)
 
 
+WORKSPACE_DISTRIBUTION = "loopx-workspace"
 @dataclass(frozen=True)
 class PythonInstallOwner:
     manager: str

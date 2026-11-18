@@ -168,6 +168,13 @@ Host 承担记账；必要的权限、预算、不确定性与恢复决策仍在
 可选 provider 发行物继续遵守 `packages/<package-id>/` 惯例；capability 包这一行不要求每个 provider
 都创建一个 capability。
 
+[本地 Workspace wheel](../../../packages/loopx-workspace/README.md) 为同版本的
+`loopx-core` 加装 Chat、Dashboard 和已有的端点管理命令。它附带经过验证的浏览器资源，
+并打开 Core 原先使用的 registry 和运行时状态。服务由用户显式启动。Core 帮助和任务执行
+不会加载 Workspace，工作区在收到研究分析请求时才加载评估执行器。打包验收覆盖 File
+和 SQLite 上由 Core 完成并独立验收的任务、安装和重启 Workspace 后的读回，以及卸载后
+从 Core 重放原结果。原生 App、IM 和公开拆包发布仍需各自完成 R2/M3 验收。
+
 权威不移动：内核仍是 Goal/Todo/claim/lease/quota/effect 状态的唯一写者。capability 包只能通过 `CapabilityRegistry` 注册 provider、capability 契约和 CLI 子命令，绝不 import 内核私有模块。
 
 ### 治理与运行时所有权
