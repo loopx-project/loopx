@@ -184,6 +184,7 @@ class CodexGoalDriver:
     def run(
         self, command: NativeGoalCommand, emit: Callable[[str, dict[str, Any]], None],
         *, execution_context: str | None = None,
+        on_resume_activated: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         if command.operation == "help":
             return parse_agent_response(USAGE, protected_paths=[self.session.work_dir])
@@ -240,6 +241,8 @@ class CodexGoalDriver:
                         **({"objective": objective} if objective is not None else {}),
                     },
                 )
+                if command.operation == "resume" and on_resume_activated is not None:
+                    on_resume_activated()
             except Exception:
                 # A lost response does not prove that activation failed.
                 self._stop_owned_transport_on_failure()
