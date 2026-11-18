@@ -455,13 +455,12 @@ class ManagedSessionTurn:
                         client_id += ".quota-recovery"
                         existing = None
                 selection_recovery = host.report_selection_recovery(existing) if existing is not None and report_window is not None else None
-                restart_request = host.monitor_restart_request(existing) if existing is not None and monitor_deadline is not None else None
-                if restart_request is not None:
-                    client_id += ".restart-recovery"
-                    continued = self.store.turn_for_client(session_id, client_id)
-                    if continued is not None:
-                        return continued, False
-                    request, existing = restart_request, None
+                recovery = (host.monitor_restart_carrier(existing, client_id)
+                    if existing is not None and monitor_deadline is not None else None)
+                if recovery is not None:
+                    if "turn" in recovery:
+                        return recovery["turn"], False
+                    request, client_id, existing = recovery["request"], recovery["client_id"], None
                     request["monitor_lease_version"] = retained["version"] if retained else 0
             if existing is not None:
                 if selection_recovery is None:
