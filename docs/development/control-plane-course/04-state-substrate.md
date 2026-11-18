@@ -199,7 +199,7 @@ Registry 适合保存：
 
 ### 2. Event ledger：追加式事实
 
-事件流保存“发生过什么”。协议见 `docs../../reference/protocols/event-sourced-state-contract-v0.md`。
+事件流保存“发生过什么”。协议见 `docs/reference/protocols/event-sourced-state-contract-v0.md`。
 
 代表性事件包括：
 
@@ -555,7 +555,7 @@ def resolve_state_file(repo: Path, state_file: str | None) -> Path | None:
 
 ### 2. Event store 用锁、sequence 和 fingerprint 保证可 replay
 
-`loopx/event_sourced_state.py` 先规范化事件，再在 append 时重新读取锁内真相：
+历史版本的 [`loopx/event_sourced_state.py`](https://github.com/loopx-project/loopx/blob/4619475a39c760e04e7f2df4f7fd3608eaa1bb7b/loopx/event_sourced_state.py#L509) 先规范化事件，再在 append 时重新读取锁内真相：
 
 ```python
 def make_state_event(*, event_id, goal_id, event_type,
@@ -595,7 +595,7 @@ def append(self, event):
 
 这就是“append-only”比“只用文件追加模式打开”更强的地方。
 
-建议断点：`AppendOnlyStateEventStore.append:511`。用同一事件 append 两次，再修改 payload append 第三次，比较两个结果。
+历史版本的建议断点：`AppendOnlyStateEventStore.append:560`。用同一事件 append 两次，再修改 payload append 第三次，比较两个结果。
 
 ### 3. Todo projection 先信结构化事件，缺失时才兼容 Markdown
 
@@ -692,7 +692,7 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>
 | --- | --- | --- |
 | 1 | `examples/registry.example.json` | 注册配置的边界 |
 | 2 | `examples/active-goal-state.example.md` | 人可读工作台 |
-| 3 | `docs../../reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
+| 3 | `docs/reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
 | 4 | `docs/reference/protocols/active-state-structured-projection-v0.md` | projection 非写 API |
 | 5 | `docs/status-data-contract.md` | status read model |
 | 6 | `loopx/control_plane/todos/`、`loopx/control_plane/work_items/lifecycle.py` | todo contract 与 transition lifecycle |
