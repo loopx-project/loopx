@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ...reasoning_effort import REASONING_EFFORTS
 from .approval_closeout import select_review_history
 from .review_body import reviewer_declaration_lines
 
@@ -24,9 +25,13 @@ _COMPACT_DECLARATION = re.compile(
     r"\s*\((runtime_reported|self_reported)(?:,\s*[\w -]+)?\)",
     re.IGNORECASE,
 )
+# Bare effort labels follow the runtime vocabulary and cannot be provenance tags.
+_DOTTED_EFFORT_LABELS = "|".join(
+    re.escape(label) for label in (*REASONING_EFFORTS, "effort_unavailable")
+)
 _DOTTED_DECLARATION = re.compile(
     r"model_agent\s*·\s*([^·]+?)\s*·\s*([^·]+?)\s*·\s*(runtime_reported|self_reported)"
-    r"(?:\s*·\s*(?:reasoning_effort=[\w -]+|effort_unavailable))?",
+    rf"(?:\s*·\s*(?:reasoning_effort=[\w -]+|{_DOTTED_EFFORT_LABELS}))?",
     re.IGNORECASE,
 )
 _KEYED_DECLARATION = re.compile(

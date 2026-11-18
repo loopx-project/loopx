@@ -774,8 +774,10 @@ def test_model_queue_reviews_another_familys_current_head(author_only):
         "Reviewer: model_agent | model=gpt-6.2-sol | provider=OpenAI "
         "| reasoning_effort=max | source=runtime_reported",
         "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · reasoning_effort=max",
+        "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · max",
+        "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · xhigh",
     ],
-    ids=["keyed-pipe", "middle-dot"],
+    ids=["keyed-pipe", "middle-dot", "bare-max", "bare-xhigh"],
 )
 def test_later_other_family_does_not_repeat_a_current_matching_review(shared_login, declaration):
     matching = "shared-review-account" if shared_login else "independent"
