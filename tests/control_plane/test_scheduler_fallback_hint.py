@@ -241,23 +241,26 @@ def _fallback_payload() -> dict:
 
 @pytest.mark.skipif(os.name == "nt", reason="the co-installed fallback launcher is a shell entrypoint")
 @pytest.mark.parametrize("has_companion", [True, False])
+@pytest.mark.parametrize("cli_bin_kind", ["absolute", "name"])
 def test_fallback_replays_the_bound_cli_and_its_companion(
-    tmp_path: Path, has_companion: bool,
+    tmp_path: Path, monkeypatch, has_companion: bool, cli_bin_kind: str,
 ) -> None:
     release = tmp_path / "selected release"
     release.mkdir()
     executable = release / "loopx"
     executable.touch()
     executable.chmod(0o700)
-    alias = tmp_path / "loopx"
+    alias = tmp_path / "loopx-selected"
     alias.symlink_to(executable)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+    cli_bin = alias.name if cli_bin_kind == "name" else str(alias)
     companion = release / "loopx-apply-rrule"
     if has_companion:
         companion.touch()
         companion.chmod(0o700)
 
     payload = _fallback_payload()
-    with loopx_cli_route(str(alias)):
+    with loopx_cli_route(cli_bin):
         bind_scheduler_followup_cli_routes(
             payload,
             registry_path=tmp_path / "registry.json",

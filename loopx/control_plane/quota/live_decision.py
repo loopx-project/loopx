@@ -10,7 +10,11 @@ from typing import Any
 
 from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
-from ...command_invocation import current_loopx_cli_argv, loopx_cli_argv
+from ...command_invocation import (
+    current_loopx_cli_argv,
+    loopx_cli_argv,
+    resolve_command_path,
+)
 from ..agent_context import project_agent_context, project_goal_agent_context
 from ..agents.identity import build_quota_agent_identity
 from ..runtime.time import now_utc_iso
@@ -491,12 +495,15 @@ def _scheduler_fallback_launcher() -> list[str]:
     route = current_loopx_cli_argv()
     if route[1:] != ["--cli-bin", route[0]]:
         return [fallback]
-    executable = Path(route[0])
-    if executable.is_absolute() and executable.is_file():
-        executable = executable.resolve()
-        companion = executable.with_name(fallback)
-        if os.name != "nt" and companion.is_file() and os.access(companion, os.X_OK):
-            fallback = str(companion)
+    configured = route[0]
+    candidate = Path(configured)
+    resolved = candidate if candidate.is_absolute() else resolve_command_path(configured)
+    if resolved is None or not resolved.is_file():
+        return [fallback, "--loopx", configured]
+    executable = resolved.resolve()
+    companion = executable.with_name(fallback)
+    if os.name != "nt" and companion.is_file() and os.access(companion, os.X_OK):
+        fallback = str(companion)
     return [fallback, "--loopx", str(executable)]
 
 
