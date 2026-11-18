@@ -356,3 +356,107 @@ def test_partial_todo_sync_persists_successful_record_for_retry(
         "goal_public_fixture:todo_public_one": "rec_public_one",
         "goal_public_fixture:todo_public_two": "rec_public_two",
     }
+
+
+def test_partial_setup_ignores_null_view_id_and_preserves_records_and_heartbeat_fallback(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.presentation.kanban import (
+        lark_kanban_config_from_payload,
+        lark_kanban_heartbeat,
+        setup_lark_kanban_board,
+    )
+
+    config_path = tmp_path / "lark-kanban.json"
+    write_lark_kanban_local_config(
+        config_path,
+        {
+            "board": {
+                "base_token": "base_public_fixture",
+                "table_id": "tbl_public_fixture",
+                "cli_bin": "lark-cli",
+                "identity": "user",
+                "view_ids": {
+                    "Worker Queue": None,
+                    "Kanban": "vew_kanban_fixture",
+                },
+            },
+            "todo_records": {"goal_public_fixture:todo_1": "rec_existing_fixture"},
+        },
+    )
+
+    def setup_runner(
+        args: list[str], cwd: Path | None, timeout: float | None
+    ) -> dict[str, object]:
+        if args == ["lark-cli", "--version"]:
+            return _result({"version": "1.0.56"})
+        if args == ["lark-cli", "auth", "status"]:
+            return _result({"ok": True, "identities": {"user": {"available": True}}})
+        if args[-1:] == ["--help"]:
+            return _result({"ok": True})
+        if "+field-list" in args:
+            return {
+                "returncode": 1,
+                "stdout": json.dumps(
+                    {"ok": False, "error": {"message": "permission denied"}}
+                ),
+                "stderr": "permission denied",
+                "timed_out": False,
+            }
+        raise AssertionError(args)
+
+    setup_payload = setup_lark_kanban_board(
+        config_path=config_path,
+        base_name="LoopX Existing Board",
+        cli_bin="lark-cli",
+        identity="user",
+        execute=True,
+        runner=setup_runner,
+    )
+
+    assert setup_payload["ok"] is True
+    assert setup_payload["partial"] is True
+    stored = read_lark_kanban_local_config(config_path)
+    assert stored["board"]["view_id"] == "Worker Queue"
+    assert stored["board"]["view_ids"].get("Worker Queue") is None
+    assert stored["board"]["view_ids"]["Kanban"] == "vew_kanban_fixture"
+    assert stored["todo_records"] == {
+        "goal_public_fixture:todo_1": "rec_existing_fixture"
+    }
+
+    config = lark_kanban_config_from_payload(stored)
+    assert config is not None
+    assert config.view_id == "Worker Queue"
+
+    record_list_calls: list[list[str]] = []
+
+    def heartbeat_runner(
+        args: list[str], cwd: Path | None, timeout: float | None
+    ) -> dict[str, object]:
+        if "+record-list" in args:
+            record_list_calls.append(args)
+            view_arg = args[args.index("--view-id") + 1] if "--view-id" in args else args[args.index("--view") + 1]
+            assert view_arg == "Worker Queue"
+            assert view_arg != "None"
+            return _result(
+                {
+                    "ok": True,
+                    "data": {
+                        "fields": ["Task", "Status"],
+                        "data": [],
+                        "record_id_list": [],
+                        "has_more": False,
+                    },
+                }
+            )
+        raise AssertionError(args)
+
+    heartbeat = lark_kanban_heartbeat(
+        config,
+        execute_lark=True,
+        runner=heartbeat_runner,
+    )
+
+    assert heartbeat["ok"] is True
+    assert heartbeat["decision"] == "no_claimable_task"
+    assert len(record_list_calls) == 1
