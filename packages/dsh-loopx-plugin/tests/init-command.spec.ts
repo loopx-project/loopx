@@ -10,7 +10,7 @@ import type {
   CommandResult,
 } from '@deepseek-ai/dsh-commands'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
-import { LoopXCliError } from '../src/cli.ts'
+import { LoopXCliError, MINIMUM_LOOPX_VERSION } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
 import {
   apply,
@@ -241,14 +241,16 @@ describe('/loopx-init implementation', () => {
       const runner: FileRunner = async (_file, args) => {
         calls.push([...args])
         if (stage === 'inspect' && args.includes('--version')) {
-          return { exitCode: 0, stdout: 'loopx 2.3.0\n', stderr: '' }
+          return { exitCode: 0, stdout: `loopx ${MINIMUM_LOOPX_VERSION}\n`, stderr: '' }
         }
         throw new LoopXCliError('transport', 'CLI cleanup not confirmed', false)
       }
       await expect(initializeLoopX({ runner, skillsDir: '/fixture/skills' }))
         .rejects.toMatchObject({ kind: 'transport', retryable: false })
       expect(calls).toHaveLength(stage === 'version' ? 1 : 2)
+      if (stage === 'inspect') expect(calls[1]).toContain('workflow-skills')
       expect(calls.flat()).not.toContain('--install')
+      expect(calls.flat()).not.toContain('pip')
     },
   )
 

@@ -815,8 +815,8 @@ export function createEffectRuntimeHandlers(
       "settlement.plan_payload",
       (params) => settlementPlanPayload(settlementPlanInput(params.plan, "plan")),
     ],
-    ["settlement.turn_scoped_cli_plan", lazyHandler(() => import("./quota/settlement_plan.ts"), ({turnScopedCliSettlementPlan}) => (params) =>
-      settlementPlanPayload(turnScopedCliSettlementPlan(params)))],
+    ["settlement.turn_scoped_cli_plan", lazyHandler(() => import("./quota/settlement_plan.ts"),
+      ({turnScopedCliSettlementPlanPayload}) => turnScopedCliSettlementPlanPayload)],
     ["settlement.native_cli_projection", lazyHandler(() => import("./quota/settlement_plan.ts"),
       ({nativeCliSettlementProjection}) => nativeCliSettlementProjection)],
     [

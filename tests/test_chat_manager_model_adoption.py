@@ -5,6 +5,9 @@ Only the paid upstream adapter is substituted; release model evaluation owns
 actual answer quality, separately from this lifecycle regression.
 """
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from loopx.capabilities.machine_configuration.builtins import (
@@ -16,6 +19,7 @@ from loopx.chat_manager import (
     MANAGER_CONTEXT_VERSION,
     manager_channel_binding,
     manager_executor_allocation,
+    manager_session_model_allocation,
     open_manager_session,
 )
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
@@ -140,7 +144,6 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
 def test_legacy_bound_steward_adopts_explicit_machine_model_once(conversation):
     root, store, runtime, session, starts = conversation
     sid = session["session_id"]
-    import json
     legacy = {**store.load_session(sid), "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
     legacy.pop("manager_executor_allocation", None)
     store._session_path(sid).write_text(json.dumps(legacy))  # retained pre-allocation disk format
@@ -158,7 +161,6 @@ def test_legacy_bound_steward_adopts_explicit_machine_model_once(conversation):
 
 
 def test_legacy_model_adoption_preserves_unset_fields_and_endpoint(conversation):
-    from loopx.chat_manager import manager_session_model_allocation
     root, store, runtime, session, _ = conversation
     legacy = {**session, "manager_executor_allocation": None,
               "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
@@ -277,9 +279,15 @@ def upstream_boundary(monkeypatch, tmp_path):
     starts = []
 
     def start(**kwargs):
-        adapter = Adapter(len(starts))
-        if kwargs.get("resume_thread_id"):
-            adapter.upstream_thread_id = kwargs["resume_thread_id"]
+        transport = Adapter(len(starts))
+        adapter = CodexAppServerAdapter(SimpleNamespace(
+            thread_id=kwargs.get("resume_thread_id") or transport.upstream_thread_id,
+            resolved_model=kwargs["model"],
+            resolved_reasoning_effort=kwargs["reasoning_effort"],
+            read_only_review=kwargs["read_only_review"],
+            process=SimpleNamespace(poll=lambda: None if transport.healthcheck() else 0),
+            close=transport.close_session,
+        ))
         starts.append((kwargs, adapter))
         return adapter
 
@@ -292,13 +300,83 @@ def upstream_boundary(monkeypatch, tmp_path):
         ])
         return runtime
 
-    def open_conversation(runtime):
+    def open_conversation(runtime, **settings):
         return open_manager_session(
             controller=runtime, goal_id="loopx-manager", work_dir=tmp_path,
-            provider="fixture", audience="owner",
+            provider="fixture", audience="owner", **settings,
         )[0]
 
     return root, store, controller, open_conversation, starts
+
+
+@pytest.mark.parametrize("allocation_already_recorded", [False, True])
+def test_legacy_observed_model_does_not_override_machine_model(upstream_boundary, allocation_already_recorded):
+    root, store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6.1-sol", effort="xhigh")
+    runtime = controller()
+    session = open_conversation(runtime)
+    sid = session["session_id"]
+    store.append_message(sid, role="user", text="Keep the original scope.")
+    messages = store.messages(sid)
+    configure(root, model="gpt-6.2-sol", effort="xhigh")
+
+    # A historical session has an observed model without a user selection.
+    # A previous runtime may also have committed the new allocation even
+    # though it reopened the provider with the model from that old observation.
+    legacy = store.load_session(sid)
+    legacy.pop("requested_agent_model_id")
+    if allocation_already_recorded:
+        allocation = manager_session_model_allocation(runtime, legacy)
+        assert allocation["model"] == "gpt-6.2-sol"
+        legacy["manager_executor_allocation"] = allocation
+    store._session_path(sid).write_text(json.dumps(legacy))
+
+    updated = open_conversation(runtime)
+
+    assert updated["session_id"] == sid and updated["channel_id"] == session["channel_id"]
+    assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == ("gpt-6.2-sol", "xhigh")
+    assert updated["agent_model_id"] == updated["manager_executor_allocation"]["model"] == "gpt-6.2-sol"
+    assert store.messages(sid) == messages
+    assert starts[-1][0]["history"] == [{"role": "user", "content": "Keep the original scope."}]
+    assert updated["upstream_context_history"][-1]["thread_id"] == session["upstream_thread_id"]
+
+    open_conversation(runtime)
+    assert len(starts) == 2
+
+
+def test_explicit_session_model_survives_machine_default_edit(upstream_boundary):
+    root, _, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6-sol", effort="high")
+    runtime = controller()
+    session = open_conversation(runtime, agent_model_id="gpt-6.1-sol")
+    configure(root, model="gpt-6.2-sol", effort="high")
+
+    updated = open_conversation(runtime)
+    assert updated["session_id"] == session["session_id"]
+    assert starts[-1][0]["model"] == updated["agent_model_id"] == updated["requested_agent_model_id"] == "gpt-6.1-sol"
+
+
+def test_unconfirmed_machine_model_does_not_replace_binding(upstream_boundary, monkeypatch):
+    root, store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6.1-sol", effort="high")
+    runtime = controller()
+    session = open_conversation(runtime)
+    configure(root, model="gpt-6.2-sol", effort="high")
+    start = CodexAppServerAdapter.start
+
+    def start_without_model_readback(**kwargs):
+        adapter = start(**kwargs)
+        adapter.session.resolved_model = None
+        return adapter
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start", start_without_model_readback)
+    with pytest.raises(CodexChatAgentError, match="could not be restored"):
+        open_conversation(runtime)
+
+    held = store.load_session(session["session_id"])
+    assert held["upstream_thread_id"] == session["upstream_thread_id"]
+    assert held["manager_executor_allocation"] == session["manager_executor_allocation"]
+    assert held["agent_model_id"] == "gpt-6.1-sol" and not starts[-1][1].healthcheck()
 
 
 @pytest.mark.parametrize("refresh_context", [False, True])
