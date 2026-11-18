@@ -14,7 +14,13 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
-from benchmark.runtime.codex import Execution, explicit_turn_display, prepare_codex_home, process_environment
+from benchmark.runtime.codex import (
+    Execution,
+    explicit_turn_display,
+    prepare_codex_home,
+    process_environment,
+    turn_envelope_receipt,
+)
 
 from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
 from benchmark.runtime.scheduler import phase_work_reserve
@@ -523,6 +529,53 @@ def _phase_timeout(timeout: float | None, deadline: float | None) -> tuple[float
     return timeout, False
 
 
+def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> None:
+    """Check the pinned product's carrier before a Short arm can start a model."""
+    from loopx.control_plane.quota.turn_envelope import (
+        COMPLETE_TURN_DECISION_VERSION,
+        TURN_ENVELOPE_SCHEMA_VERSION,
+    )
+
+    contract = {
+        "expected_schema_version": TURN_ENVELOPE_SCHEMA_VERSION,
+        "observed_schema_version": None,
+        "eligible": False,
+    }
+    receipt.update(quota_input_contract=contract, host_invoked=False)
+    deadline = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
+    timeout, _ = _phase_timeout(120, float(deadline) if deadline else None)
+    # This preview runs the same product projection without a Turn, capture,
+    # or admission. Keep optional delivery out of the carrier observation.
+    command = loopx_command(env) + [
+        "quota", "should-run", "--dry-run", "--runtime-profile", "generic_cli",
+        "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
+        "--available-capability", "shell", "--available-capability", "filesystem_write",
+        "--turn-envelope", "--context-delivery", "off",
+    ]
+    try:
+        result = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env,
+                                capture_output=True, text=True, timeout=timeout, check=True)
+        payload = read_json(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise ValueError("Short envelope requires a successful v0 quota preview from the pinned product.") from exc
+    if payload.get("ok") is not True:
+        raise ValueError("Short envelope requires a successful v0 quota preview from the pinned product.")
+    observed = payload.get("schema_version")
+    if observed in (TURN_ENVELOPE_SCHEMA_VERSION, COMPLETE_TURN_DECISION_VERSION):
+        contract["observed_schema_version"] = observed
+    if observed != TURN_ENVELOPE_SCHEMA_VERSION:
+        raise ValueError("Short envelope requires a verified v0 response from the pinned product. "
+                         "Use the recorded historical source pins for that arm.")
+    if checkpoint_path := env.get("LOOPX_CHECKPOINT_REQUEST"):
+        from .checkpoint import read_checkpoint_request
+
+        request, _ = read_checkpoint_request(checkpoint_path)
+        if request.get("trigger") == "fresh_replan":
+            raise ValueError("Short envelope requires the direct v0 guard. "
+                             "A fresh_replan checkpoint preloads a different view.")
+    contract["eligible"] = True
+
+
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_CONTEXT_DELIVERY", "off") not in {"off", "on"}:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
@@ -585,10 +638,7 @@ def run_once(env: dict[str, str]) -> dict:
         "task_entry": execution.task_entry,
         **({"execution_observation": observation_producer}
            if observation_producer is not None else {}),
-        **({"turn_envelope": True, "turn_envelope_source": "explicit"}
-           if execution.turn_envelope else {}),
-        **({"complete_turn": True, "complete_turn_source": "explicit"}
-           if execution.complete_turn else {}),
+        **turn_envelope_receipt(explicit=False, complete=execution.complete_turn),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),
@@ -629,6 +679,8 @@ def run_once(env: dict[str, str]) -> dict:
                 execution, timeout_seconds=(remaining - reserve if execution.timeout_seconds is None
                                              else min(execution.timeout_seconds, remaining - reserve))
             )
+        if execution.turn_envelope:
+            _qualify_short_envelope(env, receipt)
         prepare_codex_home(
             home,
             execution=execution,
@@ -678,6 +730,8 @@ def run_once(env: dict[str, str]) -> dict:
         elif execution.mode in {"heartbeat", "loopx-goal"}:
             body = heartbeat_body(env, turn_id, native_goal=execution.native_goal,
                                   decision_handoff_socket=checkpoint_wake.socket_path)
+            if execution.turn_envelope:
+                receipt.update(turn_envelope_receipt(explicit=True))
         elif execution.mode == "plain":
             body = Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8")
         session_wake = None
