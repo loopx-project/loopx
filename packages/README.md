@@ -32,6 +32,8 @@ Current co-located distributions, in directory order:
 - [`loopx-community-discussion`](loopx-community-discussion/README.md):
   public-safe community discussion scanner producing compact
   `discussion_fact_v0` facts;
+- [`loopx-core`](loopx-core/README.md): standalone local task execution and
+  recovery with the existing CLI and typed runtime;
 - [`loopx-finance-execution`](loopx-finance-execution/README.md): optional
   simulator for the human-confirmed finance operation envelope;
 - [`loopx-finance-value-discovery`](loopx-finance-value-discovery/README.md):
@@ -47,7 +49,9 @@ Current co-located distributions, in directory order:
 - [`loopx-text-stats`](loopx-text-stats/README.md): the Developer Book's
   zero-permission text-statistics companion, with a complete installable
   package and contract tests. It is a teaching distribution, not a default
-  capability or catalog entry.
+  capability or catalog entry;
+- [`loopx-workspace`](loopx-workspace/README.md) adds local Chat and Dashboard
+  to the matching Core environment.
 
 Not every distribution is an extension: a package without `extension.toml`
 installs through its own Python or npm lifecycle and never enters
