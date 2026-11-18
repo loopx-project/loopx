@@ -124,7 +124,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const questionExpanded = selection.question ?? !selection.finding;
   const recordReading = useResearchRecordsLocation(historySource);
   const recordsOpen = recordReading.value.open;
-  const setRecordsOpen = (open: boolean) => recordReading.update({open}, false);
+  const setRecordsOpen = (open: boolean) => recordReading.update({open});
   const records = useRef<HTMLDetailsElement>(null);
   const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
   const [requestedPhase, setPhase] = useState<number | null>(() => viewFromUrl(goalId).phase);

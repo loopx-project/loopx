@@ -126,11 +126,23 @@ threading.Event().wait()
           }
           assert.deepEqual(exported.records[index].measurements ?? [], original.measurements ?? []);
         }
+        const firstRecord = records.locator(".research-history-records > li:first-child > details");
+        await firstRecord.locator(":scope > summary").press("Enter");
+        const expandedRecord = records.locator(".research-history-records > li:first-child > details[open]");
+        await expandedRecord.waitFor();
+        await page.waitForURL(url => {
+          const reading = url.searchParams.get("research_records");
+          return reading !== null && JSON.parse(reading).expanded.length === 1;
+        });
+        const readingUrl = page.url();
         await page.goBack();
         await page.getByRole("heading", {name:captures[0].display_name,exact:true}).waitFor();
         await coverage.filter({hasText:"33 / 33"}).waitFor();
+        assert.equal(await records.count(), 0, "Back returns to the previous source's closed drawer");
         await page.goForward();
         await coverage.filter({hasText:"11 / 11"}).waitFor();
+        await expandedRecord.waitFor();
+        assert.equal(page.url(), readingUrl, "Forward restores the saved drawer and record in their source");
 
         const empty = analysisReadback("c");
         empty.pack.result = null;

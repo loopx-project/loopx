@@ -153,10 +153,12 @@ and unavailable-version recovery; missing versions never select the latest one
 silently. Plans and recorded adoption claims remain distinct from demonstrated
 subsequent action or benefit. Opening or switching records starts no analysis.
 The loaded-record reader also carries its open state, filters, display page and
-expanded entries through the existing research URL. Reload and Back/Forward
-restore those selections only for the same Goal/source; missing group identities
-remain visibly unavailable rather than selecting a newer result. This browser
-reading bookmark does not extend the native App's window-reopen preference.
+expanded entries through the existing research URL. Reading controls update the
+current history entry so Back/Forward can navigate between Goals and sources.
+Changing or clearing filters starts the new result list collapsed on its first
+page. Reload and Back/Forward restore saved selections within the same Goal and
+source. Missing group identities remain visibly unavailable. The native App
+keeps its own window-reopen preferences.
 
 The App and prepared workspace share `GET /api/chat/goal-source-strategies`;
 prepared readers also expose `/api/goal-source/strategies` and the existing

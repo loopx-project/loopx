@@ -8,8 +8,8 @@ import {exportResearchRecords} from "./research-record-export";
 import {exportResearchReport} from "./research-record-report";
 import {downloadReport} from "./report-download";
 
-/** Reuse the research URL owner for reload and Back/Forward. Native App window
- * reopen remains a separate preference boundary. */
+/** Record browsing updates the current history entry. Goal and source
+ * navigation create the entries that Back/Forward restores. */
 export function useResearchRecordsLocation(scope: string) {
   const read = () => readResearchRecordsLocation(new URLSearchParams(window.location.search), scope);
   const [location, setLocation] = useState(() => ({scope, value: read(), navigation: 0}));
@@ -21,13 +21,13 @@ export function useResearchRecordsLocation(scope: string) {
     changed(); window.addEventListener("popstate", changed);
     return () => window.removeEventListener("popstate", changed);
   }, [scope]);
-  const update = (patch: Partial<ResearchRecordsLocation>, replace = true) => {
+  const update = (patch: Partial<ResearchRecordsLocation>) => {
     const next = {...current.current, ...patch};
     if (JSON.stringify(next) === JSON.stringify(current.current)) return;
     current.current = next;
     const url = new URL(window.location.href);
     url.search = writeResearchRecordsLocation(url.searchParams, scope, next).toString();
-    window.history[replace ? "replaceState" : "pushState"](window.history.state, "", url);
+    window.history.replaceState(window.history.state, "", url);
     setLocation(previous => ({scope, value: next, navigation: previous.navigation}));
   };
   return {value, update, navigation: location.navigation};
@@ -66,10 +66,12 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   const groupCount = zh ? `${groups.length} 个条目` : `${groups.length} ${groups.length === 1 ? "entry" : "entries"}`;
   const countLabel = zh ? `匹配 ${matches.length} / ${events.length} 条已读记录 · ${groupCount}` : `${matches.length} matches in ${events.length} loaded records · ${groupCount}`;
   const readState = busy ? (zh ? "读取中" : "Reading") : stale ? (zh ? "刷新失败" : "Refresh failed") : "";
-  const reset = () => reading.update({query: "", status: "", limit: 50});
+  const updateFilters = (filters: Partial<Pick<ResearchRecordsLocation, "query" | "status">>) => {
+    reading.update({...filters, limit: 50, expanded: []});
+  };
   const toggle = (id: string, open: boolean) => {
     if (expanded.includes(id) === open) return;
-    reading.update({expanded: open ? [...expanded, id] : expanded.filter(value => value !== id)}, false);
+    reading.update({expanded: open ? [...expanded, id] : expanded.filter(value => value !== id)});
   };
   const originalContent = (event: ExploreHistoryEvent) => {
     const shown = displayed.get(event.event_id) ?? event;
@@ -99,13 +101,13 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
     <div className="research-record-filters">
       <input type="search" aria-label={zh ? "搜索研究记录" : "Search research records"}
         placeholder={zh ? "正文、来源引用或 ID" : "Text, source reference or ID"} value={query}
-        onChange={event => reading.update({query: event.target.value, limit: 50})}/>
+        onChange={event => updateFilters({query: event.target.value})}/>
       <select aria-label={zh ? "记录状态" : "Recorded status"} value={status}
-        onChange={event => reading.update({status: event.target.value, limit: 50})}>
+        onChange={event => updateFilters({status: event.target.value})}>
         <option value="">{zh ? "所有状态" : "All statuses"}</option>
         {[...new Set([...statuses, ...(status ? [status] : [])])].map(item => <option key={item} value={item}>{stateLabel(item)}</option>)}
       </select>
-      {query || status ? <button type="button" onClick={reset}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
+      {query || status ? <button type="button" onClick={() => updateFilters({query: "", status: ""})}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
       <select aria-label={zh ? "下载格式" : "Download format"} value={format} onChange={event => setFormat(event.target.value)}>
         <option value="json">JSON</option>
         <option value="md">{zh ? "阅读报告（Markdown）" : "Reading report (Markdown)"}</option>
