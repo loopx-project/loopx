@@ -999,16 +999,22 @@ class ChatRuntimeController:
                 and selected_agent == session["agent_id"] == "codex"
                 and session.get("manager_context_version") == MANAGER_CONTEXT_VERSION
                 and session.get("upstream_mode") == "chat" and not manager_profile_changed
-                and not settings_changed and not quota_route and model_allocation is None and not quota_fallback)
+                and not settings_changed and not quota_route and not quota_fallback)
             cold_working = (current is None and answer_fallback and native_account_epoch is not None
                 and session.get("answer_review") is not True and bool(session.get("native_working_checkpoint")))
             checkpoint_available = working_provider or cold_working or session.get("parked_native_working")
-            stored_messages = history_restore.capture(strict=bool(same_working_route and checkpoint_available))
+            stored_messages = history_restore.capture(
+                strict=bool(same_working_route and model_allocation is None and checkpoint_available),
+            )
             history = history_restore.messages(stored_messages)
+            if (same_working_route and model_allocation is not None and not recovery
+                    and not session.get("answer_review") and not session.get("parked_native_working")):
+                history_restore.resume_working_model(codex_home=selected_codex_home)
             legacy_manager_context = history_restore.manager_migration(refresh=(manager_profile_changed
-                or model_allocation is not None or quota_fallback or answer_fallback))
+                or (model_allocation is not None and history_restore.working_continuation is None)
+                or quota_fallback or answer_fallback))
             legacy_provider_context = history_restore.provider_migration(stored_messages)
-            if (manager_runtime is not None and same_working_route and checkpoint_available
+            if (manager_runtime is not None and same_working_route and model_allocation is None and checkpoint_available
                     and not legacy_provider_context and not legacy_project_context):
                 history_restore.prepare_working_context(stored_messages, work_dir=work_dir,
                     codex_home=selected_codex_home, runtime=manager_runtime, account_epoch=native_account_epoch,
@@ -1037,7 +1043,7 @@ class ChatRuntimeController:
                         "history_message_count": len(working_continuation.suffix) if working_continuation
                             else len(native_history or []),
                         "native_checkpoint_requested": method != "thread/start",
-                        "working_checkpoint_available": bool(checkpoint_available),
+                        "working_checkpoint_available": bool(checkpoint_available or working_continuation),
                         "manager_context_version": session.get("manager_context_version"),
                         "required_manager_context_version": MANAGER_CONTEXT_VERSION,
                         "manager_context_migration": legacy_manager_context,

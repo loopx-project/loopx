@@ -175,6 +175,21 @@ class NativeHistoryRestoration:
                 return provider
         return None
 
+    def resume_working_model(self, *, codex_home: Path) -> None:
+        """Keep the verified working thread when only its machine model changes."""
+        from .codex_auth import recorded_provider
+
+        checkpoint = self.session.get("native_working_checkpoint")
+        thread_id = self.session["upstream_thread_id"]
+        if (self.binding is None or str(codex_home) != self.session.get("codex_home")
+                or not checkpoint or checkpoint["thread_id"] != thread_id):
+            return
+        provider = recorded_provider(codex_home, thread_id)
+        if not provider or provider != checkpoint["provider"]:
+            raise CodexChatAgentError("The original Codex working checkpoint could not be verified.",
+                error_code="resume_failed", gate=None)
+        self.working_continuation = NativeWorkingContinuation(thread_id, provider, [])
+
     def park_working_context(self, stored: list[dict[str, Any]], *, provider: str | None,
                              affinity: str) -> dict[str, Any] | None:
         """Keep the first working native identity across isolated reviews."""
@@ -313,10 +328,12 @@ class NativeHistoryRestoration:
                 )):
                     self.invalidated = True
                     raise CodexChatAgentError("Working route changed during native continuation", error_code="resume_failed", gate=None)
-                messages = controller.store.messages(sid, strict=True)
-                if self._working_suffix(messages, original["parked_native_working"]) != self.working_continuation.suffix:
-                    self.invalidated = True
-                    raise CodexChatAgentError("Review history changed during native continuation", error_code="resume_failed", gate=None)
+                parked = original.get("parked_native_working")
+                if parked is not None:
+                    messages = controller.store.messages(sid, strict=True)
+                    if self._working_suffix(messages, parked) != self.working_continuation.suffix:
+                        self.invalidated = True
+                        raise CodexChatAgentError("Review history changed during native continuation", error_code="resume_failed", gate=None)
             self.route_check()
 
     def finish(self) -> None:
