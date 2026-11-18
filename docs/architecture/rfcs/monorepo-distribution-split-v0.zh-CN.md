@@ -307,6 +307,10 @@ Operation provider 必须说明某个 effect 能否核对、能否安全重试�
 
 ### 产品与 benchmark 执行
 
+在独立 Core 中，私有证据账本和外部证据命令随 `loopx-capability-research` 一起发行。
+Core 目录保留原有能力条目，并显示匹配安装包是否可用。选择命令时加载原有实现。
+研究任务沿已有的项目账本续作，继续使用原来的证据准入和报告规则。
+
 遵守 [长程研究计划](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)：
 native/plain 对照、被动观测、受治理执行与 ablation 具有明确身份。
 原生对照不接受 LoopX 指令或 hook。被动观测须验证无干扰。

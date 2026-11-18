@@ -932,6 +932,14 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			print_payload=print_payload,
 		)
+	elif args.command == "deepresearch":
+		from .cli_commands.deepresearch import handle_deepresearch_command
+
+		result = handle_deepresearch_command(args, output_format=output_format, print_payload=print_payload)
+	elif args.command == "external-evidence":
+		from .capabilities.external_research.cli import handle_external_evidence_command
+
+		result = handle_external_evidence_command(args, output_format=output_format, print_payload=print_payload)
 	else:
 		result = dispatch_common_command(
 			args,
@@ -1011,6 +1019,21 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
+	if command in {"deepresearch", "external-evidence"} and _standalone_core():
+		from .capabilities.deep_research.catalog_entry import RESEARCH_INSTALL_HINT, research_workflows_installed
+
+		parser, subparsers = build_cli_parser()
+		if not research_workflows_installed(builtin_cli_present=False):
+			parser.error(f"{command} is unavailable in the standalone core. {RESEARCH_INSTALL_HINT}")
+		if command == "deepresearch":
+			from .cli_commands.deepresearch import register_deepresearch_command
+
+			register_deepresearch_command(subparsers, add_subcommand_format)
+		else:
+			from .capabilities.external_research.cli import register_external_evidence_commands
+
+			register_external_evidence_commands(subparsers, add_subcommand_format)
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
 	if command == "version":
 		version_exports = sys.modules.get("loopx.cli_commands")
 		# Inspect bound exports without triggering the lazy facade. Explicit
