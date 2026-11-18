@@ -59,6 +59,13 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
     for name in ("chat", "web", "canary", "cli.py", "chat.py"):
         assert not (staged / "loopx" / name).exists()
     assert not list((staged / "loopx").glob("chat_*.py"))
+    package = staged / "loopx"
+    assert {file.name for file in (package / "capabilities/benchmark_toolkit").iterdir()} == {
+        "README.md", "catalog_entry.py", "four_arm_contract.py",
+    }
+    assert not list((package / "cli_commands").glob("benchmark_*.py"))
+    assert not (package / "presentation/research_analysis_api.py").exists()
+    assert not (package / "presentation/runtime_workspace.py").exists()
     for name in ("entrypoint.py", "control_plane/turn_driver/executor.py",
                  "control_plane/coordination/sqlite_authority_store.ts",
                  "extensions/lark/extension.toml"):
@@ -132,6 +139,12 @@ def test_installed_core_identity_help_and_unavailable_workspace(core_python, tmp
     script = '''import importlib.util as u,json,loopx
 from pathlib import Path
 for name in ('loopx.cli','loopx.chat','loopx.web','loopx.canary'):assert u.find_spec(name) is None,name
+for name in ('loopx.capabilities.benchmark_toolkit.native_codex_goal',
+             'loopx.capabilities.benchmark_toolkit.experiment_board',
+             'loopx.capabilities.benchmark_toolkit.trajectory_assessment_store',
+             'loopx.cli_commands.benchmark_dispatch','loopx.presentation.research_analysis_api',
+             'loopx.presentation.runtime_workspace'):
+    assert u.find_spec(name) is None,name
 from loopx.release_manifest import _distribution_runtime_fingerprint
 assert _distribution_runtime_fingerprint() is not None
 from loopx import doctor
@@ -154,6 +167,26 @@ print(json.dumps({'package':str(Path(loopx.__file__).resolve())}))
     invalid = _run(core_python, ["--format", "invalid", "--version"], tmp_path, expected=2)
     assert "invalid choice" in invalid.stderr
     refusal = _run(core_python, ["dashboard"], tmp_path, expected=2)
+    assert "unavailable in the standalone core" in refusal.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_installed_core_lists_benchmark_as_unavailable(core_python, tmp_path):
+    catalog = json.loads(_run(core_python, ["capability", "list", "--format", "json"], tmp_path,
+                             environment={"PATH": str(tmp_path)}).stdout)
+    records = {record["id"]: record for record in catalog["capabilities"]}
+    detail = json.loads(_run(core_python, ["capability", "show", "benchmark-toolkit", "--format", "json"],
+                            tmp_path).stdout)["capability"]
+    unavailable = {"declared": True, "installed": False, "enabled": False, "ready": False}
+    assert records["decision-context"]["provider_state"]["ready"] is True
+    for record in (records["benchmark-toolkit"], detail):
+        assert record["provider_id"] == "loopx-capability-benchmark-toolkit"
+        assert record["provider_state"] == unavailable
+        assert "ordinary LoopX installation" in record["next_real_step"]
+    provider = next(provider for provider in catalog["providers"]
+                    if provider["id"] == "loopx-capability-benchmark-toolkit")
+    assert {key: provider[key] for key in unavailable} == unavailable
+    refusal = _run(core_python, ["benchmark", "--help"], tmp_path, expected=2)
     assert "unavailable in the standalone core" in refusal.stderr
     assert not list(tmp_path.iterdir())
 
@@ -295,6 +328,26 @@ for name in ('workflow_plan','candidate_preflight','acceptance_loop','metadata_p
     result = subprocess.run([core_python, "-I", "-c", script, json.dumps(arguments), route],
         cwd=tmp_path, env=_environment(core_python), capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, (result.stdout, result.stderr)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("arguments", [
+    ["capability", "--help"],
+    ["capability", "list", "--format", "json"],
+    ["capability", "show", "benchmark-toolkit", "--format", "json"],
+    ["capability", "show", "issue-fix", "--format", "json"],
+])
+def test_installed_core_discovers_capabilities_without_benchmark_execution(core_python, tmp_path, arguments):
+    from tests.capabilities.test_benchmark_toolkit_loading import DISCOVERY_SCRIPT
+
+    result = subprocess.run([core_python, "-I", "-c", DISCOVERY_SCRIPT,
+        json.dumps(["--registry", str(tmp_path / "registry.json"),
+                    "--runtime-root", str(tmp_path / "runtime"), *arguments])],
+        cwd=tmp_path, env=_environment(core_python, {"PATH": ""}),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    if arguments[-1] == "json":
+        assert json.loads(result.stdout)["ok"] is True
     assert not list(tmp_path.iterdir())
 
 

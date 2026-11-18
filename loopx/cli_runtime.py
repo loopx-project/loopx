@@ -722,9 +722,16 @@ def _dispatch_common_command(
 			build_command_reference_payload, render_command_reference_markdown,
 		)
 
+		available_commands = None
+		if _standalone_core():
+			from .capabilities.benchmark_toolkit.catalog_entry import benchmark_toolkit_installed
+
+			available_commands = _SELECTED_COMMANDS
+			if benchmark_toolkit_installed(builtin_cli_present=False):
+				available_commands |= {"benchmark"}
 		print_payload(
 			build_command_reference_payload(
-				available_commands=_SELECTED_COMMANDS if _standalone_core() else None,
+				available_commands=available_commands,
 			), output_format(args),
 			render_command_reference_markdown,
 		)
@@ -932,6 +939,12 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			print_payload=print_payload,
 		)
+	elif args.command == "benchmark":
+		from .cli_commands.benchmark_dispatch import handle_benchmark_command
+
+		result = handle_benchmark_command(
+			args, registry_path=registry_path, print_payload=print_payload, output_format=output_format,
+		)
 	else:
 		result = dispatch_common_command(
 			args,
@@ -1011,6 +1024,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
+	if command == "benchmark" and _standalone_core():
+		from .capabilities.benchmark_toolkit.catalog_entry import (
+			BENCHMARK_TOOLKIT_INSTALL_HINT, benchmark_toolkit_installed,
+		)
+
+		parser, subparsers = build_cli_parser()
+		if not benchmark_toolkit_installed(builtin_cli_present=False):
+			parser.error(f"benchmark is unavailable in the standalone core. {BENCHMARK_TOOLKIT_INSTALL_HINT}")
+		from .cli_commands.benchmark_dispatch import register_benchmark_command_group
+
+		register_benchmark_command_group(subparsers, add_subcommand_format)
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
 	if command == "version":
 		version_exports = sys.modules.get("loopx.cli_commands")
 		# Inspect bound exports without triggering the lazy facade. Explicit

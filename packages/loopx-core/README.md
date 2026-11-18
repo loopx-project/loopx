@@ -48,6 +48,12 @@ The installed-only qualification in
 exercises setup, independent result validation, process loss, replay and refusal.
 No model service, credentials or paid task execution is supplied by this wheel.
 
+Core keeps the benchmark catalog and the four-arm contract it references.
+Install the matching [Benchmark Toolkit wheel](../loopx-capability-benchmark-toolkit/README.md)
+to run `loopx benchmark` or use registered analysis packs in Workspace.
+`loopx capability show benchmark-toolkit` reports availability and installation
+guidance. Normal discovery leaves benchmark execution unloaded.
+
 Goal-start help and preview use issue-fix command metadata without importing
 its execution providers. An explicit `--capability-route issue-fix` retains
 the existing candidate-preflight contract. The installed context qualification
@@ -66,7 +72,7 @@ new default, migration, automatic upgrade, PyPI publication or platform release.
 
 This is the first independently installable core-artifact slice of R1/M3 in the
 [small-kernel RFC](../../docs/architecture/rfcs/monorepo-distribution-split-v0.md).
-It still retains built-in capability implementations, policy helpers and several
+It still retains other built-in capability implementations, policy helpers and several
 host/CLI dependencies because the current imports are coupled. This makes it a
 workspace-free installation prerequisite, not a qualified minimal mechanism
 closure. Those dependencies are migration debt, not evidence that every

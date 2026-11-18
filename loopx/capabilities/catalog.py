@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
 from ..extensions.runtime import extension_catalog_entries
-from .benchmark_toolkit.catalog_entry import BENCHMARK_TOOLKIT_CATALOG_ENTRY
+from ..python_install_owner import BENCHMARK_TOOLKIT_DISTRIBUTION
+from .benchmark_toolkit.catalog_entry import (
+    BENCHMARK_TOOLKIT_CATALOG_ENTRY,
+    BENCHMARK_TOOLKIT_INSTALL_HINT,
+    benchmark_toolkit_installed,
+)
 from .integration_branch.catalog_entry import INTEGRATION_BRANCH_CATALOG_ENTRY
 from .repository_change_window.catalog_entry import (
     REPOSITORY_CHANGE_WINDOW_CATALOG_ENTRY,
@@ -155,7 +161,19 @@ def build_capability_registry(
             "ready": True,
         }
     )
+    # Split installs publish the matching toolkit owner's availability without
+    # importing the command group or its execution modules.
+    has_full_cli = find_spec("loopx.cli") is not None
+    has_benchmark = not has_full_cli and benchmark_toolkit_installed(builtin_cli_present=False)
+    if not has_full_cli:
+        registry.register_provider(
+            {"id": BENCHMARK_TOOLKIT_DISTRIBUTION, "origin": "builtin", "installed": has_benchmark}
+        )
     for record in BUILTIN_CAPABILITIES:
+        if record is BENCHMARK_TOOLKIT_CATALOG_ENTRY and not has_full_cli:
+            record = record | {"provider_id": BENCHMARK_TOOLKIT_DISTRIBUTION}
+            if not has_benchmark:
+                record["next_real_step"] = BENCHMARK_TOOLKIT_INSTALL_HINT
         registry.register_capability(record)
     for record in BUILTIN_CAPABILITIES:
         _register_declared_implementation_providers(registry, record)

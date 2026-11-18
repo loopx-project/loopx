@@ -27,7 +27,7 @@ def owned_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         path.write_text(content)
     items = [SimpleNamespace(as_posix=lambda name=name: "loopx/" + name,
                              locate=lambda name=name: package / name) for name in contents]
-    installed = SimpleNamespace(version=manifest.__version__, files=items,
+    installed = SimpleNamespace(name="loopx", version=manifest.__version__, files=items,
                                 read_text=lambda _name: None)
     monkeypatch.setattr(manifest, "__file__", str(package / "release_manifest.py"))
     monkeypatch.setattr(manifest, "distribution", lambda _name: installed)
@@ -134,3 +134,31 @@ def test_record_root_alias_keeps_exact_physical_ownership(owned_package):
         name = item.as_posix()
         item.locate = lambda name=name: alias / name
     assert manifest.release_runtime_identity() == before
+
+
+@pytest.mark.parametrize("change", ["owned", "wrong_version", "overlap", "absent"])
+def test_matching_workspace_owns_only_its_records(owned_package, monkeypatch, change):
+    _package, core = owned_package
+    original = manifest.release_runtime_identity()
+    core.name = "loopx-core"
+    asset = core.files.pop()
+    workspace = SimpleNamespace(name="loopx-workspace", version=manifest.__version__,
+                                files=[asset], read_text=lambda _name: None)
+    if change == "wrong_version":
+        workspace.version = "0.0.0"
+    elif change == "overlap":
+        workspace.files.append(core.files[0])
+
+    def lookup(name):
+        if name == "loopx-core":
+            return core
+        if name == "loopx-workspace" and change != "absent":
+            return workspace
+        raise manifest.PackageNotFoundError(name)
+
+    monkeypatch.setattr(manifest, "distribution", lookup)
+    result = manifest.release_runtime_identity()
+    if change == "owned":
+        assert result == original
+    else:
+        assert "package_fingerprint" not in result
