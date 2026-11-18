@@ -235,6 +235,7 @@ def qualify_replan_writeback(
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return the shared open obligation and the writeback's typed delta.
 
@@ -300,6 +301,7 @@ def qualify_replan_writeback(
         source_route=replan_source_route,
         guard_recorded_at=receipt_bound_guard_recorded_at,
         guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        goal_ref=goal_ref,
     )
     if capability_evidence is not None:
         status_payload["bounded_research_frontier"] = capability_evidence.frontier
@@ -463,6 +465,7 @@ def enforce_open_replan_writeback(
     effective_turn_cadence: dict[str, Any] | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Fail closed unless concrete typed evidence satisfies the selected replan.
 
@@ -494,6 +497,7 @@ def enforce_open_replan_writeback(
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
+        goal_ref=goal_ref,
     )
     if not obligation:
         if isinstance(semantic_delta, dict) and semantic_delta.get("accepted") is True:
@@ -558,6 +562,7 @@ def qualify_refresh_replan_writeback(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> RefreshReplanQualification:
     """Qualify one refresh's replan delta and accountable settlement outcome."""
 
@@ -630,6 +635,7 @@ def qualify_refresh_replan_writeback(
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
+        goal_ref=goal_ref,
     )
     if semantic_delta:
         if semantic_delta.get("retirement") and delivery_outcome != "outcome_gap":
