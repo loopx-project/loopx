@@ -9,7 +9,6 @@ from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from ..file_lock import exclusive_file_lock
 from ..paths import select_default_runtime_root
@@ -24,6 +23,9 @@ from .readiness import (
     resolve_runtime_entrypoint,
     runtime_process_environment,
 )
+
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 EXTENSION_STATE_SCHEMA_VERSION = "loopx_extension_state_v0"
 EXTENSION_OPERATION_SCHEMA_VERSION = "loopx_extension_operation_v0"
@@ -54,7 +56,7 @@ class ExtensionCapabilityResolution:
     enabled: bool | None
     doctor_verified: bool | None
     next_action: str | None
-    binding: Mapping[str, Any] | None = None
+    binding: PayloadView | None = None
 
     def __post_init__(self) -> None:
         if (self.status == "ready") != (self.binding is not None):
@@ -62,7 +64,7 @@ class ExtensionCapabilityResolution:
                 "a ready extension capability resolution requires exactly one binding"
             )
 
-    def public_readiness(self) -> dict[str, Any]:
+    def public_readiness(self) -> Payload:
         return {
             "schema_version": EXTENSION_PROVIDER_READINESS_SCHEMA_VERSION,
             "status": self.status,
@@ -83,14 +85,14 @@ def default_extension_state_file(runtime_root: str | Path | None = None) -> Path
     return root / "extensions" / "state.json"
 
 
-def _empty_state() -> dict[str, Any]:
+def _empty_state() -> Payload:
     return {
         "schema_version": EXTENSION_STATE_SCHEMA_VERSION,
         "extensions": {},
     }
 
 
-def _read_state(path: Path) -> dict[str, Any]:
+def _read_state(path: Path) -> Payload:
     if not path.exists():
         return _empty_state()
     try:
@@ -108,7 +110,33 @@ def _read_state(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _write_state(path: Path, payload: Mapping[str, Any]) -> None:
+def _state_extensions(state: Payload) -> Payload:
+    extensions = state.get("extensions")
+    if not isinstance(extensions, dict):
+        raise ValueError(
+            f"extension runtime state must use {EXTENSION_STATE_SCHEMA_VERSION}"
+        )
+    return extensions
+
+
+def _installed_entry(state: Payload, extension_id: str) -> Payload:
+    entry = _state_extensions(state).get(extension_id)
+    if not isinstance(entry, dict):
+        raise ValueError(f"extension `{extension_id}` is not installed")
+    return entry
+
+
+def _list_items(value: object) -> list[object]:
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _int_value(value: object, error: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(error)
+    return int(value)
+
+
+def _write_state(path: Path, payload: PayloadView) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     temporary.write_text(
@@ -119,7 +147,7 @@ def _write_state(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def _revision(manifest: Mapping[str, Any]) -> str:
+def _revision(manifest: PayloadView) -> str:
     serialized = json.dumps(
         manifest,
         ensure_ascii=False,
@@ -129,15 +157,7 @@ def _revision(manifest: Mapping[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
 
-def _runtime(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
-    return extension_runtime(manifest)
-
-
-def _manifest_snapshot(manifest: Mapping[str, Any]) -> dict[str, Any]:
-    return deepcopy(dict(manifest))
-
-
-def _entry_for_revision(entry: Mapping[str, Any], revision: str) -> dict[str, Any]:
+def _entry_for_revision(entry: PayloadView, revision: str) -> Payload:
     revisions = entry.get("revisions")
     if not isinstance(revisions, list):
         raise ValueError("extension revision history is invalid")
@@ -148,11 +168,11 @@ def _entry_for_revision(entry: Mapping[str, Any], revision: str) -> dict[str, An
 
 
 def _retain_revisions(
-    revisions: list[dict[str, Any]],
-    new_revision: dict[str, Any],
+    revisions: list[Payload],
+    new_revision: Payload,
     *,
     required_revision: str | None,
-) -> list[dict[str, Any]]:
+) -> list[Payload]:
     deduplicated = [
         item
         for item in revisions
@@ -172,7 +192,7 @@ def _retain_revisions(
     return retained
 
 
-def _verified_identities(entry: Mapping[str, Any], revision: str) -> list[str]:
+def _verified_identities(entry: PayloadView, revision: str) -> list[str]:
     if entry.get("doctor_verified_revision") != revision:
         return []
     identities = entry.get("doctor_verified_entrypoint_identities")
@@ -186,7 +206,7 @@ def _verified_identities(entry: Mapping[str, Any], revision: str) -> list[str]:
     ))[-MAX_VERIFIED_ENTRYPOINTS:]
 
 
-def _record_doctor(entry: dict[str, Any], revision: str, doctor: Mapping[str, Any]) -> None:
+def _record_doctor(entry: Payload, revision: str, doctor: PayloadView) -> None:
     identities = _verified_identities(entry, revision)
     identity = doctor.get("probed_entrypoint_identity")
     if doctor.get("verified") is True:
@@ -210,12 +230,14 @@ def install_extension(
     state_file: str | Path,
     operation: str = "install",
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     if operation not in {"install", "upgrade"}:
         raise ValueError("extension operation must be install or upgrade")
-    manifest = load_extension_manifest(manifest_path)
-    _runtime(manifest)
-    provider = manifest["provider"]
+    manifest: Payload = load_extension_manifest(manifest_path)
+    extension_runtime(manifest)
+    provider = manifest.get("provider")
+    if not isinstance(provider, Mapping):
+        raise ValueError("extension active manifest is incomplete")
     extension_id = str(provider["id"])
     revision = _revision(manifest)
     doctor, location = probe_runtime_location(manifest, execute=execute)
@@ -228,7 +250,7 @@ def install_extension(
     lock = exclusive_file_lock(path) if execute else nullcontext()
     with lock:
         state = _read_state(path)
-        extensions = state["extensions"]
+        extensions = _state_extensions(state)
         existing = extensions.get(extension_id)
         if operation == "install" and existing is not None:
             raise ValueError(f"extension `{extension_id}` is already installed")
@@ -245,7 +267,7 @@ def install_extension(
         enabled = bool(existing.get("enabled")) if isinstance(existing, dict) else True
         if execute:
             revisions = (
-                list(existing.get("revisions") or [])
+                [item for item in _list_items(existing.get("revisions")) if isinstance(item, dict)]
                 if isinstance(existing, dict)
                 else []
             )
@@ -254,19 +276,20 @@ def install_extension(
                 {
                     "revision": revision,
                     "version": provider["version"],
-                    "manifest": _manifest_snapshot(manifest),
+                    "manifest": deepcopy(dict(manifest)),
                     **({"entrypoint_path": location} if location is not None else {}),
                 },
                 required_revision=previous_revision,
             )
-            extensions[extension_id] = {
+            entry_payload: Payload = {
                 "id": extension_id,
                 "enabled": enabled,
                 "active_revision": revision,
                 "rollback_revision": previous_revision,
                 "revisions": revisions,
             }
-            _record_doctor(extensions[extension_id], revision, doctor)
+            _record_doctor(entry_payload, revision, doctor)
+            extensions[extension_id] = entry_payload
             _write_state(path, state)
             changed = True
     return {
@@ -290,17 +313,10 @@ def enable_extension(
     *,
     state_file: str | Path,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     path = Path(state_file).expanduser()
-    state = _read_state(path)
-    entry = state["extensions"].get(extension_id)
-    if not isinstance(entry, dict):
-        raise ValueError(f"extension `{extension_id}` is not installed")
-    active_revision = str(entry.get("active_revision") or "")
-    snapshot = _entry_for_revision(entry, active_revision)
-    manifest = snapshot.get("manifest")
-    if not isinstance(manifest, Mapping):
-        raise ValueError("extension active manifest is invalid")
+    entry = _installed_entry(_read_state(path), extension_id)
+    active_revision, snapshot, manifest = _active_snapshot_and_manifest(entry)
     already_enabled = bool(entry.get("enabled"))
     incompatibility = _active_manifest_incompatibility(entry)
     if incompatibility is not None:
@@ -310,40 +326,30 @@ def enable_extension(
     doctor, location = probe_runtime_location(
         manifest, location=snapshot.get("entrypoint_path"), execute=execute,
     )
-    if execute and not doctor["verified"]:
-        with exclusive_file_lock(path):
-            current_state = _read_state(path)
-            current_entry = current_state["extensions"].get(extension_id)
-            if (
-                not isinstance(current_entry, dict)
-                or current_entry.get("active_revision") != active_revision
-                or bool(current_entry.get("enabled")) != already_enabled
-            ):
-                raise ValueError("extension state changed during enable; retry")
-            _record_doctor(current_entry, active_revision, doctor)
-            _write_state(path, current_state)
-        raise ValueError(
-            f"extension `{extension_id}` enable doctor is not ready: {doctor['status']}"
-        )
     changed = False
     if execute:
         with exclusive_file_lock(path):
             current_state = _read_state(path)
-            current_entry = current_state["extensions"].get(extension_id)
+            current_entry = _state_extensions(current_state).get(extension_id)
             if (
                 not isinstance(current_entry, dict)
                 or current_entry.get("active_revision") != active_revision
                 or bool(current_entry.get("enabled")) != already_enabled
             ):
                 raise ValueError("extension state changed during enable; retry")
-            record_runtime_location(
-                _entry_for_revision(current_entry, active_revision),
-                location=location, expected=snapshot.get("entrypoint_path"),
-            )
-            current_entry["enabled"] = True
+            if doctor["verified"]:
+                record_runtime_location(
+                    _entry_for_revision(current_entry, active_revision),
+                    location=location, expected=snapshot.get("entrypoint_path"),
+                )
+                current_entry["enabled"] = True
+                changed = not already_enabled
             _record_doctor(current_entry, active_revision, doctor)
             _write_state(path, current_state)
-            changed = not already_enabled
+        if not doctor["verified"]:
+            raise ValueError(
+                f"extension `{extension_id}` enable doctor is not ready: {doctor['status']}"
+            )
     return {
         "ok": True,
         "schema_version": EXTENSION_OPERATION_SCHEMA_VERSION,
@@ -363,14 +369,12 @@ def disable_extension(
     *,
     state_file: str | Path,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     path = Path(state_file).expanduser()
     lock = exclusive_file_lock(path) if execute else nullcontext()
     with lock:
         state = _read_state(path)
-        entry = state["extensions"].get(extension_id)
-        if not isinstance(entry, dict):
-            raise ValueError(f"extension `{extension_id}` is not installed")
+        entry = _installed_entry(state, extension_id)
         changed = bool(entry.get("enabled"))
         if execute and changed:
             entry["enabled"] = False
@@ -393,12 +397,9 @@ def rollback_extension(
     *,
     state_file: str | Path,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     path = Path(state_file).expanduser()
-    state = _read_state(path)
-    entry = state["extensions"].get(extension_id)
-    if not isinstance(entry, dict):
-        raise ValueError(f"extension `{extension_id}` is not installed")
+    entry = _installed_entry(_read_state(path), extension_id)
     target_revision = str(entry.get("rollback_revision") or "")
     if not target_revision:
         raise ValueError(f"extension `{extension_id}` has no rollback revision")
@@ -430,9 +431,7 @@ def rollback_extension(
     if execute:
         with exclusive_file_lock(path):
             current_state = _read_state(path)
-            current_entry = current_state["extensions"].get(extension_id)
-            if not isinstance(current_entry, dict):
-                raise ValueError(f"extension `{extension_id}` is not installed")
+            current_entry = _installed_entry(current_state, extension_id)
             if (
                 current_entry.get("active_revision") != previous_revision
                 or current_entry.get("rollback_revision") != target_revision
@@ -470,14 +469,14 @@ def extension_status(
     *,
     state_file: str | Path,
     extension_id: str | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     state = _read_state(Path(state_file).expanduser())
-    entries = state["extensions"]
+    entries = _state_extensions(state)
     if extension_id is not None:
         entry = entries.get(extension_id)
         if not isinstance(entry, dict):
             raise ValueError(f"extension `{extension_id}` is not installed")
-        visible = [entry]
+        visible: list[Payload] = [entry]
     else:
         visible = [entry for entry in entries.values() if isinstance(entry, dict)]
     return {
@@ -495,7 +494,7 @@ def extension_status(
                 "doctor_verified": bool(entry.get("enabled"))
                 and _verified_entrypoint(entry) is not None
                 and _active_manifest_incompatibility(entry) is None,
-                "revision_count": len(entry.get("revisions") or []),
+                "revision_count": len(_list_items(entry.get("revisions"))),
             }
             for entry in visible
         ],
@@ -507,12 +506,9 @@ def doctor_installed_extension(
     *,
     state_file: str | Path,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     path = Path(state_file).expanduser()
-    state = _read_state(path)
-    entry = state["extensions"].get(extension_id)
-    if not isinstance(entry, dict):
-        raise ValueError(f"extension `{extension_id}` is not installed")
+    entry = _installed_entry(_read_state(path), extension_id)
     if not entry.get("enabled"):
         return {
             "ok": True,
@@ -525,21 +521,18 @@ def doctor_installed_extension(
             "failure_kind": None,
             "external_writes_performed": False,
         }
-    active_revision = str(entry.get("active_revision") or "")
-    snapshot = _entry_for_revision(entry, active_revision)
-    manifest = snapshot.get("manifest")
-    if not isinstance(manifest, Mapping):
-        raise ValueError("extension active manifest is invalid")
+    active_revision, snapshot, manifest = _active_snapshot_and_manifest(entry)
     incompatibility = _active_manifest_incompatibility(entry)
     if incompatibility is not None:
         # The snapshot was valid for the runtime that installed it; this
         # runtime's extension API moved. No probe can repair that, so the
         # doctor fails closed and, when executed, revokes the stale proof.
-        doctor = {
+        provider = manifest.get("provider")
+        doctor: Payload = {
             "ok": True,
             "schema_version": EXTENSION_DOCTOR_SCHEMA_VERSION,
             "extension_id": extension_id,
-            "version": manifest.get("provider", {}).get("version"),
+            "version": provider.get("version") if isinstance(provider, Mapping) else None,
             "status": "api_incompatible",
             "available": False,
             "verified": False,
@@ -549,7 +542,7 @@ def doctor_installed_extension(
             "reason": incompatibility,
             "external_writes_performed": False,
         }
-        location = None
+        location: str | None = None
     else:
         doctor, location = probe_runtime_location(
             manifest, location=snapshot.get("entrypoint_path"), execute=execute,
@@ -557,7 +550,7 @@ def doctor_installed_extension(
     if execute:
         with exclusive_file_lock(path):
             current_state = _read_state(path)
-            current_entry = current_state["extensions"].get(extension_id)
+            current_entry = _state_extensions(current_state).get(extension_id)
             if (
                 not isinstance(current_entry, dict)
                 or current_entry.get("active_revision") != active_revision
@@ -582,7 +575,7 @@ def doctor_enabled_extensions(
     *,
     state_file: str | Path,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     """Revalidate every enabled extension after a runtime release transition.
 
     Extension doctors are declared read-only provider probes. Running them as
@@ -594,7 +587,7 @@ def doctor_enabled_extensions(
     state = _read_state(path)
     extension_ids = sorted(
         str(extension_id)
-        for extension_id, entry in state["extensions"].items()
+        for extension_id, entry in _state_extensions(state).items()
         if isinstance(entry, Mapping) and entry.get("enabled")
     )
     doctors = [
@@ -630,7 +623,7 @@ def doctor_enabled_extensions(
 
 
 def _verified_entrypoint(
-    entry: Mapping[str, Any],
+    entry: PayloadView,
 ) -> ResolvedRuntimeEntrypoint | None:
     active_revision = str(entry.get("active_revision") or "")
     if entry.get("doctor_verified_revision") != active_revision:
@@ -654,16 +647,20 @@ def _verified_entrypoint(
     return identity
 
 
-def _active_manifest(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+def _active_snapshot_and_manifest(entry: PayloadView) -> tuple[str, Payload, PayloadView]:
     active_revision = str(entry.get("active_revision") or "")
     snapshot = _entry_for_revision(entry, active_revision)
     manifest = snapshot.get("manifest")
     if not isinstance(manifest, Mapping):
         raise ValueError("extension active manifest is invalid")
-    return manifest
+    return active_revision, snapshot, manifest
 
 
-def _active_manifest_incompatibility(entry: Mapping[str, Any]) -> str | None:
+def _active_manifest(entry: PayloadView) -> PayloadView:
+    return _active_snapshot_and_manifest(entry)[2]
+
+
+def _active_manifest_incompatibility(entry: PayloadView) -> str | None:
     """Re-check the installed snapshot against the runtime reading it.
 
     `install`/`upgrade` validate `requires_loopx_api` when they load the
@@ -685,15 +682,18 @@ def extension_catalog_entries(
     extension_manifest_paths: Iterable[str | Path] = (),
     *,
     state_file: str | Path | None = None,
-) -> list[dict[str, Any]]:
+) -> list[Payload]:
     """Compose declared manifests with installed runtime lifecycle state."""
 
-    manifests: dict[str, Mapping[str, Any]] = {}
-    lifecycle: dict[str, dict[str, Any]] = {}
-    manifest: Mapping[str, Any]
+    manifests: dict[str, PayloadView] = {}
+    lifecycle: dict[str, Payload] = {}
+    manifest: PayloadView
     for manifest_path in extension_manifest_paths:
         manifest = load_extension_manifest(manifest_path)
-        extension_id = str(manifest["provider"]["id"])
+        provider = manifest.get("provider")
+        if not isinstance(provider, Mapping):
+            raise ValueError("extension active manifest is invalid")
+        extension_id = str(provider["id"])
         if extension_id in manifests:
             raise ValueError(f"duplicate capability provider `{extension_id}`")
         manifests[extension_id] = manifest
@@ -706,7 +706,7 @@ def extension_catalog_entries(
 
     if state_file is not None:
         state = _read_state(Path(state_file).expanduser())
-        for extension_id, entry in state["extensions"].items():
+        for extension_id, entry in _state_extensions(state).items():
             if not isinstance(entry, Mapping):
                 raise ValueError(f"extension `{extension_id}` runtime entry is invalid")
             manifest = _active_manifest(entry)
@@ -736,12 +736,13 @@ def extension_catalog_entries(
                 "active_revision": active_revision,
             }
 
-    entries: list[dict[str, Any]] = []
+    entries: list[Payload] = []
     for extension_id, manifest in manifests.items():
-        normalized = deepcopy(dict(manifest))
-        normalized["provider"] = (
-            deepcopy(dict(manifest["provider"])) | lifecycle[extension_id]
-        )
+        provider = manifest.get("provider")
+        if not isinstance(provider, Mapping):
+            raise ValueError("extension active manifest is invalid")
+        normalized: Payload = deepcopy(dict(manifest))
+        normalized["provider"] = deepcopy(dict(provider)) | lifecycle[extension_id]
         entries.append(normalized)
     return entries
 
@@ -762,7 +763,7 @@ def resolve_capability_extension_id(
         if _matching_capability_implementations(
             entry, capability_id=capability_id, protocol=protocol
         ):
-            matching.append(str(entry["provider"]["id"]))
+            matching.append(str(provider["id"]))
     if not matching:
         raise ValueError(
             f"no enabled, doctor-ready extension implements `{capability_id}` "
@@ -776,15 +777,12 @@ def resolve_capability_extension_id(
     return matching[0]
 
 
-def _resolved_active_extension(
+def _active_entry_resolution(
     extension_id: str,
+    entry: PayloadView,
     *,
-    state_file: str | Path,
-) -> tuple[str, ResolvedRuntimeEntrypoint, Mapping[str, Any]]:
-    state = _read_state(Path(state_file).expanduser())
-    entry = state["extensions"].get(extension_id)
-    if not isinstance(entry, dict):
-        raise ValueError(f"extension `{extension_id}` is not installed")
+    verified_entrypoint: ResolvedRuntimeEntrypoint | None = None,
+) -> tuple[str, ResolvedRuntimeEntrypoint, PayloadView]:
     if not entry.get("enabled"):
         raise ValueError(f"extension `{extension_id}` is disabled")
     incompatibility = _active_manifest_incompatibility(entry)
@@ -793,14 +791,22 @@ def _resolved_active_extension(
             f"{incompatibility}; upgrade to a compatible manifest or roll back"
         )
     active_revision = str(entry.get("active_revision") or "")
-    verified_entrypoint = _verified_entrypoint(entry)
-    if verified_entrypoint is None:
+    entrypoint = verified_entrypoint or _verified_entrypoint(entry)
+    if entrypoint is None:
         raise ValueError(
             f"extension `{extension_id}` doctor readiness is stale; run "
             f"`loopx extension doctor {extension_id} --execute`"
         )
-    manifest = _active_manifest(entry)
-    return active_revision, verified_entrypoint, manifest
+    return active_revision, entrypoint, _active_manifest(entry)
+
+
+def _resolved_active_extension(
+    extension_id: str,
+    *,
+    state_file: str | Path,
+) -> tuple[str, ResolvedRuntimeEntrypoint, PayloadView]:
+    entry = _installed_entry(_read_state(Path(state_file).expanduser()), extension_id)
+    return _active_entry_resolution(extension_id, entry)
 
 
 def resolve_extension_activation(
@@ -808,7 +814,7 @@ def resolve_extension_activation(
     *,
     state_file: str | Path,
     required_permissions: Sequence[str] = (),
-) -> dict[str, Any]:
+) -> Payload:
     """Resolve one enabled, revision-bound extension compatibility delegate."""
 
     active_revision, _, manifest = _resolved_active_extension(
@@ -820,7 +826,7 @@ def resolve_extension_activation(
         raise ValueError("extension active manifest is incomplete")
     declared_permissions = {
         str(permission)
-        for permission in provider.get("permissions") or []
+        for permission in _list_items(provider.get("permissions"))
         if str(permission).strip()
     }
     required = {
@@ -844,6 +850,62 @@ def resolve_extension_activation(
     }
 
 
+def _build_runtime_binding(
+    extension_id: str,
+    *,
+    active_revision: str,
+    verified_entrypoint: ResolvedRuntimeEntrypoint,
+    manifest: PayloadView,
+    protocol: str,
+    permission: str,
+    capability_id: str | None = None,
+) -> Payload:
+    provider = manifest.get("provider")
+    runtime = extension_runtime(manifest)
+    if not isinstance(provider, Mapping) or (
+        capability_id is not None and not isinstance(manifest.get("implementations"), list)
+    ):
+        raise ValueError("extension active manifest is incomplete")
+    if permission not in _list_items(provider.get("permissions")):
+        raise ValueError(
+            f"extension `{extension_id}` does not declare permission `{permission}`"
+        )
+    if permission not in _list_items(runtime.get("required_permissions")):
+        raise ValueError(
+            f"extension `{extension_id}` runtime does not require permission "
+            f"`{permission}`"
+        )
+    if capability_id is not None:
+        matching = _matching_capability_implementations(
+            manifest, capability_id=capability_id, protocol=protocol
+        )
+        if len(matching) != 1 or runtime.get("protocol") != protocol:
+            raise ValueError(
+                f"extension `{extension_id}` does not implement `{capability_id}` "
+                f"with protocol `{protocol}`"
+            )
+    elif runtime.get("protocol") != protocol:
+        raise ValueError(
+            f"extension `{extension_id}` does not expose runtime protocol `{protocol}`"
+        )
+    args = _list_items(runtime.get("args"))
+    return {
+        "schema_version": EXTENSION_BINDING_SCHEMA_VERSION,
+        "extension_id": extension_id,
+        "provider_version": provider.get("version"),
+        "revision": active_revision,
+        "protocol": protocol,
+        "argv": [*verified_entrypoint.argv_prefix, *args],
+        "environment_path_prefix": verified_entrypoint.path_prefix,
+        "doctor_argv": [
+            *verified_entrypoint.argv_prefix,
+            *args,
+            *_list_items(runtime.get("doctor_args")),
+        ],
+        "timeout_seconds": runtime["timeout_seconds"],
+    }
+
+
 def resolve_extension_binding(
     extension_id: str,
     *,
@@ -851,11 +913,8 @@ def resolve_extension_binding(
     capability_id: str,
     protocol: str,
     permission: str,
-) -> dict[str, Any]:
-    state = _read_state(Path(state_file).expanduser())
-    entry = state["extensions"].get(extension_id)
-    if not isinstance(entry, dict):
-        raise ValueError(f"extension `{extension_id}` is not installed")
+) -> Payload:
+    entry = _installed_entry(_read_state(Path(state_file).expanduser()), extension_id)
     return _capability_binding_from_entry(
         extension_id,
         entry=entry,
@@ -868,93 +927,34 @@ def resolve_extension_binding(
 def _capability_binding_from_entry(
     extension_id: str,
     *,
-    entry: Mapping[str, Any],
+    entry: PayloadView,
     capability_id: str,
     protocol: str,
     permission: str,
     verified_entrypoint: ResolvedRuntimeEntrypoint | None = None,
-) -> dict[str, Any]:
-    if not entry.get("enabled"):
-        raise ValueError(f"extension `{extension_id}` is disabled")
-    incompatibility = _active_manifest_incompatibility(entry)
-    if incompatibility is not None:
-        raise ValueError(
-            f"{incompatibility}; upgrade to a compatible manifest or roll back"
-        )
-    active_revision = str(entry.get("active_revision") or "")
-    verified_entrypoint = verified_entrypoint or _verified_entrypoint(entry)
-    if verified_entrypoint is None:
-        raise ValueError(
-            f"extension `{extension_id}` doctor readiness is stale; run "
-            f"`loopx extension doctor {extension_id} --execute`"
-        )
-    manifest = _active_manifest(entry)
-    provider = manifest.get("provider")
-    runtime = _runtime(manifest)
-    implementations = manifest.get("implementations")
-    if not isinstance(provider, Mapping) or not isinstance(implementations, list):
-        raise ValueError("extension active manifest is incomplete")
-    if permission not in (provider.get("permissions") or []):
-        raise ValueError(
-            f"extension `{extension_id}` does not declare permission `{permission}`"
-        )
-    if permission not in (runtime.get("required_permissions") or []):
-        raise ValueError(
-            f"extension `{extension_id}` runtime does not require permission "
-            f"`{permission}`"
-        )
-    matching = _matching_capability_implementations(
-        manifest, capability_id=capability_id, protocol=protocol
+) -> Payload:
+    active_revision, entrypoint, manifest = _active_entry_resolution(
+        extension_id,
+        entry,
+        verified_entrypoint=verified_entrypoint,
     )
-    if len(matching) != 1 or runtime.get("protocol") != protocol:
-        raise ValueError(
-            f"extension `{extension_id}` does not implement `{capability_id}` "
-            f"with protocol `{protocol}`"
-        )
-    return {
-        "schema_version": EXTENSION_BINDING_SCHEMA_VERSION,
-        "extension_id": extension_id,
-        "provider_version": provider.get("version"),
-        "revision": active_revision,
-        "protocol": protocol,
-        "argv": [*verified_entrypoint.argv_prefix, *(runtime.get("args") or [])],
-        "environment_path_prefix": verified_entrypoint.path_prefix,
-        "doctor_argv": [
-            *verified_entrypoint.argv_prefix,
-            *(runtime.get("args") or []),
-            *(runtime.get("doctor_args") or []),
-        ],
-        "timeout_seconds": runtime["timeout_seconds"],
-    }
-
-
-def _optional_binding_resolution(
-    *,
-    status: str,
-    extension_id: str | None,
-    installed: bool | None,
-    enabled: bool | None,
-    doctor_verified: bool | None,
-    next_action: str | None,
-    binding: Mapping[str, Any] | None = None,
-) -> ExtensionCapabilityResolution:
-    return ExtensionCapabilityResolution(
-        status=status,
-        extension_id=extension_id,
-        installed=installed,
-        enabled=enabled,
-        doctor_verified=doctor_verified,
-        next_action=next_action,
-        binding=dict(binding) if binding is not None else None,
+    return _build_runtime_binding(
+        extension_id,
+        active_revision=active_revision,
+        verified_entrypoint=entrypoint,
+        manifest=manifest,
+        protocol=protocol,
+        permission=permission,
+        capability_id=capability_id,
     )
 
 
 def _matching_capability_implementations(
-    manifest: Mapping[str, Any],
+    manifest: PayloadView,
     *,
     capability_id: str,
     protocol: str,
-) -> list[Mapping[str, Any]]:
+) -> list[PayloadView]:
     implementations = manifest.get("implementations")
     if not isinstance(implementations, list):
         return []
@@ -970,7 +970,7 @@ def _matching_capability_implementations(
 def _optional_binding_for_entry(
     extension_id: str,
     *,
-    entry: Mapping[str, Any],
+    entry: PayloadView,
     capability_id: str,
     protocol: str,
     permission: str,
@@ -985,7 +985,7 @@ def _optional_binding_for_entry(
             manifest, capability_id=capability_id, protocol=protocol
         )
     ):
-        return _optional_binding_resolution(
+        return ExtensionCapabilityResolution(
             status="extension_incompatible",
             extension_id=extension_id,
             installed=True,
@@ -994,7 +994,7 @@ def _optional_binding_for_entry(
             next_action="install_compatible_extension",
         )
     if not entry.get("enabled"):
-        return _optional_binding_resolution(
+        return ExtensionCapabilityResolution(
             status=EXTENSION_DISABLED_STATUS,
             extension_id=extension_id,
             installed=True,
@@ -1003,7 +1003,7 @@ def _optional_binding_for_entry(
             next_action="enable_extension",
         )
     if verified_entrypoint is None:
-        return _optional_binding_resolution(
+        return ExtensionCapabilityResolution(
             status=EXTENSION_DOCTOR_NOT_READY_STATUS,
             extension_id=extension_id,
             installed=True,
@@ -1021,7 +1021,7 @@ def _optional_binding_for_entry(
             verified_entrypoint=verified_entrypoint,
         )
     except ValueError:
-        return _optional_binding_resolution(
+        return ExtensionCapabilityResolution(
             status="extension_incompatible",
             extension_id=extension_id,
             installed=True,
@@ -1029,7 +1029,7 @@ def _optional_binding_for_entry(
             doctor_verified=True,
             next_action="install_compatible_extension",
         )
-    return _optional_binding_resolution(
+    return ExtensionCapabilityResolution(
         status="ready",
         extension_id=extension_id,
         installed=True,
@@ -1052,11 +1052,11 @@ def resolve_optional_capability_binding(
 
     try:
         state = _read_state(Path(state_file).expanduser())
-        entries = state["extensions"]
+        entries = _state_extensions(state)
         if extension_id is not None:
             entry = entries.get(extension_id)
             if not isinstance(entry, Mapping):
-                return _optional_binding_resolution(
+                return ExtensionCapabilityResolution(
                     status="extension_not_installed",
                     extension_id=extension_id,
                     installed=False,
@@ -1072,7 +1072,7 @@ def resolve_optional_capability_binding(
                 permission=permission,
             )
 
-        candidates: list[tuple[str, Mapping[str, Any]]] = []
+        candidates: list[tuple[str, PayloadView]] = []
         for candidate_id, candidate_entry in entries.items():
             if not isinstance(candidate_entry, Mapping):
                 raise ValueError(
@@ -1094,7 +1094,7 @@ def resolve_optional_capability_binding(
             for candidate_id, candidate_entry in candidates
         ]
     except (OSError, ValueError):
-        return _optional_binding_resolution(
+        return ExtensionCapabilityResolution(
             status="extension_state_unavailable",
             extension_id=extension_id,
             installed=None,
@@ -1107,7 +1107,7 @@ def resolve_optional_capability_binding(
     if len(ready) == 1:
         return ready[0]
     if len(ready) > 1:
-        return _optional_binding_resolution(
+        return ExtensionCapabilityResolution(
             status="extension_provider_ambiguous",
             extension_id=None,
             installed=True,
@@ -1117,7 +1117,7 @@ def resolve_optional_capability_binding(
         )
     if len(resolutions) == 1:
         return resolutions[0]
-    return _optional_binding_resolution(
+    return ExtensionCapabilityResolution(
         status=(
             "extension_provider_not_installed"
             if not resolutions
@@ -1141,49 +1141,25 @@ def resolve_extension_runtime_binding(
     state_file: str | Path,
     protocol: str,
     permission: str,
-) -> dict[str, Any]:
+) -> Payload:
     """Resolve an extension runtime without coupling dispatch to capability metadata."""
 
     active_revision, verified_entrypoint, manifest = _resolved_active_extension(
         extension_id,
         state_file=state_file,
     )
-    provider = manifest.get("provider")
-    runtime = _runtime(manifest)
-    if not isinstance(provider, Mapping):
-        raise ValueError("extension active manifest is incomplete")
-    if permission not in (provider.get("permissions") or []):
-        raise ValueError(
-            f"extension `{extension_id}` does not declare permission `{permission}`"
-        )
-    if permission not in (runtime.get("required_permissions") or []):
-        raise ValueError(
-            f"extension `{extension_id}` runtime does not require permission "
-            f"`{permission}`"
-        )
-    if runtime.get("protocol") != protocol:
-        raise ValueError(
-            f"extension `{extension_id}` does not expose runtime protocol `{protocol}`"
-        )
-    return {
-        "schema_version": EXTENSION_BINDING_SCHEMA_VERSION,
-        "extension_id": extension_id,
-        "provider_version": provider.get("version"),
-        "revision": active_revision,
-        "protocol": protocol,
-        "argv": [*verified_entrypoint.argv_prefix, *(runtime.get("args") or [])],
-        "environment_path_prefix": verified_entrypoint.path_prefix,
-        "doctor_argv": [
-            *verified_entrypoint.argv_prefix,
-            *(runtime.get("args") or []),
-            *(runtime.get("doctor_args") or []),
-        ],
-        "timeout_seconds": runtime["timeout_seconds"],
-    }
+    return _build_runtime_binding(
+        extension_id,
+        active_revision=active_revision,
+        verified_entrypoint=verified_entrypoint,
+        manifest=manifest,
+        protocol=protocol,
+        permission=permission,
+    )
 
 
 def _serialize_extension_request(
-    request: Mapping[str, Any],
+    request: PayloadView,
     *,
     operation: str,
 ) -> bytes:
@@ -1215,9 +1191,9 @@ def run_standalone_extension(
     extension_id: str,
     *,
     state_file: str | Path,
-    request: Mapping[str, Any],
+    request: PayloadView,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     """Run one lifecycle-gated standalone extension over bounded JSON stdin/stdout."""
 
     active_revision, verified_entrypoint, manifest = _resolved_active_extension(
@@ -1225,7 +1201,7 @@ def run_standalone_extension(
         state_file=state_file,
     )
     provider = manifest.get("provider")
-    runtime = _runtime(manifest)
+    runtime = extension_runtime(manifest)
     if not isinstance(provider, Mapping):
         raise ValueError("extension active manifest is incomplete")
     if manifest.get("capabilities") or manifest.get("implementations"):
@@ -1237,9 +1213,11 @@ def run_standalone_extension(
         raise ValueError("extension run request must be a JSON object")
 
     required_permissions = [
-        str(value) for value in runtime.get("required_permissions") or []
+        str(value) for value in _list_items(runtime.get("required_permissions"))
     ]
-    declared_permissions = {str(value) for value in provider.get("permissions") or []}
+    declared_permissions = {
+        str(value) for value in _list_items(provider.get("permissions"))
+    }
     missing_permissions = sorted(set(required_permissions) - declared_permissions)
     if missing_permissions:
         raise ValueError(
@@ -1256,7 +1234,7 @@ def run_standalone_extension(
 
     request_bytes = _serialize_extension_request(request, operation="run")
 
-    receipt: dict[str, Any] = {
+    receipt: Payload = {
         "ok": True,
         "schema_version": EXTENSION_RUN_SCHEMA_VERSION,
         "operation": "run",
@@ -1273,12 +1251,12 @@ def run_standalone_extension(
     if not execute:
         return receipt
 
-    argv = [*verified_entrypoint.argv_prefix, *(runtime.get("args") or [])]
+    argv = [*verified_entrypoint.argv_prefix, *(str(v) for v in _list_items(runtime.get("args")))]
     try:
         completed = run_capped_process(
             argv,
             stdin=request_bytes,
-            timeout_seconds=int(runtime["timeout_seconds"]),
+            timeout_seconds=_int_value(runtime.get("timeout_seconds"), "extension active manifest is incomplete"),
             output_limit_bytes=MAX_EXTENSION_RESPONSE_BYTES,
             env=runtime_process_environment(verified_entrypoint.path_prefix),
         )
@@ -1333,7 +1311,7 @@ def resolve_capability_binding(
     capability_id: str,
     protocol: str,
     permission: str,
-) -> dict[str, Any]:
+) -> Payload:
     extension_id = resolve_capability_extension_id(
         state_file=state_file,
         capability_id=capability_id,
@@ -1349,7 +1327,7 @@ def resolve_capability_binding(
 
 
 def _runtime_binding_invocation(
-    binding: Mapping[str, Any],
+    binding: PayloadView,
 ) -> tuple[list[str], float]:
     if binding.get("schema_version") != EXTENSION_BINDING_SCHEMA_VERSION:
         raise ValueError(
@@ -1372,22 +1350,25 @@ def _runtime_binding_invocation(
 
 
 def execute_extension_runtime_binding(
-    binding: Mapping[str, Any],
+    binding: PayloadView,
     *,
-    request: Mapping[str, Any],
+    request: PayloadView,
     environment: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     """Execute a resolved binding after its capability authorizes the request."""
 
     argv, timeout_seconds = _runtime_binding_invocation(binding)
     request_bytes = _serialize_extension_request(request, operation="runtime")
+    path_prefix = binding.get("environment_path_prefix")
+    if path_prefix is not None and not isinstance(path_prefix, str):
+        raise ValueError("extension runtime search directory must be absolute")
     try:
         completed = run_capped_process(
             argv,
             stdin=request_bytes,
             timeout_seconds=timeout_seconds,
             output_limit_bytes=MAX_EXTENSION_RESPONSE_BYTES,
-            env=runtime_process_environment(binding.get("environment_path_prefix"), environment),
+            env=runtime_process_environment(path_prefix, environment),
         )
     except OSError as exc:
         raise RuntimeError("extension provider execution failed") from exc
