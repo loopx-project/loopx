@@ -233,6 +233,7 @@ def qualify_replan_writeback(
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -300,6 +301,7 @@ def qualify_replan_writeback(
         source_route=replan_source_route,
         guard_recorded_at=receipt_bound_guard_recorded_at,
         guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        admission_event_id=admission_event_id,
     )
     if capability_evidence is not None:
         status_payload["bounded_research_frontier"] = capability_evidence.frontier
@@ -458,6 +460,7 @@ def enforce_open_replan_writeback(
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
@@ -495,6 +498,7 @@ def enforce_open_replan_writeback(
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
+        admission_event_id=admission_event_id,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
     )
     if not obligation:
@@ -544,6 +548,7 @@ def qualify_refresh_replan_writeback(
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    admission_event_id: str | None = None,
     newest_first_runs: list[dict[str, Any]],
     state_text: str,
     goal_id: str,
@@ -631,6 +636,7 @@ def qualify_refresh_replan_writeback(
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
+        admission_event_id=admission_event_id,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
     )
     if semantic_delta:
