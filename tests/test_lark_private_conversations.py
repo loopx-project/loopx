@@ -1067,6 +1067,111 @@ def source_https(monkeypatch):
     return serve
 
 
+@pytest.mark.parametrize("fault", ["none", "modified", "foreign_path", "symlink", "stopped", "revoked"])
+def test_completed_local_reply_images_use_original_turn_and_provider(ordinary, source_https, fault):  # noqa: F811
+    from hashlib import sha256
+
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    _, _, contexts, _, capture, fake, workspace = ordinary
+    contexts.workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    io = ImageIO(provider)
+    transport.runner = io
+    public_url = "https://source.example/chart.png"
+    fetched, _ = source_https(lambda _: (None, "image/png", PNG_BYTES))
+    second_image = PNG_BYTES + b"second"
+    foreign = workspace.parent / "outside.png"
+    foreign.write_bytes(PNG_BYTES)
+
+    source = fake.read_text()
+    anchor = "        response = 'Visible runtime response."
+    assert source.count(anchor) == 1
+    native = (
+        "        import pathlib, re\n"
+        "        prompt = request['params']['input'][0]['text']\n"
+        "        directory = re.search(r'under (/[^\\n]+?/\\.local/loopx-reply-images/[a-f0-9]{32}) and reference', prompt)[1]\n"
+        "        directory = pathlib.Path(directory)\n"
+        "        directory.mkdir(parents=True, exist_ok=True)\n"
+        "        first = directory / 'original-first.png'\n"
+        "        second = directory / 'original-second.png'\n"
+        f"        if {fault!r} == 'foreign_path':\n"
+        f"            first = pathlib.Path({str(foreign)!r})\n"
+        f"        elif {fault!r} == 'symlink':\n"
+        f"            first.symlink_to({str(foreign)!r})\n"
+        "        else:\n"
+        f"            first.write_bytes({PNG_BYTES!r})\n"
+        f"        second.write_bytes({second_image!r})\n"
+        "        authored = f'Original answer.\\n\\n![First figure]({first})'\n"
+        f"        if {fault!r} == 'none':\n"
+        f"            authored += '\\n\\n![Public figure]({public_url})'\n"
+        "        authored += f'\\n\\n![Second figure](<{second}>)'\n"
+    )
+    fake.write_text(source.replace(anchor, native + anchor).replace(
+        '"message": "Runtime response.",', '"message": authored,', 1))
+    try:
+        source = provider.event("notes-app", "local-answer-images",
+            f"Show the requested figures, including {public_url}" if fault == "none" else "Show the requested figures")
+        assert transport.admit("notes-app", source)["status"] == "durably_accepted"
+        request = transport.core.pending()[0]
+        sid, tid, ref = (request[key] for key in ("session_id", "turn_id", "request_ref"))
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed", completed
+        response = completed["response"]
+        assert str(workspace) not in json.dumps(response) and str(foreign) not in json.dumps(response)
+        first = {"name": "original-first.png", "sha256": sha256(PNG_BYTES).hexdigest()}
+        second = {"name": "original-second.png", "sha256": sha256(second_image).hexdigest()}
+        expected = [first, public_url, second] if fault == "none" else [
+            None if fault in {"foreign_path", "symlink"} else first, second]
+        assert response["answer_image_plan"] == expected
+        assert response["message"].startswith("Original answer.\n\nFirst figure")
+        assert response["message"].endswith("Second figure")
+        assert [row["text"] for row in store.messages(sid) if row["role"] == "agent"] == [response["message"]]
+
+        path = transport.root / f"{ref}.json"
+        assert transport.reconcile_request(path) == 0
+        text_only = json.loads(path.read_text())
+        assert text_only["deliveries"]["terminal"]["verified"] is True
+        assert fetched == [] and io.uploads == 0
+        assert not transport.core.read_request(ref).get("delivery_verified", False)
+        if fault == "modified":
+            (workspace / ".local/loopx-reply-images" / tid / first["name"]).write_bytes(second_image)
+        if fault == "stopped":
+            transport.admit("notes-app", provider.event("notes-app", "stop-local-media", "/stop"))
+        if fault == "revoked":
+            contexts.workspace_grant = "workspace_read"
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                            runner=io, cli_bin="lark-cli")
+        success = fault == "none"
+        assert restarted.reconcile_request(path) == int(success)
+        saved = json.loads(path.read_text())
+        expected_status = "delivered" if success else "unverified"
+        assert saved["answer_images"]["status"] in (
+            {expected_status, "pending"} if fault == "revoked" else {expected_status})
+        assert restarted.core.read_request(ref).get("delivery_verified", False) is success
+        sent = [row for mid, row in provider.messages.items()
+                if mid.startswith("om_out_") and row["chat_id"] == source["chat_id"]]
+        wire = json.dumps(sent, ensure_ascii=False)
+        assert str(workspace) not in wire and str(foreign) not in wire
+        assert "First figure" in wire and "Second figure" in wire
+        assert ("图片尚未核验送达" in wire) == (not success and fault not in {"stopped", "revoked"})
+        rendered_keys = []
+        for row in sent:
+            if row["msg_type"] == "post":
+                for line in json.loads(row["body"]["content"])["zh_cn"]["content"]:
+                    rendered_keys.extend(node["image_key"] for node in line if node["tag"] == "img")
+        assert [io.resources[key] for key in rendered_keys] == ([PNG_BYTES, PNG_BYTES, second_image] if success else [])
+        assert fetched == ([public_url] if success else [])
+        assert io.uploads == (3 if success else 0)
+        before = list(provider.writes)
+        assert restarted.reconcile_request(path) == 0
+        assert provider.writes == before
+        assert sum(json.loads(line).get("method") == "turn/start" for line in capture.read_text().splitlines()) == 1
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request",
     "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
     "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",

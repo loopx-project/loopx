@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, cast
-
+from collections.abc import Callable, Mapping, Sequence
 import re
 
 from .control_plane.goals.active_state_metadata import todo_role_for_heading
@@ -111,19 +110,59 @@ TODO_METADATA_KEYS = (
     "superseded_by",
 )
 
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
-def _compact_text(value: Any, *, limit: int = 220) -> str:
-    text = " ".join(str(value or "").strip().split())
+_TODO_FIELD_NORMALIZERS: tuple[tuple[str, Callable[[object], object], bool], ...] = (
+    ("task_domain", normalize_todo_task_domain, False),
+    ("capability_binding_ref", normalize_todo_capability_binding_ref, False),
+    ("task_repository", normalize_todo_task_repository, False),
+    ("continuation_policy", normalize_todo_continuation_policy, False),
+    ("required_write_scopes", normalize_required_write_scopes, False),
+    ("required_capabilities", normalize_required_capabilities, False),
+    ("target_capabilities", normalize_target_capabilities, False),
+    ("decision_scope", normalize_todo_decision_scope, False),
+    ("required_decision_scopes", normalize_todo_required_decision_scopes, False),
+    ("claimed_by", normalize_todo_claimed_by, False),
+    ("bound_agent", normalize_todo_bound_agent, False),
+    ("goal_bound", normalize_todo_goal_bound, True),
+    ("blocks_agent", normalize_todo_blocks_agent, False),
+    ("excluded_agents", normalize_todo_excluded_agents, False),
+    ("global_gate", normalize_todo_global_gate, True),
+    ("unblocks_todo_id", normalize_todo_id, False),
+    ("successor_todo_ids", normalize_todo_id_list, False),
+    ("resume_when", normalize_todo_resume_when, False),
+    ("no_followup", normalize_todo_no_followup, True),
+)
+
+
+def _as_mapping(value: object) -> PayloadView | None:
+    return value if isinstance(value, Mapping) else None
+
+
+def _as_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
+def _compact_text(value: object, *, limit: int = 220) -> str:
+    text = compact_todo_text(value)
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
 
 
-def _action_projection_text(value: Any, *, limit: int = 320) -> str:
+def _action_projection_text(value: object, *, limit: int = 320) -> str:
     return _compact_text(value, limit=limit)
 
 
-def _action_projection_compare_text(value: Any) -> str:
+def _lane_action_text(agent_lane_next_action: object) -> str:
+    lane = _as_mapping(agent_lane_next_action)
+    return _action_projection_text(
+        lane.get("text") if lane is not None else agent_lane_next_action
+    )
+
+
+def _action_projection_compare_text(value: object) -> str:
     text = re.sub(r"\s+", " ", str(value or "").strip().lower())
     text = re.sub(r"^todo_[0-9a-z]+:\s*", "", text)
     text = re.sub(r"^p[0-9]+:\s*", "", text)
@@ -131,7 +170,7 @@ def _action_projection_compare_text(value: Any) -> str:
     return re.sub(r"^(?:agent|user|owner|codex)\s*:\s*", "", text)
 
 
-def _action_projection_label(value: Any) -> str:
+def _action_projection_label(value: object) -> str:
     text = _action_projection_compare_text(value)
     match = re.match(r"([^:]{8,120}):", text)
     if match:
@@ -139,7 +178,7 @@ def _action_projection_label(value: Any) -> str:
     return text[:120].strip()
 
 
-def _action_projection_prefix(value: Any) -> str:
+def _action_projection_prefix(value: object) -> str:
     text = _action_projection_compare_text(value)
     text = re.split(r"[,.;:，。；：]", text, maxsplit=1)[0].strip()
     words = text.split()
@@ -148,22 +187,19 @@ def _action_projection_prefix(value: Any) -> str:
     return text
 
 
-def actions_are_projection_aligned(left: Any, right: Any) -> bool:
+def actions_are_projection_aligned(left: object, right: object) -> bool:
     left_text = _action_projection_compare_text(left)
     right_text = _action_projection_compare_text(right)
     if not left_text or not right_text:
         return False
     if left_text == right_text:
         return True
-    left_label = _action_projection_label(left_text)
-    right_label = _action_projection_label(right_text)
-    for label, text in ((left_label, right_text), (right_label, left_text)):
-        if label and len(label) >= 8 and label in text:
-            return True
-    left_prefix = _action_projection_prefix(left_text)
-    right_prefix = _action_projection_prefix(right_text)
-    for prefix, text in ((left_prefix, right_text), (right_prefix, left_text)):
-        if prefix and len(prefix) >= 24 and prefix in text:
+    for extractor, min_len in ((_action_projection_label, 8), (_action_projection_prefix, 24)):
+        left_part = extractor(left_text)
+        right_part = extractor(right_text)
+        if (len(left_part) >= min_len and left_part in right_text) or (
+            len(right_part) >= min_len and right_part in left_text
+        ):
             return True
     shorter, longer = sorted((left_text, right_text), key=len)
     return len(shorter) >= 32 and shorter in longer
@@ -171,52 +207,50 @@ def actions_are_projection_aligned(left: Any, right: Any) -> bool:
 
 def next_action_projection_warning(
     *,
-    active_state_next_action: Any,
-    latest_run_recommended_action: Any,
-    agent_lane_next_action: Any = None,
-) -> dict[str, Any] | None:
+    active_state_next_action: object,
+    latest_run_recommended_action: object,
+    agent_lane_next_action: object = None,
+) -> Payload | None:
     active_text = _action_projection_text(active_state_next_action)
     latest_text = _action_projection_text(latest_run_recommended_action)
-    if not active_text or not latest_text:
+    if not active_text or not latest_text or actions_are_projection_aligned(active_text, latest_text):
         return None
-    if actions_are_projection_aligned(active_text, latest_text):
-        return None
+    lane = _as_mapping(agent_lane_next_action)
     lane_preserves_goal_next_action = (
-        isinstance(agent_lane_next_action, dict)
-        and agent_lane_next_action.get("preserves_goal_next_action") is True
+        lane is not None and lane.get("preserves_goal_next_action") is True
     )
-    warning: dict[str, Any] = {
+    warning: Payload = {
         "schema_version": NEXT_ACTION_PROJECTION_WARNING_SCHEMA_VERSION,
         "kind": "next_action_projection_mismatch",
         "severity": "info" if lane_preserves_goal_next_action else "warning",
         "requires_state_writeback": not lane_preserves_goal_next_action,
         "active_state_next_action": active_text,
         "latest_run_recommended_action": latest_text,
+        **(
+            {
+                "reason": (
+                    "current agent lane action differs from the durable goal route while "
+                    "explicitly preserving the active-state Next Action"
+                ),
+                "recommended_action": (
+                    "continue the agent's selected Todo; refresh-state --next-action records "
+                    "a bound task step without replacing shared compatibility prose"
+                ),
+            }
+            if lane_preserves_goal_next_action
+            else {
+                "reason": (
+                    "latest run recommended_action differs from the durable active-state "
+                    "Next Action"
+                ),
+                "recommended_action": (
+                    "read the selected Todo route; only a matching bound recommendation "
+                    "is a current task step. Historical prose is not execution authority"
+                ),
+            }
+        ),
     }
-    if lane_preserves_goal_next_action:
-        warning["reason"] = (
-            "current agent lane action differs from the durable goal route while "
-            "explicitly preserving the active-state Next Action"
-        )
-        warning["recommended_action"] = (
-            "continue the agent's selected Todo; refresh-state --next-action records "
-            "a bound task step without replacing shared compatibility prose"
-        )
-    else:
-        warning["reason"] = (
-            "latest run recommended_action differs from the durable active-state "
-            "Next Action"
-        )
-        warning["recommended_action"] = (
-            "read the selected Todo route; only a matching bound recommendation "
-            "is a current task step. Historical prose is not execution authority"
-        )
-    lane_value = (
-        agent_lane_next_action.get("text")
-        if isinstance(agent_lane_next_action, dict)
-        else agent_lane_next_action
-    )
-    lane_text = _action_projection_text(lane_value)
+    lane_text = _lane_action_text(agent_lane_next_action)
     if lane_text:
         warning["agent_lane_next_action"] = lane_text
     return warning
@@ -224,74 +258,65 @@ def next_action_projection_warning(
 
 def next_action_resolution_trace(
     *,
-    primary_action: Any,
-    mode: Any = None,
-    active_state_next_action: Any,
-    latest_run_recommended_action: Any,
-    selected_recommended_action: Any,
-    agent_lane_next_action: Any = None,
-) -> dict[str, Any] | None:
+    primary_action: object,
+    mode: object = None,
+    active_state_next_action: object,
+    latest_run_recommended_action: object,
+    selected_recommended_action: object,
+    agent_lane_next_action: object = None,
+) -> Payload | None:
     primary_text = _action_projection_text(primary_action)
     if not primary_text:
         return None
     selected_text = _action_projection_text(selected_recommended_action)
     active_text = _action_projection_text(active_state_next_action)
     latest_text = _action_projection_text(latest_run_recommended_action)
-    lane_value = (
-        agent_lane_next_action.get("text")
-        if isinstance(agent_lane_next_action, dict)
-        else agent_lane_next_action
-    )
-    lane_text = _action_projection_text(lane_value)
+    lane_text = _lane_action_text(agent_lane_next_action)
 
-    source = "interaction_contract"
-    source_candidates = (
-        ("agent_lane", lane_text),
-        ("selected", selected_text),
-        ("active_next", active_text),
-        ("latest_run", latest_text),
+    source = next(
+        (
+            candidate_source
+            for candidate_source, candidate_text in (
+                ("agent_lane", lane_text),
+                ("selected", selected_text),
+                ("active_next", active_text),
+                ("latest_run", latest_text),
+            )
+            if candidate_text and actions_are_projection_aligned(primary_text, candidate_text)
+        ),
+        f"mode:{mode}" if mode else "interaction_contract",
     )
-    for candidate_source, candidate_text in source_candidates:
-        if candidate_text and actions_are_projection_aligned(primary_text, candidate_text):
-            source = candidate_source
-            break
-    if source == "interaction_contract" and mode:
-        source = f"mode:{mode}"
 
-    mismatches: list[str] = []
-    for label, left, right in (
-        ("active_vs_latest", active_text, latest_text),
-        ("active_vs_primary", active_text, primary_text),
-        ("latest_vs_primary", latest_text, primary_text),
-        ("selected_vs_primary", selected_text, primary_text),
-    ):
-        if left and right and not actions_are_projection_aligned(left, right):
-            mismatches.append(label)
+    has_drift = any(
+        left and right and not actions_are_projection_aligned(left, right)
+        for left, right in (
+            (active_text, latest_text),
+            (active_text, primary_text),
+            (latest_text, primary_text),
+            (selected_text, primary_text),
+        )
+    )
 
     return {
-        "summary": f"source={source} drift={'true' if mismatches else 'false'}",
+        "summary": f"source={source} drift={'true' if has_drift else 'false'}",
     }
 
 
 def state_action_projection_warning(
-    item: dict[str, Any],
+    item: PayloadView,
     *,
-    agent_todo_summary: dict[str, Any] | None,
-    selected_action: Any,
-    work_lane_contract: dict[str, Any] | None,
-) -> dict[str, Any] | None:
+    agent_todo_summary: PayloadView | None,
+    selected_action: object,
+    work_lane_contract: PayloadView | None,
+) -> Payload | None:
+    lane_contract = _as_mapping(work_lane_contract)
     if not (
-        isinstance(work_lane_contract, dict)
-        and work_lane_contract.get("lane") == "advancement_task"
-        and "open_agent_todo"
-        in (
-            cast(list[Any], work_lane_contract.get("reason_codes"))
-            if isinstance(work_lane_contract.get("reason_codes"), list)
-            else []
-        )
+        lane_contract is not None
+        and lane_contract.get("lane") == "advancement_task"
+        and "open_agent_todo" in _as_list(lane_contract.get("reason_codes"))
     ):
         return None
-    project_asset = cast(dict[str, Any], item.get("project_asset")) if isinstance(item.get("project_asset"), dict) else {}
+    project_asset = _as_mapping(item.get("project_asset")) or {}
     active_next_action = str(
         item.get("active_state_next_action")
         or project_asset.get("next_action")
@@ -300,22 +325,25 @@ def state_action_projection_warning(
     selected_text = str(selected_action or "").strip()
     if not active_next_action or not selected_text:
         return None
-    if isinstance(agent_todo_summary, dict):
-        claim_scope = agent_todo_summary.get("claim_scope")
-        first_executable = (
-            cast(list[Any], agent_todo_summary.get("first_executable_items"))
-            if isinstance(agent_todo_summary.get("first_executable_items"), list)
-            else []
+    todo_summary = _as_mapping(agent_todo_summary)
+    if todo_summary is not None:
+        claim_scope = _as_mapping(todo_summary.get("claim_scope"))
+        selected_item = next(
+            (
+                entry
+                for raw_entry in _as_list(todo_summary.get("first_executable_items"))
+                if (entry := _as_mapping(raw_entry)) is not None
+            ),
+            None,
         )
-        selected_item = next((item for item in first_executable if isinstance(item, dict)), None)
         selected_claimed_by = normalize_todo_claimed_by(
-            selected_item.get("claimed_by") if selected_item else None
+            selected_item.get("claimed_by") if selected_item is not None else None
         )
         claim_agent_id = normalize_todo_claimed_by(
-            claim_scope.get("agent_id") if isinstance(claim_scope, dict) else None
+            claim_scope.get("agent_id") if claim_scope is not None else None
         )
         if (
-            selected_item
+            selected_item is not None
             and selected_claimed_by
             and claim_agent_id
             and selected_claimed_by == claim_agent_id
@@ -337,7 +365,7 @@ def state_action_projection_warning(
     }
 
 
-def is_user_wait_text(value: Any) -> bool:
+def is_user_wait_text(value: object) -> bool:
     return bool(NEXT_ACTION_USER_WAIT_PATTERN.search(str(value or "")))
 
 
@@ -355,14 +383,17 @@ def _role_for_heading(heading: str) -> str | None:
     return todo_role_for_heading(heading)
 
 
-def _open_count(summary: dict[str, Any] | None) -> int:
-    if not isinstance(summary, dict):
+def _open_count(summary: PayloadView | None) -> int:
+    mapping = _as_mapping(summary)
+    if mapping is None:
         return 0
-    value = summary.get("open_count")
+    value = mapping.get("open_count")
     if value is None:
-        value = summary.get("open")
+        value = mapping.get("open")
+    if not value or not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
     try:
-        return max(0, int(value or 0))
+        return max(0, int(value))
     except (TypeError, ValueError):
         return 0
 
@@ -457,13 +488,6 @@ def summarize_state_todo_open_counts(state_text: str) -> dict[str, int]:
     return counts
 
 
-def _active_state_compact_text(value: Any, *, limit: int = 500) -> str:
-    text = compact_todo_text(value)
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
-
-
 def parse_active_state_frontmatter(state_text: str) -> dict[str, str]:
     if not state_text.startswith("---"):
         return {}
@@ -485,16 +509,16 @@ def _todo_priority_parts(text: str) -> tuple[str | None, str]:
     match = PRIORITY_PATTERN.match(text)
     if not match:
         return None, text
-    return match.group(1).upper(), _active_state_compact_text(match.group(2))
+    return match.group(1).upper(), _compact_text(match.group(2), limit=500)
 
 
 def _normalize_structured_todo_item(
-    item: dict[str, Any],
+    item: PayloadView,
     *,
     role: str,
     source_section: str,
-) -> dict[str, Any]:
-    text = _active_state_compact_text(item.get("text"))
+) -> Payload:
+    text = _compact_text(item.get("text"), limit=500)
     marker_status = todo_status_from_marker(item.get("marker"))
     metadata_status = normalize_todo_status(item.get("status"))
     status = metadata_status or marker_status
@@ -508,7 +532,7 @@ def _normalize_structured_todo_item(
     )
     priority, title = _todo_priority_parts(text)
     action_kind = normalize_todo_action_kind(item.get("action_kind"))
-    normalized: dict[str, Any] = {
+    normalized: Payload = {
         "schema_version": TODO_ITEM_SCHEMA_VERSION,
         "todo_id": todo_id,
         "todo_id_source": todo_id_source,
@@ -529,70 +553,10 @@ def _normalize_structured_todo_item(
         normalized["title"] = title
     if action_kind:
         normalized["action_kind"] = action_kind
-    task_domain = normalize_todo_task_domain(item.get("task_domain"))
-    if task_domain:
-        normalized["task_domain"] = task_domain
-    capability_binding_ref = normalize_todo_capability_binding_ref(
-        item.get("capability_binding_ref")
-    )
-    if capability_binding_ref:
-        normalized["capability_binding_ref"] = capability_binding_ref
-    task_repository = normalize_todo_task_repository(item.get("task_repository"))
-    if task_repository:
-        normalized["task_repository"] = task_repository
-    continuation_policy = normalize_todo_continuation_policy(
-        item.get("continuation_policy")
-    )
-    if continuation_policy:
-        normalized["continuation_policy"] = continuation_policy
-
-    write_scopes = normalize_required_write_scopes(item.get("required_write_scopes"))
-    if write_scopes:
-        normalized["required_write_scopes"] = write_scopes
-    required_capabilities = normalize_required_capabilities(item.get("required_capabilities"))
-    if required_capabilities:
-        normalized["required_capabilities"] = required_capabilities
-    target_capabilities = normalize_target_capabilities(item.get("target_capabilities"))
-    if target_capabilities:
-        normalized["target_capabilities"] = target_capabilities
-    decision_scope = normalize_todo_decision_scope(item.get("decision_scope"))
-    if decision_scope:
-        normalized["decision_scope"] = decision_scope
-    required_decision_scopes = normalize_todo_required_decision_scopes(
-        item.get("required_decision_scopes")
-    )
-    if required_decision_scopes:
-        normalized["required_decision_scopes"] = required_decision_scopes
-    claimed_by = normalize_todo_claimed_by(item.get("claimed_by"))
-    if claimed_by:
-        normalized["claimed_by"] = claimed_by
-    bound_agent = normalize_todo_bound_agent(item.get("bound_agent"))
-    if bound_agent:
-        normalized["bound_agent"] = bound_agent
-    goal_bound = normalize_todo_goal_bound(item.get("goal_bound"))
-    if goal_bound is not None:
-        normalized["goal_bound"] = goal_bound
-    blocks_agent = normalize_todo_blocks_agent(item.get("blocks_agent"))
-    if blocks_agent:
-        normalized["blocks_agent"] = blocks_agent
-    excluded_agents = normalize_todo_excluded_agents(item.get("excluded_agents"))
-    if excluded_agents:
-        normalized["excluded_agents"] = excluded_agents
-    global_gate = normalize_todo_global_gate(item.get("global_gate"))
-    if global_gate is not None:
-        normalized["global_gate"] = global_gate
-    unblocks_todo_id = normalize_todo_id(item.get("unblocks_todo_id"))
-    if unblocks_todo_id:
-        normalized["unblocks_todo_id"] = unblocks_todo_id
-    successor_todo_ids = normalize_todo_id_list(item.get("successor_todo_ids"))
-    if successor_todo_ids:
-        normalized["successor_todo_ids"] = successor_todo_ids
-    resume_when = normalize_todo_resume_when(item.get("resume_when"))
-    if resume_when:
-        normalized["resume_when"] = resume_when
-    no_followup = normalize_todo_no_followup(item.get("no_followup"))
-    if no_followup is not None:
-        normalized["no_followup"] = no_followup
+    for key, normalizer, allow_none_false in _TODO_FIELD_NORMALIZERS:
+        value = normalizer(item.get(key))
+        if (value is not None) if allow_none_false else bool(value):
+            normalized[key] = value
 
     for key in TODO_METADATA_KEYS:
         if key in normalized or key not in item:
@@ -605,11 +569,11 @@ def _normalize_structured_todo_item(
 
 def _parse_active_state_structured_todo_items(
     state_text: str,
-) -> dict[str, list[dict[str, Any]]]:
+) -> dict[str, list[Payload]]:
     role: str | None = None
     source_sections: dict[str, str] = {}
-    raw_items: dict[str, list[dict[str, Any]]] = {"user": [], "agent": []}
-    current: dict[str, Any] | None = None
+    raw_items: dict[str, list[Payload]] = {"user": [], "agent": []}
+    current: Payload | None = None
 
     for line in state_text.splitlines():
         heading = SECTION_HEADING_PATTERN.match(line)
@@ -628,7 +592,7 @@ def _parse_active_state_structured_todo_items(
             current = {
                 "index": len(raw_items[role]) + 1,
                 "marker": marker,
-                "text": _active_state_compact_text(text),
+                "text": _compact_text(text, limit=500),
             }
             raw_items[role].append(current)
             continue
@@ -640,25 +604,25 @@ def _parse_active_state_structured_todo_items(
             continue
         continuation = line.strip()
         if continuation:
-            current["text"] = _active_state_compact_text(
-                f"{current.get('text', '')} {continuation}"
+            current["text"] = _compact_text(
+                f"{current.get('text', '')} {continuation}",
+                limit=500,
             )
 
-    result: dict[str, list[dict[str, Any]]] = {"user": [], "agent": []}
-    for item_role, items in raw_items.items():
-        source_section = source_sections.get(item_role) or f"{item_role.title()} Todo"
-        result[item_role] = [
+    return {
+        item_role: [
             _normalize_structured_todo_item(
                 item,
                 role=item_role,
-                source_section=source_section,
+                source_section=source_sections.get(item_role) or f"{item_role.title()} Todo",
             )
             for item in items
         ]
-    return result
+        for item_role, items in raw_items.items()
+    }
 
 
-def _active_state_todo_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _active_state_todo_summary(items: list[Payload]) -> Payload:
     open_items = [item for item in items if item.get("status") == "open"]
     done_items = [item for item in items if item.get("done") is True]
     implicit_items = [item for item in items if item.get("todo_id_source") == "generated"]
@@ -673,12 +637,12 @@ def _active_state_todo_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 def build_active_state_projection_diagnostics(
     *,
-    frontmatter: dict[str, str],
-    next_action_entries: list[str],
-    todo_items: dict[str, list[dict[str, Any]]],
-) -> dict[str, Any]:
-    warnings: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
+    frontmatter: Mapping[str, object],
+    next_action_entries: Sequence[str],
+    todo_items: Mapping[str, Sequence[PayloadView]],
+) -> Payload:
+    warnings: list[Payload] = []
+    errors: list[Payload] = []
     all_items = [item for items in todo_items.values() for item in items]
     if not frontmatter:
         warnings.append({"kind": "missing_frontmatter"})
@@ -724,7 +688,7 @@ def build_active_state_structured_projection(
     *,
     goal_id: str | None = None,
     source_ref: str = "ACTIVE_GOAL_STATE.md",
-) -> dict[str, Any]:
+) -> Payload:
     frontmatter = parse_active_state_frontmatter(state_text)
     next_entries = active_state_next_action_entries(state_text, limit=None)
     todo_items = _parse_active_state_structured_todo_items(state_text)
@@ -733,7 +697,7 @@ def build_active_state_structured_projection(
         next_action_entries=next_entries,
         todo_items=todo_items,
     )
-    projection: dict[str, Any] = {
+    projection: Payload = {
         "schema_version": ACTIVE_STATE_STRUCTURED_PROJECTION_SCHEMA_VERSION,
         "source": "markdown_active_state",
         "source_ref": source_ref,
@@ -757,26 +721,20 @@ def build_active_state_structured_projection(
 def state_projection_gap_warning(
     state_text: str,
     *,
-    user_todos: dict[str, Any] | None = None,
-    agent_todos: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
+    user_todos: PayloadView | None = None,
+    agent_todos: PayloadView | None = None,
+) -> Payload | None:
     next_action_entries = _section_entries(_section_lines(state_text, "Next Action"))
     if not next_action_entries:
         return None
 
     fallback_counts = summarize_state_todo_open_counts(state_text)
-    user_open = _open_count(user_todos)
-    agent_open = _open_count(agent_todos)
-    if user_todos is None:
-        user_open = fallback_counts["user"]
-    if agent_todos is None:
-        agent_open = fallback_counts["agent"]
+    user_open = fallback_counts["user"] if user_todos is None else _open_count(user_todos)
+    agent_open = fallback_counts["agent"] if agent_todos is None else _open_count(agent_todos)
 
-    evidence: list[dict[str, Any]] = []
+    evidence: list[Payload] = []
     for entry in next_action_entries[:3]:
-        executable = bool(NEXT_ACTION_EXECUTABLE_PATTERN.search(entry))
-        waits_for_user = is_user_wait_text(entry)
-        if agent_open == 0 and executable:
+        if agent_open == 0 and NEXT_ACTION_EXECUTABLE_PATTERN.search(entry):
             evidence.append(
                 {
                     "kind": "next_action_executable_without_agent_todo",
@@ -785,7 +743,7 @@ def state_projection_gap_warning(
                     "text": entry,
                 }
             )
-        if user_open == 0 and waits_for_user:
+        if user_open == 0 and is_user_wait_text(entry):
             evidence.append(
                 {
                     "kind": "next_action_waits_without_user_todo",

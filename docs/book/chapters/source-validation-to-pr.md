@@ -56,7 +56,7 @@ authority 的改动需要一个一次性隔离实例，跑完整套件是分钟�
 
 ## 六层质量证据
 
-[Testing and Quality](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md)
+[Testing and Quality](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md)
 定义了 LoopX 当前的质量分层。本书按外部贡献者的任务重新组织如下。
 
 ### 1. Unit 与 Contract
@@ -523,7 +523,7 @@ What remains owner-held?
 ## 关联 Issue 与公开任务
 
 非 trivial 工作优先关联
-[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+[Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
 或 GitHub Issue：
 
 - 在开始大改前声明准备处理的 slice；

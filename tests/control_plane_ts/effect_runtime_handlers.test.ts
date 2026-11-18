@@ -246,6 +246,7 @@ for (const retired of [
   "governed_capability.validate_admission",
   "governed_capability.settlement_status",
   "collaboration.delegation.turn_plan",
+  "collaboration.source.recipients",
   "settlement.receipt_bound_terminal_phase",
 ]) {
   test(`unused leaf RPC ${retired} fails closed`, async () => {

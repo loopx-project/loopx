@@ -126,7 +126,11 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
             initializer.write('\nraise RuntimeError("artifact inspection executed the candidate")\n')
         artifacts = [*packages.iterdir(), root / "dist/SHA256SUMS"]
         before = {path.name: digest(path) for path in artifacts}
-        env = {**os.environ, "RELEASE_TAG": identity.tag, "GITHUB_SHA": correction,
+        python_bin = str(Path(sys.executable).resolve().parent)
+        path_value = os.pathsep.join(
+            [python_bin, *( [os.environ["PATH"]] if os.environ.get("PATH") else [] )]
+        )
+        env = {**os.environ, "PATH": path_value, "RELEASE_TAG": identity.tag, "GITHUB_SHA": correction,
                "GITHUB_WORKFLOW_REF": "fixture/release-artifacts.yml@reviewed"}
 
         def execute(block: str, fixture: str = "") -> subprocess.CompletedProcess[str]:

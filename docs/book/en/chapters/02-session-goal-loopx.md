@@ -159,7 +159,7 @@ Record completion, independent verifier result, erroneous writes, human interven
 correctness, wall time, and cost. Without a matched baseline or independent verifier, report experience;
 do not claim product uplift.
 
-The [benchmark research RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
+The [benchmark research RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
 defines the current research boundary. Benchmark-native studies can inform product research only when
 their arm semantics, authority boundary, and independent verifier are stated explicitly.
 
@@ -287,7 +287,7 @@ inherit the old transcript.
 
 LoopX preserves one control-plane contract, but Hosts do not share one wake-up implementation. The current
 public
-[Runtime Connector Catalog](https://github.com/huangruiteng/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
+[Runtime Connector Catalog](https://github.com/loopx-project/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
 and each Host adapter's documentation define these main paths:
 
 | Host surface | Driver | Key limit |

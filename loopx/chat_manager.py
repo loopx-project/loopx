@@ -1035,7 +1035,10 @@ def manager_session_model_allocation(
                 return None
             proposed["reasoning_effort"] = session["agent_reasoning_effort"]
         return proposed
-    if not isinstance(previous, Mapping):
+    if (
+        not isinstance(previous, Mapping)
+        or previous.get("schema_version") != MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION
+    ):
         return None
     if defaults is None or defaults.get("status") != "ready":
         return None

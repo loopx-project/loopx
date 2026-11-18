@@ -1554,7 +1554,7 @@ test("still reports a receipt bound to another work item as a mismatch", async (
   assert.equal(failure.details, undefined);
 });
 
-test("rejects non-ENOENT settlement readback I/O failures", async (t) => {
+test("rejects non-ENOENT settlement readback I/O failures", async () => {
   const runtimeRoot = await fixture();
   const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
   await rm(indexPath);
@@ -1588,7 +1588,7 @@ test("recovers legacy quota commit rows by exact effect ref", async () => {
   assert.equal((result.spend as any).result.failure.kind, "receipt_missing");
 });
 
-test("rejects a writeback run persisted under another goal", async (t) => {
+test("rejects a writeback run persisted under another goal", async () => {
   const runtimeRoot = await fixture();
   await appendFile(
     join(runtimeRoot, "goals", goalId, "runs", "index.jsonl"),

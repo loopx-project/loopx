@@ -12,19 +12,19 @@ public-safe map over the current repository contracts, especially:
   derived runtime names;
 - [`interaction-catalog.md`](interaction-catalog.md) for reusable interaction
   patterns;
-- [`loopx/control_plane/todos/contract.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/contract.py) for todo status,
+- [`loopx/control_plane/todos/contract.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/contract.py) for todo status,
   task class, decision scope, resume, claim, and monitor metadata fields;
-- [`loopx/quota.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/quota.py) for `quota should-run`, runtime
+- [`loopx/quota.py`](https://github.com/loopx-project/loopx/blob/main/loopx/quota.py) for `quota should-run`, runtime
   states, `effective_action`, `interaction_contract`, spend, and monitor poll
   contracts;
-- [`loopx/control_plane/scheduler/scheduler_hint.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/scheduler/scheduler_hint.py)
+- [`loopx/control_plane/scheduler/scheduler_hint.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/scheduler/scheduler_hint.py)
   for cadence/backoff/reset-token behavior;
 - [`goal_vision_replan_contract_v0`](../../reference/protocols/goal-vision-replan-contract-v0.md)
   for bounded per-agent vision, replan transitions, and goal-route projection;
 - cross-agent handoff gate states in
-  [`loopx/control_plane/todos/handoff_gate.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py);
-- [`loopx/project_map.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/project_map.py) and
-  [`loopx/bootstrap.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/bootstrap.py) for project registration,
+  [`loopx/control_plane/todos/handoff_gate.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py);
+- [`loopx/project_map.py`](https://github.com/loopx-project/loopx/blob/main/loopx/project_map.py) and
+  [`loopx/bootstrap.py`](https://github.com/loopx-project/loopx/blob/main/loopx/bootstrap.py) for project registration,
   read-only-map opt-in, global sync, and host-loop activation.
 
 ## Composition Contract

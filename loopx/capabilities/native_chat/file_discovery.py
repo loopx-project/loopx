@@ -1,12 +1,15 @@
-"""Small, invalidatable File Chat journal observations, never execution state."""
+"""File-backed Chat journal discovery and bounded reply image artifacts."""
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from copy import deepcopy
 from datetime import datetime
+import base64
 import hashlib
 from pathlib import Path
+import re
 import sys
+from urllib.parse import unquote
 from threading import Lock
 from typing import Any
 
@@ -139,3 +142,88 @@ class FileChatDiscovery:
         with self._lock:
             for path in entries.keys() - seen:
                 del entries[path]
+
+
+_REPLY_IMAGE_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+_REPLY_IMAGE_SIGNATURES = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/gif": b"GIF8"}
+
+
+def reply_image_directory(turn_id: str) -> Path:
+    """Return the sole workspace output directory for this exact Core Turn."""
+    if not re.fullmatch(r"[a-f0-9]{32}", turn_id):
+        raise ValueError("invalid reply image Turn")
+    return Path(".local/loopx-reply-images") / turn_id
+
+
+def reply_image_workspace(session: dict[str, Any], turn: dict[str, Any]) -> Path | None:
+    """Local image output belongs to an ordinary, bound-owner Lark project Turn."""
+    context = session.get("project_context") or {}
+    if (turn.get("origin") != "lark" or session.get("session_mode") != "managed_runtime"
+            or session.get("agent_id") != "codex" or context.get("audience") != "bound_owner"
+            or context.get("grant") != "workspace_write" or not context.get("workspace_path")
+            or session.get("steward_context")):
+        return None
+    return Path(context["workspace_path"]).resolve()
+
+
+def _check_reply_image(data: bytes, mime: str) -> None:
+    from ...chat_attachments import CHAT_IMAGE_MAX_BYTES
+
+    if not data or len(data) > CHAT_IMAGE_MAX_BYTES:
+        raise ValueError("reply image is empty or exceeds its size bound")
+    if not ((mime in _REPLY_IMAGE_SIGNATURES and data.startswith(_REPLY_IMAGE_SIGNATURES[mime]))
+            or (mime == "image/webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
+        raise ValueError("unsupported reply image bytes")
+
+
+def reply_image_attachment(data: bytes, mime: str, index: int) -> dict[str, Any]:
+    _check_reply_image(data, mime)
+    return {"id": f"reply-image-{index}", "name": f"original-{index}.{mime.split('/')[1]}",
+            "mime_type": mime, "size": len(data),
+            "data_url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}
+
+
+def read_reply_image(workspace: Path, turn_id: str, name: str) -> tuple[str, bytes]:
+    from ...control_plane.collaboration.result_files import _workspace_file
+
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}", name):
+        raise ValueError("invalid reply image name")
+    mime = _REPLY_IMAGE_TYPES.get(Path(name).suffix.lower())
+    if mime is None:
+        raise ValueError("unsupported reply image type")
+    ref = reply_image_directory(turn_id) / name
+    data = _workspace_file(workspace, ref)
+    _check_reply_image(data, mime)
+    return mime, data
+
+
+def capture_reply_image_plan(workspace: Path, turn_id: str, targets: list[str]) -> list[str | dict[str, Any] | None]:
+    """Pin exact local bytes without keeping host paths in Chat responses."""
+    from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, CHAT_IMAGE_MAX_TOTAL_BYTES
+
+    if all(target.startswith("https://") for target in targets):
+        return []  # The original remote-image path remains authoritative.
+    if len(targets) > CHAT_IMAGE_MAX_COUNT:
+        return [None]
+    output_dir = workspace / reply_image_directory(turn_id)
+    result: list[str | dict[str, Any] | None] = []
+    total = 0
+    for target in targets:
+        if target.startswith("https://"):
+            result.append(target)
+            continue
+        try:
+            path = Path(unquote(target))
+            if path.parent != output_dir or ".." in path.parts:
+                raise ValueError("reply image is outside the current Turn's output directory")
+            _, data = read_reply_image(workspace, turn_id, path.name)
+            total += len(data)
+            if total > CHAT_IMAGE_MAX_TOTAL_BYTES:
+                raise ValueError("reply images exceed their aggregate size bound")
+            result.append({"name": path.name, "sha256": hashlib.sha256(data).hexdigest()})
+        except (OSError, ValueError):
+            result.append(None)
+    return result

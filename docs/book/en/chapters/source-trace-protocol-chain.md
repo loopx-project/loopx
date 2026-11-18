@@ -134,7 +134,7 @@ This simplified shape is explanatory, not an importable LoopX configuration:
 }
 ```
 
-[`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
+[`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
 owns coverage semantics. The important facts are:
 
 - the Gate declares kind, granularity, and scope key;
@@ -165,7 +165,7 @@ Todo and Gate facts feed several read models:
 - attention queue;
 - quota input.
 
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+[`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
 may display `blocks`, `requires_decision`, `validates`, and handoff relations. It does not create authority.
 
 The scenario needs this relationship:
@@ -256,8 +256,8 @@ Rules need an explainable first match, suppression conditions, and a reason. Neg
 
 ### Policy-reading breakpoints
 
-Use [State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
-and the [Rule Seam Map](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/rule-seam-map.md)
+Use [State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
+and the [Rule Seam Map](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/rule-seam-map.md)
 to verify:
 
 1. input facts are normalized;
@@ -302,7 +302,7 @@ After `interaction_contract` arbitrates the turn, the Host must not reread statu
 
 ## Stop 5: TurnEnvelope carries an already-decided turn
 
-[`turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
+[`turn_envelope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
 is a bounded read model over the quota decision. It carries enough information for execution:
 
 - Goal, Agent, and selected Todo;
@@ -322,7 +322,7 @@ If the Envelope selects `repair-link-checker`, the Turn remains bound to that ca
 
 ## Stop 6: LoopX Turn creates one bounded effect
 
-[`loopx_turn_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
+[`loopx_turn_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
 constrains execution:
 
 ```text

@@ -120,6 +120,7 @@ def _reserve_retry(state: dict[str, Any], input_key: str) -> bool:
 
 def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] | None:
     """Freeze the native input identity, including repeated identical messages."""
+    from ..chat_agent import CodexChatAgentError
     from ..capabilities.native_chat.antigravity_adapter import (
         _local_url,
         _observed_turn_steps,
@@ -127,7 +128,7 @@ def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] |
         discover_antigravity_language_server,
     )
 
-    address = os.environ.get("ANTIGRAVITY_LS_ADDRESS")
+    address = os.environ.get("ANTIGRAVITY_LS_ADDRESS") or os.environ.get("ANTIGRAVITY_LS_URL")
     token = os.environ.get("ANTIGRAVITY_CSRF_TOKEN")
     if not address and not token:
         endpoint = discover_antigravity_language_server()
@@ -136,46 +137,59 @@ def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] |
         address, token = endpoint["url"], endpoint["csrf_token"]
     elif not address or not token:
         return None
-    url = _local_url(address if "://" in address else "http://" + address)
-    payload = {"cascadeId": args.conversation_id}
-    before = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
-    total = before.get("numTotalSteps")
-    status = before.get("status")
-    if (
-        type(total) is not int
-        or total < 1
-        or status not in {"CASCADE_RUN_STATUS_IDLE", "CASCADE_RUN_STATUS_RUNNING"}
-        or (before.get("trajectory") or {}).get("cascadeId") != args.conversation_id
-    ):
+    try:
+        url = _local_url(address if "://" in address else "http://" + address)
+        payload = {"cascadeId": args.conversation_id}
+        before = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
+        total = before.get("numTotalSteps")
+        status = before.get("status")
+        trajectory = before.get("trajectory")
+        if (
+            type(total) is not int
+            or total < 1
+            or not isinstance(status, str)
+            or status not in {"CASCADE_RUN_STATUS_IDLE", "CASCADE_RUN_STATUS_RUNNING"}
+            or not isinstance(trajectory, dict)
+            or trajectory.get("cascadeId") != args.conversation_id
+        ):
+            return None
+        raw = _rpc_post(
+            url,
+            token,
+            "GetCascadeTrajectorySteps",
+            {**payload, "startIndex": 0, "endIndex": total},
+            timeout=2,
+        ).get("steps")
+        if not isinstance(raw, list) or len(raw) != total:
+            return None
+        indexed, covered = _observed_turn_steps(raw, 0, total)
+        inputs = [
+            (index, step)
+            for index, step in indexed
+            if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"
+        ]
+        after = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
+    except (ValueError, CodexChatAgentError, OSError):
         return None
-    raw = _rpc_post(
-        url,
-        token,
-        "GetCascadeTrajectorySteps",
-        {**payload, "startIndex": 0, "endIndex": total},
-        timeout=2,
-    ).get("steps")
-    indexed, covered = _observed_turn_steps(raw, 0, total)
-    inputs = [
-        (index, step)
-        for index, step in indexed
-        if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"
-    ]
-    after = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
+    trajectory = after.get("trajectory")
     if (
         not inputs
         or covered != total
         or after.get("status") != status
         or after.get("numTotalSteps") != total
-        or (after.get("trajectory") or {}).get("cascadeId") != args.conversation_id
+        or not isinstance(trajectory, dict)
+        or trajectory.get("cascadeId") != args.conversation_id
     ):
         return None
     index, user = inputs[-1]
-    created = (user.get("metadata") or {}).get("createdAt")
+    metadata = user.get("metadata")
+    created = metadata.get("createdAt") if isinstance(metadata, dict) else None
+    user_input = user.get("userInput")
     if (
         not isinstance(created, str)
         or not created
-        or (user.get("userInput") or {}).get("userResponse") != text
+        or not isinstance(user_input, dict)
+        or user_input.get("userResponse") != text
     ):
         return None
     anchor = json.dumps([args.conversation_id, index, created, text])

@@ -19,14 +19,24 @@ def presentation_phase(record: Mapping[str, Any], phase: str) -> str:
     """A continuation has its own presentation, alongside the old failure."""
     recovery = record.get("context_recovery") or {}
     if recovery and phase in {"admission", "progress", "terminal", "commission_result"}:
-        return f"{phase}.recovery.{recovery.get('presentation_key', recovery['version'])}"
+        recovery_key = (
+            recovery["presentation_key"]
+            if "presentation_key" in recovery
+            else recovery.get("version")
+        )
+        return f"{phase}.recovery.{recovery_key}"
     return phase
 
 
 def presentation_stream(record: dict[str, Any]) -> dict[str, Any]:
     recovery = record.get("context_recovery") or {}
     if recovery:
-        return record.setdefault("recovery_streams", {}).setdefault(str(recovery.get("presentation_key", recovery["version"])), {})
+        recovery_key = (
+            recovery["presentation_key"]
+            if "presentation_key" in recovery
+            else recovery.get("version")
+        )
+        return record.setdefault("recovery_streams", {}).setdefault(str(recovery_key), {})
     return record.setdefault("stream", {})
 
 
@@ -109,9 +119,10 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]], *,
                     if isinstance(summary, str) and summary.strip():
                         cleaned = " ".join(summary.split())[:280]
                         step_id = str(step.get("id") or "reasoning")
+                        raw_summaries = state.get("thinking_summaries")
                         summaries = [
                             row
-                            for row in state.get("thinking_summaries", [])
+                            for row in (raw_summaries if isinstance(raw_summaries, list) else [])
                             if isinstance(row, Mapping) and row.get("id") != step_id
                         ]
                         summaries.append({"id": step_id, "text": cleaned})
@@ -139,10 +150,20 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]], *,
                 state["label"] = label
             elif payload.get("method") == "item/started":
                 # Older adapters emit only this fixed vocabulary, without steps.
-                label = {"Agent 正在思考": "正在思考", "Agent 正在执行命令": "正在执行命令", "Agent 正在调用工具": "正在调用工具",
-                         "Agent 正在检索": "正在检索资料", "Agent 正在修改文件": "正在修改文件",
-                         "Agent 正在生成回答": "正在生成回答",
-                         "Agent 正在压缩会话上下文": "正在压缩会话上下文"}.get(payload.get("label"))
+                raw_label = payload.get("label")
+                label = (
+                    {
+                        "Agent 正在思考": "正在思考",
+                        "Agent 正在执行命令": "正在执行命令",
+                        "Agent 正在调用工具": "正在调用工具",
+                        "Agent 正在检索": "正在检索资料",
+                        "Agent 正在修改文件": "正在修改文件",
+                        "Agent 正在生成回答": "正在生成回答",
+                        "Agent 正在压缩会话上下文": "正在压缩会话上下文",
+                    }.get(raw_label)
+                    if isinstance(raw_label, str)
+                    else None
+                )
                 if label:
                     state["label"] = label
             elif (payload.get("method") == "item/completed"

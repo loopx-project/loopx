@@ -519,28 +519,8 @@ def _task_orchestration_authority(lanes: dict[str, list[dict[str, Any]]], *, rol
                                 ("user_blocker_items", TASK_ORCHESTRATION_USER_BLOCKER_FIELDS))}}
 
 
-def compact_active_next_action_todo_item(item: dict[str, Any]) -> dict[str, Any]:
-    compact = compact_todo_item(item)
-    for key in (
-        "note",
-        "evidence",
-        "reason",
-        "completed_at",
-        "updated_at",
-        "superseded_by",
-    ):
-        compact.pop(key, None)
-    return compact
-
-
 def todo_item_task_class(item: dict[str, Any]) -> str:
     return projection_todo_item_task_class(item)
-
-
-def count_advancement_todos(items: list[dict[str, Any]]) -> int:
-    return sum(
-        1 for item in items if todo_item_task_class(item) == TODO_TASK_CLASS_ADVANCEMENT
-    )
 
 
 def todo_item_is_actionable_open(item: dict[str, Any]) -> bool:
