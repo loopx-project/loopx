@@ -870,12 +870,18 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     vision_path = next(path for path in expected_cli if path.endswith("/vision_authoring"))
     actions_path = cli_path + "/next_cli_actions"
     current_cli = source["interaction_contract"]["cli_channel"]
-    bound_steps = current_cli["settlement_plan"]["ordered_steps"]
-    actual_commands = [step["command_template"] for step in bound_steps
-                       if step["kind"] in ("durable_writeback", "quota_spend")]
-    assert len(actual_commands) == 2 and current_cli["next_cli_actions"] == actual_commands
-    # The ordered plan carries these exact templates and all their conditions.
-    # A ready first read should not present a second apparent route for them.
+    plan = current_cli["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    writeback, spend = (step for step in plan["ordered_steps"]
+                        if step["kind"] in ("durable_writeback", "quota_spend"))
+    assert writeback["kind"] == "durable_writeback" and writeback["owner"] == "agent"
+    assert spend["kind"] == "quota_spend" and spend["owner"] == "runtime"
+    assert spend["expected_receipt"] == "quota_spend_receipt" and "command_template" not in spend
+    command = writeback["command_template"]
+    assert {"--settle-turn", "--settlement-receipt"} <= set(shlex.split(command))
+    assert current_cli["next_cli_actions"] == [command]
+    # The ordered plan carries the composed command and its runtime spend step.
+    # The initial read omits the duplicate fallback.
     assert not any(path == actions_path or path.startswith(actions_path + "/") for path in values)
     # Every distinct CLI leaf outside the authoring reference is still delivered.
     for path, item in expected_cli.items():
@@ -893,7 +899,7 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     code, fallback = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
         view["recovery"]["reference_file"], "--select", actions_path, cwd=project)
     assert code == 0 and fallback["eof"]
-    assert selected_context_values(fallback["content"])[actions_path] == actual_commands
+    assert selected_context_values(fallback["content"])[actions_path] == [command]
     assert values["/heartbeat_receipt"] == source["heartbeat_receipt"]
     assert values["/selected_todo"] == source["selected_todo"]
     assert _heartbeat_receipt_count(runtime, turn_id) == 1 and _spend_run_count(runtime) == 0

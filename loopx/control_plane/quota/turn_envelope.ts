@@ -2499,8 +2499,9 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
 
 function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   const projection = object(request.native_projection);
-  const stateless = projection.captured_decision_path === undefined && projection.replan_reader_argv !== undefined;
-  const path = stateless ? projection.source_path : projection.captured_decision_path;
+  const captured = object(projection.captured_decision);
+  const stateless = captured.path === undefined && projection.replan_reader_argv !== undefined;
+  const path = stateless ? projection.source_path : captured.path;
   if (typeof path !== "string") return undefined;
   const source = requireJsonObject(request.context, "captured replan source");
   if (stateless) {
@@ -2522,7 +2523,7 @@ function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   const identity = precision?.identity ?? contextSourceIdentity(request);
   const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
     replanReadCommands(source, path, stateless ? projection.replan_reader_argv : undefined,
-      undefined, stateless ? projection.sha256 : undefined), precision);
+      undefined, stateless ? projection.sha256 : captured.sha256), precision);
   return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
 }
 

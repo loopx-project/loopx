@@ -276,7 +276,7 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
                                      runtime_root: Path, directory: Path | None,
                                      surface: str = "quota_packet",
                                      reader_argv: list[str] | None = None,
-                                     captured_decision_path: str | None = None,
+                                     captured_decision: dict[str, str] | None = None,
                                      page_attached: bool = False) -> dict[str, Any]:
     """Same-capture presentation for every caller, without a native journal.
 
@@ -289,7 +289,7 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
 
     # Only a fresh stateless source can supply this route. Saved and explicitly
     # captured decisions keep the reader chosen by their existing callers.
-    stage_from_projection = (directory is None and captured_decision_path is None
+    stage_from_projection = (directory is None and captured_decision is None
         and "vision" not in quota_detail_sections_from_args(args))
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
@@ -298,7 +298,7 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         surface = "complete_turn"
     transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
     required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
-        selection_command_args_template=transport, captured_decision_path=captured_decision_path,
+        selection_command_args_template=transport, captured_decision=captured_decision,
         replan_reader_argv=reader_argv if stage_from_projection else None)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
