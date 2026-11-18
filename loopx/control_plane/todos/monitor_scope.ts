@@ -13,16 +13,6 @@ export function normalizeMonitorChangeScope(value: unknown): string | null {
   return MONITOR_SCOPE_PATTERN.test(normalized) ? normalized : null;
 }
 
-export function requireMonitorChangeScope(value: unknown, label = "material_change_scope"): string {
-  const normalized = normalizeMonitorChangeScope(value);
-  if (normalized === null) {
-    throw new EffectRuntimeRequestError(
-      `${label} must be a lowercase public-safe token of at most 96 characters`,
-    );
-  }
-  return normalized;
-}
-
 export function monitorChangeScopeDigest(scope: string): string {
   return createHash("sha256").update(scope, "utf8").digest("hex").slice(0, 24);
 }
@@ -76,13 +66,6 @@ export function parseMonitorScopeGenerations(value: unknown): Map<string, number
     result.set(digest, state.generation);
   }
   return result;
-}
-
-export function serializeMonitorScopeGenerations(generations: Map<string, number>): string {
-  return [...generations.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([digest, generation]) => `${digest}:${generation}`)
-    .join(",");
 }
 
 export function monitorScopeGeneration(value: unknown, scope: string): number {

@@ -15,6 +15,9 @@ from typing import Any
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
+from ..control_plane.quota.turn_envelope import (
+    COMPLETE_TURN_DECISION_VERSION, TURN_ENVELOPE_SCHEMA_VERSION,
+)
 from ..control_plane.turn_driver.decision_capture import (
     context_index_fields as _context_index_fields,
     write_initial_context_read_reference,
@@ -221,6 +224,16 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     return result
 
 
+def quota_context_surface(payload: dict[str, Any]) -> str:
+    """Transport the captured schema; compatibility flags do not choose a source."""
+    version = payload.get("schema_version")
+    if version == COMPLETE_TURN_DECISION_VERSION:
+        return "complete_turn"
+    if "contract_binding" in payload or ("schema_version" in payload and version != TURN_ENVELOPE_SCHEMA_VERSION):
+        raise QuotaDecisionTransportError("Unsupported saved quota decision version or mixed Turn binding.")
+    return "turn_envelope" if version == TURN_ENVELOPE_SCHEMA_VERSION else "quota_packet"
+
+
 def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
                                  capture_directory: Path, capture_id: str, decision_identity: tuple[str, str],
                                  progressive_enabled: bool, reader_argv: list[str] | None) -> dict[str, Any]:
@@ -235,8 +248,7 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         directory = None  # Current full input, no fabricated native journal.
     prepared = prepare_codex_context(payload, directory=directory,
         capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
-        surface=("complete_turn" if getattr(args, "complete_turn", False)
-            else "turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"),
+        surface=quota_context_surface(payload),
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
         progressive_enabled=progressive_enabled)
     recovery = prepared.delivery.get("recovery")
@@ -251,9 +263,10 @@ def progressive_context_or_current(payload: dict[str, Any], args: argparse.Names
                                    runtime_root: Path, directory: Path | None,
                                    reader_argv: list[str] | None) -> dict[str, Any]:
     """Optional stateless IO falls back to this complete decided input/receipt."""
+    surface = quota_context_surface(payload)
     try:
         return progressive_context_capture_view(payload, args, runtime_root=runtime_root,
-            directory=directory, surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+            directory=directory, surface=surface,
             reader_argv=reader_argv)
     except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         return payload
@@ -402,14 +415,19 @@ def capture_decision(directory: Path | None, payload: dict[str, object], *,
 
     try:
         digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        if record_capture is not None:
+            record_capture(payload, digest)
+        if isinstance(payload.get("detail_ref"), dict) and "full_decision" in payload["detail_ref"]:
+            from ..command_invocation import current_loopx_cli_argv
+
+            write_context_read_reference(directory / "decision.json", digest,
+                reader_argv=current_loopx_cli_argv())
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
             "already exist. Do not treat this as missing admission or blindly rerun "
             f"the guard. Inspect the existing Turn receipt. Capture directory: {directory}"
         ) from exc
-    if record_capture is not None:
-        record_capture(payload, digest)
     if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
         from ..control_plane.turn_driver.codex_context import record_native_claim_source
 

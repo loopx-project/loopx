@@ -131,6 +131,7 @@ def _todo_settlement_plan(
         writeback_path_args=path_args,
         goal_ref=goal_ref,
         quota_spend_source=quota_spend_source,
+        composed_settlement=True,
     ).as_dict()
 
     from ..capabilities.explore.turn_context import project_settlement_attachment

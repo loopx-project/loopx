@@ -33,7 +33,11 @@ from loopx.control_plane.scheduler.state import (
 )
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.paths import shell_selected_global_registry
-from loopx.rollout_event_log import build_rollout_event
+from loopx.rollout_event_log import (
+    append_rollout_event,
+    build_rollout_event,
+    rollout_event_log_path,
+)
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture,
     read_fixture_todos,
@@ -339,6 +343,20 @@ def _heartbeat_receipt_count(runtime: Path, turn_instance_id: str) -> int:
             and event.get("agent_id") == AGENT_ID
         )
     )
+
+
+def _assert_composed_spend_source(cli: dict, runtime: Path, turn: str, source: str) -> None:
+    from loopx.control_plane.quota.heartbeat_receipt import find_heartbeat_receipt
+
+    plan = cli['settlement_plan']
+    assert plan['schema_version'] == 'quota_settlement_plan_v2'
+    spend = next(step for step in plan['ordered_steps'] if step['kind'] == 'quota_spend')
+    assert spend['owner'] == 'runtime' and 'command_template' not in spend
+    writeback = next(step for step in plan['ordered_steps'] if step['kind'] == 'durable_writeback')
+    assert '--settle-turn --settlement-receipt' in writeback['command_template']
+    assert writeback['command_template'] in cli['next_cli_actions']
+    receipt = find_heartbeat_receipt(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, turn_instance_id=turn)
+    assert receipt['details']['quota_spend_source'] == source
 
 
 def _configure_read_only_todo(project: Path) -> Path:
@@ -4313,10 +4331,7 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     assert settlement_plan["identity"] == receipt_identity
     assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
-    assert any(
-        f"--source {expected_source}" in action
-        for action in cli_channel["next_cli_actions"]
-    )
+    _assert_composed_spend_source(cli_channel, runtime, turn_instance_id, expected_source)
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4373,9 +4388,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     assert settlement_plan["identity"] == selected["heartbeat_receipt"][
         "settlement_identity"
     ]
-    assert any(
-        "--source visible-goal" in action for action in cli_channel["next_cli_actions"]
-    )
+    _assert_composed_spend_source(cli_channel, runtime, turn_instance_id, 'visible-goal')
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4485,11 +4498,8 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     ]
     assert settlement_plan["identity"] == identity
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
-    assert expected_source in next(
-        step["command_template"]
-        for step in settlement_plan["ordered_steps"]
-        if step["kind"] == "quota_spend"
-    )
+    _assert_composed_spend_source(guard['interaction_contract']['cli_channel'], _runtime,
+                                identity['turn_instance_id'], expected_source)
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
@@ -4586,11 +4596,8 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     )
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == identity
-    assert "--source visible-goal" in next(
-        step["command_template"]
-        for step in plan["ordered_steps"]
-        if step["kind"] == "quota_spend"
-    )
+    _assert_composed_spend_source(guard['interaction_contract']['cli_channel'], runtime,
+                                turn_instance_id, 'visible-goal')
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -4695,6 +4702,7 @@ def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     assert spend_rc == 0, spend
     assert spend["turn_instance_id"] == turn_instance_id
     assert spend["settlement_identity"] == plan["identity"]
+    assert spend['source'] == expected_source
     assert _spend_run_count(runtime) == 1
 
 
@@ -7293,12 +7301,13 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert identity["replan_obligation_id"] == obligation_id
     assert identity["turn_instance_id"].startswith("guided-start:")
     cli_channel = bound["interaction_contract"]["cli_channel"]
-    assert cli_channel["settlement_identity"] == identity
-    assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
-    assert "settlement_plan" not in cli_channel
-    # Native admission defers the plan; consume its exact captured reader
-    # without another guard or a second guided-start Turn.
-    reader_argv = shlex.split(bound["replan_action_packet"]["writeback"])
+    assert cli_channel["settlement_plan"]["identity"] == identity
+    assert 'settlement_read_ref' not in cli_channel
+    # The current source carries the whole plan. The public saved-source reader
+    # must return that same original plan without another admission or mutation.
+    reader_argv = [*bound['replan_read_argv'], '--format', 'json', 'quota', 'replan-view',
+                   '--decision-file', bound['replan_read_path'],
+                   '--source-hash', bound['contract_binding']['content_hash'], '--replan-stage', 'writeback']
     source_paths = (
         registry_path,
         project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
@@ -7318,6 +7327,7 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     writeback = json.loads(reader.stdout)
     assert writeback["obligation_id"] == obligation_id
     plan = writeback["writeback"]["settlement_plan"]
+    assert plan == cli_channel['settlement_plan']
     assert plan["identity"] == identity
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend",
@@ -9377,6 +9387,115 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     before = _spend_run_count(runtime)
     rc, written_payload = _run_generated_cli(writeback, registry_path=registry)
     assert rc == 0 and written_payload["ok"] is True and written_payload["appended"] is True, written_payload
+    assert _spend_run_count(runtime) == before
+    rc, spent = _run_generated_cli(spend, registry_path=registry)
+    assert rc == 0 and spent["ok"] is True, spent
+    assert _spend_run_count(runtime) == before + 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_same_turn_receipt_upgrade_keeps_historical_ack_admission(
+    tmp_path: Path, provider: str,
+) -> None:
+    """A same-Turn review upgrade must not move the historical ACK admission clock.
+
+    Turn A is admitted at T0 on one settlement identity. Turn B accepts that
+    review after T0. A review_guard_upgrade then appends another
+    quota_should_run for A at T2, after the ACK, caused by the original
+    receipt. The upgrade stays the effective receipt. The ACK still settles
+    against the original admission.
+    """
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    original_turn = "turn-historical-ack-after-upgrade"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
+    original_identity = admitted["heartbeat_receipt"]["settlement_identity"]
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    recorded = datetime.fromisoformat(
+        admitted["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00")
+    )
+    ack_at = (recorded + timedelta(seconds=30)).isoformat()
+    upgrade_at = (
+        (recorded + timedelta(hours=1))
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    assert datetime.fromisoformat(upgrade_at.replace("Z", "+00:00")) > datetime.fromisoformat(ack_at)
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "turn_instance_id": "later-accepted-upgrade",
+        "generated_at": ack_at,
+        "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "source": "refresh_state",
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0",
+                "accepted": True, "obligation_id": obligation,
+                "outcomes": ["fresh_vision_path_outcome"],
+                "satisfying_outcomes": ["fresh_vision_path_outcome"],
+            },
+        },
+    }
+    source = runs_dir / "later-accepted-upgrade.json"
+    source.write_text(json.dumps(run))
+    markdown = source.with_suffix(".md")
+    markdown.write_text("# Accepted independent historical review\n")
+    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            **run, "json_path": str(source), "markdown_path": str(markdown),
+        }) + "\n")
+    receipts = _heartbeat_receipt_events(runtime, original_turn)
+    assert len(receipts) == 1
+    original_event = receipts[0]
+    upgrade = json.loads(json.dumps(original_event))
+    upgrade["event_id"] = f"upgrade-{original_event['event_id']}"
+    upgrade["recorded_at"] = upgrade_at
+    upgrade["summary"] = "same-Turn review guard upgraded without rebinding"
+    upgrade["causality"] = {
+        "source_event_id": original_event["event_id"],
+        "caused_by": original_event["event_id"],
+    }
+    upgrade["details"] = {
+        **upgrade["details"],
+        "settlement_receipt_revision": "review_guard_upgrade",
+    }
+    append_rollout_event(rollout_event_log_path(runtime, GOAL_ID), upgrade)
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID,
+    )
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    decision = (recovery.get("replan_action_packet") or {}).get("decision")
+    assert rc == 0, {
+        "reason": recovery.get("reason"),
+        "error_code": recovery.get("error_code"),
+        "decision": decision,
+        "effective_action": recovery.get("effective_action"),
+    }
+    assert recovery["heartbeat_receipt"]["settlement_identity"] == original_identity
+    assert recovery["heartbeat_receipt"]["event_id"] == upgrade["event_id"]
+    assert recovery["heartbeat_receipt"]["recorded_at"] == upgrade_at
+    assert decision == "historical_ack_recorded", {
+        "decision": decision,
+        "error": recovery.get("error"),
+        "error_code": recovery.get("error_code"),
+        "effective_action": recovery.get("effective_action"),
+    }
+    actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    writeback = next(command for command in actions if "refresh-state" in command)
+    spend = next(command for command in actions if "spend-slot" in command)
+    before = _spend_run_count(runtime)
+    rc, written = _run_generated_cli(writeback, registry_path=registry)
+    assert rc == 0 and written["ok"] is True and written["appended"] is True, written
+    assert written["settlement_identity"] == original_identity
     assert _spend_run_count(runtime) == before
     rc, spent = _run_generated_cli(spend, registry_path=registry)
     assert rc == 0 and spent["ok"] is True, spent

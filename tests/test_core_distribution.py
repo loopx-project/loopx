@@ -60,7 +60,8 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
         assert not (staged / "loopx" / name).exists()
     assert not list((staged / "loopx").glob("chat_*.py"))
     for name in ("entrypoint.py", "control_plane/turn_driver/executor.py",
-                 "control_plane/coordination/sqlite_authority_store.ts"):
+                 "control_plane/coordination/sqlite_authority_store.ts",
+                 "extensions/lark/extension.toml"):
         assert (staged / "loopx" / name).read_bytes() == (REPOSITORY / "loopx" / name).read_bytes()
     assert not (staged / ".loopx").exists()
     assert not (staged / "tests").exists()

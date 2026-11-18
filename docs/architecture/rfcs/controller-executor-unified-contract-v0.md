@@ -1373,6 +1373,15 @@ and retirement, and adoption/full-cost qualification where each boundary is
 independently reviewable. Record dependencies in the existing tasks and PRs.
 Splitting delivery does not close C1 or waive §9's original quota-baseline test.
 
+Public-distribution isolation now reuses the runtime artifact metadata owner:
+runtime qualification observes the installed ordinary writer, desktop packaging
+observes its archived writer, and publication requires their declared supported
+contract to match. The existing quota-packet default remains supported; the
+unqualified complete-contract default cannot pass on installation checks alone.
+This does not qualify §9 outcomes/costs, replace an installed writer, add another
+current producer or retire historical readers. Extending the supported profile
+still requires the original adoption evidence. See the [release boundary](../../product/release-readiness.md).
+
 Native launch rechecks use the original `SettlementIdentity` as their sole
 Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing
 `current_turn_host_launch_decision` owner; an observed replan packet is context,

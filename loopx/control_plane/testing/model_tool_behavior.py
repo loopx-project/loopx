@@ -637,7 +637,10 @@ class QuotaToolContext:
             if path or digest:
                 raise ValueError("context reader cannot mix reference and capture arguments")
             reader = Path(reference_file).expanduser()
-            _, reference = read_context_read_reference(str(reader if reader.is_absolute() else project_root / reader))
+            try:
+                _, reference = read_context_read_reference(str(reader if reader.is_absolute() else project_root / reader))
+            except OSError as exc:
+                raise ValueError("context reader reference could not be read") from exc
             path, digest = reference["path"], reference["sha256"]
         source = Path(path).expanduser() if path else None
         source = (source if source.is_absolute() else project_root / source) if source else None

@@ -1006,7 +1006,7 @@ def manager_session_model_allocation(
 
     This is a proposal for the adapter's next idle boundary, not an update or
     an endpoint switch. Absent defaults and unchanged profiles preserve the
-    persisted binding, including a restart's original service environment.
+    persisted binding unless a legacy snapshot still reports another model.
     """
     previous = session.get("manager_executor_allocation")
     defaults = steward_machine_defaults(controller)
@@ -1035,10 +1035,12 @@ def manager_session_model_allocation(
                 return None
             proposed["reasoning_effort"] = session["agent_reasoning_effort"]
         return proposed
-    if not isinstance(previous, Mapping):
+    if (
+        not isinstance(previous, Mapping)
+        or previous.get("schema_version") != MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION
+    ):
         return None
-    if (defaults is None or defaults.get("status") != "ready"
-            or defaults.get("configuration_revision") == previous.get("configuration_revision")):
+    if defaults is None or defaults.get("status") != "ready":
         return None
     endpoint = str(previous["executor_endpoint"])
     configured_endpoint = _machine_default_text(defaults, "executor_endpoint")
@@ -1046,6 +1048,18 @@ def manager_session_model_allocation(
         # Editing another endpoint's defaults cannot move an existing binding
         # or reinterpret its model as belonging to that other provider.
         return None
+    # Older Codex Sessions could persist a new allocation while reopening
+    # with the last observed model. Reconcile only a concrete machine choice
+    # for the same executor and a Session with no recorded model request.
+    legacy_model_not_adopted = (
+        endpoint == session.get("agent_id") == "codex"
+        and "requested_agent_model_id" not in session
+        and previous.get("model_source") == MANAGER_MODEL_SOURCE_MACHINE_CONFIGURATION
+        and _machine_default_text(defaults, "executor_model") == previous["model"]
+        and session.get("agent_model_id") not in (None, previous["model"])
+    )
+    if defaults.get("configuration_revision") == previous.get("configuration_revision"):
+        return previous if legacy_model_not_adopted else None
     requested = endpoint if previous.get("allocation_reason") == MANAGER_ALLOCATION_REASON_USER_EXPLICIT else None
     proposed = manager_executor_allocation(
         controller, requested, machine_defaults=defaults,
@@ -1070,7 +1084,7 @@ def manager_session_model_allocation(
     model_edited = proposed["configured_model"] != previous_model
     effort_edited = proposed["configured_reasoning_effort"] != previous_effort
     if not model_edited and not effort_edited:
-        return None
+        return previous if legacy_model_not_adopted else None
     if not model_edited:
         proposed["model"] = previous["model"]
         proposed["model_source"] = previous["model_source"]

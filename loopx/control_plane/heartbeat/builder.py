@@ -563,14 +563,12 @@ def build_heartbeat_prompt(
         compact_prompt_command=str(commands["compact_prompt_command"]),
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
-        **({"captured_envelope": True} if turn_envelope else {}),
         **({"captured_context": True} if native_goal_host and effective_context_delivery == "on" else {}),
         **reward_memory_rule_kwargs,
     )
     task_body = bind_exact_turn_settlement_task_body(
         task_body,
         turn_instance_id=normalized_turn_instance_id,
-        captured_envelope=turn_envelope,
     )
     if fine_grained:
         task_body = f"{task_body}\n\n{FINE_GRAINED_TURN_RULE}"
@@ -651,7 +649,6 @@ def build_heartbeat_prompt(
             brief=brief,
             thin=thin,
             native_goal_host=native_goal_host,
-            captured_envelope=turn_envelope,
         ),
         "task_body": task_body,
     }

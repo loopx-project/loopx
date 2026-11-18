@@ -27,7 +27,6 @@ import {
   journalPhaseViolation,
   parseTurnJournalGoalBinding,
   supportedJournalStatuses,
-  transactionPhases,
   type TurnJournalGoalBinding,
 } from "./turn_journal.ts";
 
