@@ -590,6 +590,65 @@ def test_cli_update_moves_bound_pair_and_still_restarts_other_services(managed, 
         assert str(replacement.resolve()) in loaded[f"com.loopx.{kind}"]["ProgramArguments"][2]
 
 
+def test_unchanged_python_update_keeps_running_standard_services(managed, monkeypatch):
+    _, _, _, _, calls, _ = managed
+    monkeypatch.setattr(activation.sys, "platform", "darwin")
+    installed = {"schema_version": "loopx_runtime_identity_v1", "package_version": "2.4.0",
+        "package_fingerprint": "sha256:" + "1" * 64}
+    monkeypatch.setattr(managed_runtime, "_serving_identity", lambda *_: installed)
+
+    result = activation.restart_services_for_runtime_activation(
+        changes_applied=False, runtime_ready=True, installed_python_identity=installed)
+
+    assert result["restart_status"] == "already_active"
+    assert result["restarted_services"] == []
+    assert calls == []
+
+
+@pytest.mark.parametrize("running_fingerprint, restart", [("1", True), ("2", False), (None, False)])
+def test_same_launcher_retries_only_proven_stale_package_service(
+    managed, monkeypatch, running_fingerprint, restart,
+):
+    _, agents, target, _, calls, _ = managed
+    align_managed_runtime(str(target))
+    calls.clear()
+    before = {path: path.read_bytes() for path in agents.glob("*.plist")}
+    installed = {"schema_version": "loopx_runtime_identity_v1", "package_version": "2.4.0",
+        "release_id": None, "source_revision": None, "package_fingerprint": "sha256:" + "2" * 64}
+    package_doctor = {"ok": True, "scope": "installation_only",
+        "service_runtime_identity": installed, "python": {"executable": sys.executable}}
+    target.write_text(f"#!{sys.executable}\nprint({json.dumps(json.dumps(package_doctor))})\n")
+
+    def serving(_opener, path, _port):
+        if path.stem != "com.loopx.status" or ("bootstrap", path.stem) in calls:
+            return installed
+        if running_fingerprint is None:
+            return None
+        return {**installed, "package_fingerprint": "sha256:" + running_fingerprint * 64}
+
+    def verify(endpoints, expected):
+        if not all(serving(None, path, port) == expected for path, port in endpoints.items()):
+            raise RuntimeError("service_runtime_alignment_failed")
+
+    monkeypatch.setattr(activation.sys, "platform", "darwin")
+    monkeypatch.setattr("loopx.doctor.current_script_invocation_path", lambda: target)
+    monkeypatch.setattr(managed_runtime, "_serving_identity", serving)
+    monkeypatch.setattr(managed_runtime, "_verify_services", verify)
+    result = activation.restart_services_for_runtime_activation(
+        changes_applied=False, runtime_ready=True, installed_python_identity=installed,
+        installed_bin=None)
+
+    assert {path: path.read_bytes() for path in before} == before
+    assert result["activation_pending"] is (running_fingerprint is None)
+    if restart:
+        assert result["restart_status"] == "restarted"
+        assert result["restarted_services"] == ["com.loopx.status"]
+        assert calls == [("bootout", "com.loopx.status"), ("bootstrap", "com.loopx.status")]
+    else:
+        assert result["restart_status"] == ("failed" if running_fingerprint is None else "already_active")
+        assert not calls
+
+
 @pytest.mark.parametrize("shell", ["exec /old/loopx $(touch /tmp/no)",
     "exec /old/loopx chat | cat", "exec /old/loopx chat > out", "echo exec /old/loopx chat",
     'exec /old/loopx "$RUNTIME"', "exec /old/loopx `whoami`", "exec /old/loopx; echo done"])

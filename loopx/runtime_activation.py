@@ -333,6 +333,7 @@ def restart_services_for_runtime_activation(
     changes_applied: bool,
     runtime_ready: bool,
     installed_bin: Path | None = None,
+    installed_python_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Report and perform the restart that moves services onto the new release.
 
@@ -345,10 +346,11 @@ def restart_services_for_runtime_activation(
     Archive installs can select a separate bin directory. Those installs do not
     own the user's default managed services. Compare directories, not launcher
     targets: a symlink still belongs to the directory the installer updates.
-    Package-manager callers retain their existing activation path.
+    Package-manager callers can reconcile stale services after a successful
+    no-op install, and keep a service that already serves the verified package.
     """
 
-    if not (changes_applied and runtime_ready):
+    if not runtime_ready or not (changes_applied or installed_python_identity):
         return {
             "restarted_services": [],
             "restart_status": "skipped_runtime_not_activated",
@@ -362,26 +364,38 @@ def restart_services_for_runtime_activation(
             "restart_status": "skipped_custom_installation",
         }
     try:
-        from .hosts.managed_service_runtime import align_managed_runtime, has_runtime_binding
+        from .hosts.managed_service_runtime import (
+            align_managed_runtime,
+            has_runtime_binding,
+            managed_services_match_runtime,
+        )
+        plists = _managed_service_plists() if sys.platform == "darwin" else []
         if sys.platform == "darwin" and has_runtime_binding():
             # Preserve the existing pending-work result even when the new
             # installation cannot yet be qualified. Alignment rechecks under
             # its own lock before any manager mutation.
-            with managed_chat_activation_guard([p for p in _managed_service_plists() if p.stem.endswith(".chat")]):
-                pass
+            if changes_applied:
+                with managed_chat_activation_guard([p for p in plists if p.stem.endswith(".chat")]):
+                    pass
             if installed_bin is None:
                 from .doctor import current_script_invocation_path
                 installed_bin = current_script_invocation_path()
             if installed_bin is None:
                 raise RuntimeActivationDeferred("service_runtime_unverified", ["com.loopx.status", "com.loopx.chat"])
             aligned = align_managed_runtime(str(installed_bin))
-            other = [p for p in _managed_service_plists() if p.stem not in {"com.loopx.status", "com.loopx.chat"}]
+            other = [p for p in plists if p.stem not in {"com.loopx.status", "com.loopx.chat"}]
             restarted = restart_managed_loopx_services(plists=other) if other else []
-            return {"restarted_services": [*aligned["restarted_services"], *restarted],
-                "restart_status": "restarted", "activation_pending": False}
+            restarted = [*aligned["restarted_services"], *restarted]
+            no_restart_status = "already_active" if aligned["readiness_verified"] else "not_running"
+            return {"restarted_services": restarted, "activation_pending": False,
+                "restart_status": "restarted" if restarted else no_restart_status}
+        if (installed_python_identity and not changes_applied
+                and managed_services_match_runtime(plists, installed_python_identity)):
+            return {"restarted_services": [], "restart_status": "already_active", "activation_pending": False}
+        restarted = restart_managed_loopx_services()
         return {
-            "restarted_services": restart_managed_loopx_services(),
-            "restart_status": "restarted",
+            "restarted_services": restarted,
+            "restart_status": "restarted" if restarted else "not_running",
             "activation_pending": False,
         }
     except RuntimeActivationDeferred as exc:

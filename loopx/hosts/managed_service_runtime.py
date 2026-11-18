@@ -23,6 +23,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from xml.parsers.expat import ExpatError
 
 from ..file_lock import exclusive_file_lock, write_bytes_atomic, write_json_atomic
 from .. import runtime_activation as activation
@@ -339,6 +340,56 @@ def _start_order(paths):
     return sorted(paths, key=lambda path: path.stem != _OBSERVER_LABEL)
 
 
+def _serving_identity(opener: urllib.request.OpenerDirector, path: Path, port: int) -> dict | None:
+    status = path.stem.endswith(".status")
+    url = f"http://127.0.0.1:{port}" + ("/?readiness=1" if status else "/api/chat/readiness")
+    try:
+        try:
+            response = opener.open(url, timeout=0.5)
+        except urllib.error.HTTPError as exc:
+            if status or exc.code != 404:
+                raise
+            response = opener.open(f"http://127.0.0.1:{port}/api/chat/capabilities", timeout=0.5)
+        with response:
+            body = response.read(1024 * 1024 + 1)
+        if len(body) > 1024 * 1024:
+            return None
+        observed = json.loads(body)
+        if isinstance(observed, dict):
+            readiness = observed.get("readiness")
+            ready = (observed.get("source") == "serve-status"
+                and isinstance(readiness, dict) and readiness.get("state") == "ready") if status else (
+                observed.get("schema_version") == "loopx_chat_capabilities_v1" or
+                (observed.get("schema_version") == "loopx_chat_readiness_v1"
+                    and observed.get("ok") is True and observed.get("state") == "ready"))
+            identity = observed.get("runtime_identity")
+            if ready and isinstance(identity, dict):
+                return identity
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def managed_services_match_runtime(plists: list[Path], identity: dict) -> bool:
+    """Prove an unbound standard service already serves the installed package."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        for path in plists:
+            if path.is_symlink():
+                return False
+            payload = plistlib.loads(path.read_bytes())
+            if not isinstance(payload, dict) or payload.get("Label") != path.stem:
+                return False
+            port = _endpoint(payload)
+            if not all(activation._managed_service_state(path, payload=payload)):
+                return False
+            if _serving_identity(opener, path, port) != identity:
+                return False
+        return bool(plists)
+    except (OSError, ValueError, plistlib.InvalidFileException, ExpatError, subprocess.SubprocessError):
+        return False
+
+
 def _verify_services(services: dict[Path, int], identity: dict) -> None:
     # A working CLI does not prove its Chat assets can serve. Read back the
     # exact HTTP runtime before committing the handoff; a failed start restores
@@ -348,32 +399,8 @@ def _verify_services(services: dict[Path, int], identity: dict) -> None:
     deadline = time.monotonic() + 15
     while pending and time.monotonic() < deadline:
         for path, port in list(pending.items()):
-            status = path.stem.endswith(".status")
-            url = f"http://127.0.0.1:{port}" + ("/?readiness=1" if status else "/api/chat/readiness")
-            try:
-                try:
-                    response = opener.open(url, timeout=0.5)
-                except urllib.error.HTTPError as exc:
-                    if status or exc.code != 404:
-                        raise
-                    response = opener.open(f"http://127.0.0.1:{port}/api/chat/capabilities", timeout=0.5)
-                with response:
-                    body = response.read(1024 * 1024 + 1)
-                    if len(body) > 1024 * 1024:
-                        continue
-                    observed = json.loads(body)
-                if not isinstance(observed, dict):
-                    continue
-                readiness = observed.get("readiness")
-                ready = (observed.get("source") == "serve-status"
-                    and isinstance(readiness, dict) and readiness.get("state") == "ready") if status else (
-                    observed.get("schema_version") == "loopx_chat_capabilities_v1" or
-                    (observed.get("schema_version") == "loopx_chat_readiness_v1"
-                        and observed.get("ok") is True and observed.get("state") == "ready"))
-                if ready and observed.get("runtime_identity") == identity:
-                    pending.pop(path)
-            except (OSError, ValueError):
-                pass
+            if _serving_identity(opener, path, port) == identity:
+                pending.pop(path)
         if pending:
             time.sleep(0.1)
     if pending:
@@ -496,6 +523,7 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
     plists = [Path.home() / "Library/LaunchAgents" / f"com.loopx.{kind}.plist"
         for kind in ("status", "chat")]
     originals, updates, pids, endpoints = {}, {}, {}, {}
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     for plist in plists:
         if not plist.exists():
             continue
@@ -514,6 +542,14 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
             originals[plist] = original
             updates[plist] = plistlib.dumps(updated)
             pids[plist] = pid
+        elif pid and identity.get("package_fingerprint"):
+            # Pip and pipx can replace bytes in place. A verified old runtime
+            # on the same managed route still requires a fenced handoff.
+            running = _serving_identity(opener, plist, endpoints[plist])
+            if (running and running.get("schema_version") == identity["schema_version"]
+                    and running.get("package_fingerprint") and running != identity):
+                originals[plist] = updates[plist] = original
+                pids[plist] = pid
     chat = [p for p in plists if p.exists() and p.stem.endswith(".chat")]
     observer = journal.parent / f"{_OBSERVER_LABEL}.plist"
     observer_root = None

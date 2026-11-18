@@ -30,6 +30,21 @@ INSTALLED_COMMIT = "1" * 40
 TARGET_COMMIT = "2" * 40
 
 
+@pytest.fixture
+def python_package_readback(monkeypatch):
+    def identity(fingerprint):
+        return {"schema_version": "loopx_runtime_identity_v1",
+            "package_version": __version__, "package_fingerprint": "sha256:" + fingerprint * 64}
+
+    monkeypatch.setattr("loopx.self_update.release_runtime_identity", lambda *_: identity("1"))
+
+    def doctor(fingerprint="2"):
+        body = {"ok": True, "scope": "installation_only", "service_runtime_identity": identity(fingerprint)}
+        return subprocess.CompletedProcess([], 0, json.dumps(body), "")
+
+    return doctor
+
+
 class FakeVersionResponse:
     def __init__(self, body: bytes | None = None) -> None:
         self.body = body if body is not None else f'__version__ = "{__version__}"\n'.encode()
@@ -414,7 +429,7 @@ def test_update_actions_are_explicit_and_legacy_flags_remain_compatible() -> Non
         resolve_update_action("check", execute=True)
 
 
-def test_python_distribution_apply_uses_the_owning_interpreter_pip() -> None:
+def test_python_distribution_apply_uses_the_owning_interpreter_pip(python_package_readback) -> None:
     doctor = doctor_payload()
     doctor["package"] = {
         "install_kind": "python_distribution",
@@ -463,7 +478,7 @@ def test_python_distribution_apply_uses_the_owning_interpreter_pip() -> None:
     with (
         mock.patch(
             "loopx.self_update.subprocess.run",
-            side_effect=[passed, passed, passed, passed, passed, passed],
+            side_effect=[passed, python_package_readback(), *([passed] * 5)],
         ) as run,
         mock.patch(
             "loopx.runtime_activation.restart_managed_loopx_services",
@@ -475,18 +490,23 @@ def test_python_distribution_apply_uses_the_owning_interpreter_pip() -> None:
     assert result["ok"] is True
     assert result["changes_applied"] is True
     assert result["execution"]["driver"] == "python_pip"
+    assert result["execution"]["previous_runtime_identity"]["package_version"] == __version__
+    assert result["execution"]["installed_runtime_identity"]["package_version"] == __version__
     assert result["execution"]["restarted_services"] == ["com.loopx.status"]
     assert run.call_args_list[0].args[0] == [
         sys.executable,
+        "-E",
+        "-P",
         "-m",
         "pip",
         "install",
         "--upgrade",
         "loopx",
     ]
-    assert run.call_args_list[1].args[0][-4:] == ["authority-archive", "upgrade", "--all-known", "--execute"]
-    assert run.call_args_list[2].args[0][3:5] == ["workflow-skills", "--install"]
-    assert run.call_args_list[3].args[0][3:5] == ["slash-commands", "--install"]
+    assert run.call_args_list[1].args[0][-2:] == ["doctor", "--installation-only"]
+    assert run.call_args_list[2].args[0][-4:] == ["authority-archive", "upgrade", "--all-known", "--execute"]
+    assert run.call_args_list[3].args[0][5:7] == ["workflow-skills", "--install"]
+    assert run.call_args_list[4].args[0][5:7] == ["slash-commands", "--install"]
 
 
 @pytest.mark.parametrize("installer", ["pip", "pipx"])
@@ -598,7 +618,7 @@ def test_real_windows_console_refuses_before_starting_installer(tmp_path: Path) 
     assert "loopx.entrypoint" in refusal["next_action"]["command"]
 
 
-def test_pipx_distribution_apply_preserves_the_pipx_environment() -> None:
+def test_pipx_distribution_apply_preserves_the_pipx_environment(python_package_readback) -> None:
     doctor = doctor_payload()
     doctor["package"] = {"install_kind": "python_distribution"}
     doctor["install_freshness"].update(
@@ -621,7 +641,7 @@ def test_pipx_distribution_apply_preserves_the_pipx_environment() -> None:
     with (
         mock.patch(
             "loopx.self_update.subprocess.run",
-            side_effect=[passed, passed, passed, passed, passed, passed],
+            side_effect=[passed, python_package_readback(), *([passed] * 5)],
         ) as run,
         mock.patch(
             "loopx.runtime_activation.restart_managed_loopx_services",
@@ -910,13 +930,14 @@ def test_windows_execute_update_fails_closed_without_launching_bash(
     assert "install-windows.ps1" in updated["recommended_action"]
 
 
-def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_updates():
+def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_updates(python_package_readback):
     doctor = doctor_payload()
     doctor["package"] = {"install_kind": "python_distribution", "release_root": None}
     doctor["install_freshness"].update(install_kind="python_distribution", python_distribution_installer="pip")
     payload = build_update_plan(action="apply", doctor_payload=doctor)
     with mock.patch("loopx.self_update.subprocess.run", side_effect=[
         subprocess.CompletedProcess([], 0, "installed", ""),
+        python_package_readback(),
         subprocess.CompletedProcess([], 1, '{"status":"failed","reason":"backup failed"}', ""),
     ]) as run, mock.patch("loopx.runtime_activation.restart_managed_loopx_services") as restart:
         result = execute_update_plan(payload)
@@ -924,7 +945,7 @@ def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_up
     assert result["changes_applied"]  # Package installed; data migration failure is not a rollback.
     assert result["execution"]["authority_upgrade_returncode"] == 1
     assert result["execution"]["doctor_status"] == "skipped_prior_step_failed"
-    assert run.call_count == 2
+    assert run.call_count == 3
     restart.assert_not_called()
 
 
@@ -953,7 +974,9 @@ def apply_plan_for_driver(driver):
     "python_pip",
     "python_pipx",
 ])
-def test_update_preserves_selected_route_through_install_and_readback(tmp_path, monkeypatch, driver):
+def test_update_preserves_selected_route_through_install_and_readback(
+    tmp_path, monkeypatch, driver, python_package_readback,
+):
     registry, runtime = tmp_path / "project/.loopx/registry.json", tmp_path / "selected runtime"
     payload = apply_plan_for_driver(driver)
     calls, installer_env = [], {}
@@ -964,6 +987,8 @@ def test_update_preserves_selected_route_through_install_and_readback(tmp_path, 
         return passed, {"stage": "installer_execution"}
     def run(command, **kwargs):
         calls.append(command)
+        if "--installation-only" in command:
+            return python_package_readback()
         return passed
     monkeypatch.setattr("loopx.self_update.run_archive_installer", install)
     monkeypatch.setattr("loopx.self_update.subprocess.run", run)
@@ -1279,15 +1304,56 @@ def test_archive_readback_and_activation_follow_installer_bin_owner(
 
 
 @pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
-def test_python_distribution_activation_ignores_archive_bin_override(tmp_path, monkeypatch, driver):
+def test_python_distribution_activation_ignores_archive_bin_override(
+    tmp_path, monkeypatch, driver, python_package_readback,
+):
     monkeypatch.setenv("LOOPX_BIN_DIR", str(tmp_path / "custom/bin"))
     payload = apply_plan_for_driver(driver)
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
     with (
-        mock.patch("loopx.self_update.subprocess.run", return_value=passed),
+        mock.patch("loopx.self_update.subprocess.run",
+            side_effect=[passed, python_package_readback(), *([passed] * 5)]),
         mock.patch("loopx.runtime_activation.restart_managed_loopx_services", return_value=[]) as restart,
     ):
         result = execute_update_plan(payload)
     assert result["ok"]
     restart.assert_called_once_with()
-    assert result["execution"]["restart_status"] == "restarted"
+    assert result["execution"]["restart_status"] == "not_running"
+
+
+@pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
+def test_unchanged_python_package_still_refreshes_host_material(driver, python_package_readback):
+    payload = apply_plan_for_driver(driver)
+    passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
+    with (
+        mock.patch("loopx.self_update.subprocess.run",
+            side_effect=[passed, python_package_readback("1"), *([passed] * 5)]) as run,
+        mock.patch("loopx.runtime_activation.restart_managed_loopx_services", return_value=[]),
+    ):
+        result = execute_update_plan(payload)
+    assert run.call_count == 7
+    assert result["ok"] and result["changes_applied"] is False
+    assert result["execution"]["package_identity_verified"] is True
+    assert result["execution"]["restart_status"] == "not_running"
+    assert result["execution"]["extension_doctor_returncode"] == 0
+    assert "unchanged" in result["recommended_action"]
+
+
+@pytest.mark.parametrize("readback", [
+    subprocess.CompletedProcess([], 1, '', 'not installed'),
+    subprocess.CompletedProcess([], 0, '{"ok":true,"scope":"installation_only"}', ''),
+])
+def test_python_update_preserves_unverified_result_without_activating(readback, python_package_readback):
+    payload = apply_plan_for_driver("python_pipx")
+    passed = subprocess.CompletedProcess([], 0, 'already at latest version', '')
+    with (
+        mock.patch("loopx.self_update.subprocess.run", side_effect=[passed, readback]) as run,
+        mock.patch("loopx.runtime_activation.restart_managed_loopx_services") as restart,
+    ):
+        result = execute_update_plan(payload)
+    assert result["ok"] is False and result["changes_applied"] is False
+    assert result["execution"]["install_returncode"] == 0
+    assert result["execution"]["package_identity_verified"] is False
+    assert result["next_action"]["command"] == "loopx doctor --installation-only"
+    assert run.call_count == 2
+    restart.assert_not_called()
