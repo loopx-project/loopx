@@ -330,6 +330,26 @@ for name in ('workflow_plan','candidate_preflight','acceptance_loop','metadata_p
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("arguments", [
+    ["capability", "--help"],
+    ["capability", "list", "--format", "json"],
+    ["capability", "show", "benchmark-toolkit", "--format", "json"],
+    ["capability", "show", "issue-fix", "--format", "json"],
+])
+def test_installed_core_discovers_capabilities_without_benchmark_execution(core_python, tmp_path, arguments):
+    from tests.capabilities.test_benchmark_toolkit_loading import DISCOVERY_SCRIPT
+
+    result = subprocess.run([core_python, "-I", "-c", DISCOVERY_SCRIPT,
+        json.dumps(["--registry", str(tmp_path / "registry.json"),
+                    "--runtime-root", str(tmp_path / "runtime"), *arguments])],
+        cwd=tmp_path, env=_environment(core_python, {"PATH": ""}),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    if arguments[-1] == "json":
+        assert json.loads(result.stdout)["ok"] is True
+    assert not list(tmp_path.iterdir())
+
+
 def test_installed_core_catalog_entries_have_executable_parsers(core_python, tmp_path):
     reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
     for group in reference["groups"]:
