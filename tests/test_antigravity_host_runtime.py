@@ -365,3 +365,74 @@ def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):
         == "retired"
     )
     assert json.loads(path.read_text()) == {"personal-hook": unrelated}
+
+
+def test_native_input_reads_bounded_tail_windows_on_long_trajectories(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    monkeypatch.setenv("ANTIGRAVITY_LS_ADDRESS", "127.0.0.1:1234")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "synthetic-token")
+    text = "Continue"
+
+    def make_steps(total_steps: int, user_index: int | None) -> list[dict[str, object]]:
+        steps = [
+            {
+                "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": idx}},
+                "plannerResponse": {"response": f"step-{idx}"},
+            }
+            for idx in range(total_steps)
+        ]
+        if user_index is not None:
+            steps[user_index] = {
+                "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "sourceTrajectoryStepInfo": {"stepIndex": user_index},
+                },
+                "userInput": {"userResponse": text},
+            }
+        return steps
+
+    def run_case(total_steps: int, user_index: int | None):
+        steps = make_steps(total_steps, user_index)
+        ranges: list[tuple[int, int]] = []
+
+        def read(url, token, method, payload, **_):
+            if method == "GetCascadeTrajectorySteps":
+                start = payload["startIndex"]
+                end = payload["endIndex"]
+                assert end - start <= 200, f"unbounded full trajectory read: {(start, end)}"
+                ranges.append((start, end))
+                return {"steps": steps[start:end]}
+            return {
+                "trajectory": {"cascadeId": "native-chat"},
+                "status": "CASCADE_RUN_STATUS_RUNNING",
+                "numTotalSteps": len(steps),
+            }
+
+        monkeypatch.setattr(provider, "_rpc_post", read)
+        return runtime._native_input(bound(tmp_path), text), ranges
+
+    tail_hit, tail_ranges = run_case(5000, 4985)
+    assert tail_ranges == [(4800, 5000)]
+    expected_tail = hashlib.sha256(
+        json.dumps(["native-chat", 4985, "2026-01-01T00:00:00Z", text]).encode()
+    ).hexdigest()
+    assert tail_hit == (expected_tail, "CASCADE_RUN_STATUS_RUNNING", 5000)
+
+    back_hit, back_ranges = run_case(5000, 4550)
+    assert back_ranges == [(4800, 5000), (4600, 4800), (4400, 4600)]
+    expected_back = hashlib.sha256(
+        json.dumps(["native-chat", 4550, "2026-01-01T00:00:00Z", text]).encode()
+    ).hexdigest()
+    assert back_hit == (expected_back, "CASCADE_RUN_STATUS_RUNNING", 5000)
+
+    empty_hit, empty_ranges = run_case(500, None)
+    assert empty_hit is None
+    assert empty_ranges == [(300, 500), (100, 300), (0, 100)]
