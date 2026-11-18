@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from json import loads as json_loads
 from pathlib import Path
 from typing import Any
 
+from ...file_lock import (
+    try_exclusive_file_lock,
+    try_posix_child_retained_file_lock,
+)
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
 from ..agents.delivery_workspace import normalize_delivery_workspace_snapshot
@@ -13,8 +19,10 @@ from ..agents.workspace_guard import (
     capture_delivery_workspace,
     delivery_workspace_repository,
 )
+from ..coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..runtime.validation_command import (
     CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+    retain_validation_execution_lock,
     run_caller_validation,
 )
 from .active_state_editing import find_todo_block
@@ -31,6 +39,7 @@ from .completion_validation_projection import (
     completion_validation_declaration_sha256,
 )
 from .completion_validation_store import (
+    completion_validation_declaration_path,
     persist_completion_validation_declaration,
     read_completion_validation_declaration,
 )
@@ -42,6 +51,7 @@ _COMPLETION_VALIDATION_TIMEOUT_SECONDS = 20
 # Per-todo overrides (declared on `todo add`) must also stay under that outer
 # budget for the same reason; the writer-side range check enforces this.
 COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS = 29
+COMPLETION_VALIDATION_IN_PROGRESS = "completion_validation_in_progress"
 
 
 def normalize_validation_command_json(raw: str | None) -> list[str] | None:
@@ -317,17 +327,15 @@ def _run_declared_completion_validation(
             "stderr_captured": False,
             "local_path_captured": False,
         }
-    except (FileNotFoundError, PermissionError):
+    except OSError:
+        # Launch failures such as invalid executable formats can include a path.
         return {
             "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
             "command_label": label,
             "exit_code": None,
             "passed": False,
             "status": "command_not_run",
-            "summary": (
-                "validation command could not be launched because its executable "
-                "is unavailable"
-            ),
+            "summary": "validation command could not be launched",
             "stdout_captured": False,
             "stderr_captured": False,
             "local_path_captured": False,
@@ -669,6 +677,26 @@ def execute_completion_validation_effects(
         updates["goal_acceptance_source_binding"] = dict(source_binding)
         updates["goal_acceptance_validation_receipts"] = receipts
     return updates
+
+
+@contextmanager
+def completion_validation_execution(
+    *, runtime_root: Path, goal_id: str, todo_id: str,
+) -> Iterator[None]:
+    """Keep a single host executor through the canonical finalization call."""
+    target = completion_validation_declaration_path(
+        runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id,
+    ).with_suffix(".execution")
+    lock = try_posix_child_retained_file_lock if os.name == "posix" else try_exclusive_file_lock
+    with lock(target, operation="todo_completion_validation") as held:
+        if held is None:
+            raise LocalCoordinationAuthorityUnavailable(
+                "Completion validation is already running for this Todo. Retry the original completion after it finishes.",
+                code=COMPLETION_VALIDATION_IN_PROGRESS,
+                payload={"goal_id": goal_id, "todo_id": todo_id},
+            )
+        with retain_validation_execution_lock(held if isinstance(held, int) else None):
+            yield
 
 
 def completion_validation_failure(
