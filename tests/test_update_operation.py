@@ -34,7 +34,7 @@ def test_runtime_check_uses_one_qualified_version_and_revision(monkeypatch):
     def no_branch_probe(*_args):
         raise AssertionError("The mutable branch version must not describe a qualified artifact")
     monkeypatch.setattr("loopx.self_update._source_version_check", no_branch_probe)
-    monkeypatch.setattr(update_source, "resolve_artifact", lambda *_: {
+    monkeypatch.setattr(update_source, "resolve_artifact", lambda *_, **kwargs: {
         "source_revision": "2" * 40, "package_version": "1.2.3"})
     monkeypatch.setattr(update_source, "target_direction", lambda *_: "ahead")
     plan = build_update_plan(action="check", doctor_payload=doctor_payload(), resolve_remote=True)
@@ -46,13 +46,36 @@ def test_runtime_check_uses_one_qualified_version_and_revision(monkeypatch):
 def test_target_is_resolved_before_any_mutation_and_downgrade_needs_intent(monkeypatch, direction, accepted):
     from loopx.cli_commands import update_source
     artifact = {"source_revision": "2" * 40, "package_version": "1.0.0"}
-    monkeypatch.setattr(update_source, "resolve_artifact", lambda *_: artifact)
+    monkeypatch.setattr(update_source, "resolve_artifact", lambda *_, **kwargs: artifact)
     monkeypatch.setattr(update_source, "target_direction", lambda *_: direction)
     plan = build_update_plan(action="apply", doctor_payload=doctor_payload(), resolve_remote=True)
     assert plan["source"]["resolved_revision"] == artifact["source_revision"]
     assert plan["plan"]["apply_supported"] is accepted
     override = build_update_plan(action="apply", doctor_payload=doctor_payload(), resolve_remote=True, allow_downgrade=True)
     assert override["plan"]["apply_supported"] is True
+
+
+@pytest.mark.parametrize("ref", ["main", "2" * 40])
+def test_update_plan_blocks_unqualified_preview_even_if_downgrade_is_allowed(monkeypatch, ref):
+    from loopx.cli_commands import update_artifact, update_source
+
+    descriptor = {
+        "schema_version": update_artifact.RUNTIME_ARTIFACT_SCHEMA_VERSION,
+        "source_revision": "2" * 40,
+        "package_version": "1.2.3",
+        "channel": "main",
+        "size": 7,
+        "sha256": "a" * 64,
+        "urls": ["https://publisher.invalid/runtime.tar.gz"],
+    }
+    monkeypatch.setattr(update_artifact, "read_json", lambda _url: descriptor)
+    monkeypatch.setattr(update_source, "target_direction", lambda *_: "ahead")
+    plan = build_update_plan(ref=ref, action="apply", doctor_payload=doctor_payload(),
+                             resolve_remote=True, allow_downgrade=True)
+    assert plan["source"]["target_status"] == "blocked"
+    assert plan["plan"]["apply_supported"] is False
+    assert not plan["plan"]["mutates_release_install"]
+    assert "unqualified for public adoption" in plan["plan"]["blocked_reason"]
 
 
 def test_installer_uses_frozen_revision_but_persists_channel_and_proxy(monkeypatch):

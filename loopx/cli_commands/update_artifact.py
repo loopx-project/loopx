@@ -114,7 +114,9 @@ def validate_default_contract(value: object) -> dict[str, Any]:
     return dict(value)
 
 
-def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> dict[str, Any]:
+def validate_manifest(
+    value: dict[str, Any], *, revision: str | None = None, for_activation: bool = False,
+) -> dict[str, Any]:
     if value.get("schema_version") != RUNTIME_ARTIFACT_SCHEMA_VERSION:
         raise ValueError("Unsupported runtime artifact metadata")
     if not SHA.fullmatch(str(value.get("source_revision", ""))):
@@ -132,14 +134,17 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
         raise ValueError("Runtime artifact has no bounded download sources")
     for url in urls:
         safe_url(url)
-    # Historical v1 snapshots remain readable. Newly produced artifacts and
-    # the publisher require the observed contract; absence is not qualification.
-    if "default_contract" in value:
-        validate_default_contract(value["default_contract"])
+    channel = value.get("channel")
+    if for_activation and channel not in ("main", "stable"):
+        raise ValueError("Runtime artifact has no supported installation channel")
+    # Published legacy stable releases remain installable. Historical preview
+    # metadata can still be read, but installing it requires a qualified default.
+    if "default_contract" in value or (for_activation and channel == "main"):
+        validate_default_contract(value.get("default_contract"))
     return dict(value)
 
 
-def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
+def resolve_artifact(repo: str, ref: str, *, for_activation: bool = False) -> dict[str, Any]:
     if not REPOSITORY_PATTERN.fullmatch(repo):
         raise ValueError("Update repo must use GitHub owner/name syntax")
     if ref == "stable":
@@ -160,7 +165,9 @@ def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
         if not (SHA.fullmatch(ref) and isinstance(exc.__cause__, HTTPError) and exc.__cause__.code == 404):
             raise
         metadata = read_json(f"https://github.com/{repo}/releases/download/runtime-main/loopx-runtime-{ref}.json")
-    artifact = validate_manifest(metadata, revision=ref if SHA.fullmatch(ref) else None)
+    artifact = validate_manifest(
+        metadata, revision=ref if SHA.fullmatch(ref) else None, for_activation=for_activation,
+    )
     if ref in {"main", "stable"} and artifact.get("channel") != ref:
         raise ValueError("Runtime artifact belongs to another channel")
     return artifact
@@ -407,7 +414,7 @@ def run_installer(command: list[str], *, env: dict[str, str], timeout: float,
 
 def install_artifact(manifest: dict[str, Any], *, env: dict[str, str], timeout_seconds: int,
                      progress=lambda _event: None):
-    manifest = validate_manifest(manifest)
+    manifest = validate_manifest(manifest, for_activation=True)
     started = time.monotonic()
     archive = download_artifact(manifest, progress=progress, timeout=timeout_seconds)
     progress({"stage": "verify"})
@@ -416,7 +423,7 @@ def install_artifact(manifest: dict[str, Any], *, env: dict[str, str], timeout_s
         identity = json.loads((root / "runtime-artifact.json").read_text(encoding="utf-8"))
         if identity.get("source_revision") != manifest["source_revision"] or identity.get("package_version") != manifest["package_version"]:
             raise ValueError("Runtime identity disagrees with its release metadata")
-        if "default_contract" in manifest and identity.get("default_contract") != manifest["default_contract"]:
+        if identity.get("default_contract") != manifest.get("default_contract"):
             raise ValueError("Runtime default contract disagrees with its release metadata")
         selected = dict(env)
         selected.update({"LOOPX_RESOLVED_SOURCE_GIT_COMMIT": manifest["source_revision"],
@@ -449,7 +456,7 @@ def main() -> int:
             raise ValueError("An existing CLI has another or unknown owner; use its `loopx upgrade` or original package manager")
         selected_repo = args.repo or (os.environ.get("LOOPX_REPO") if os.environ.get("LOOPX_UPDATE_REPO_EXPLICIT") == "1" else None) or installed.get("repo") or "loopx-project/loopx"
         selected_ref = args.ref or (os.environ.get("LOOPX_REF") if os.environ.get("LOOPX_UPDATE_REF_EXPLICIT") == "1" else None) or installed.get("ref") or "stable"
-        manifest = resolve_artifact(selected_repo, selected_ref)
+        manifest = resolve_artifact(selected_repo, selected_ref, for_activation=True)
         if installed and target_direction(selected_repo, installed.get("git_commit"), manifest["source_revision"]) not in {"ahead", "identical"} and os.environ.get("LOOPX_ALLOW_DOWNGRADE") != "1":
             raise ValueError("Older, diverged or unverified target; inspect it before explicitly setting LOOPX_ALLOW_DOWNGRADE=1")
         env = dict(os.environ, LOOPX_REPO=selected_repo, LOOPX_REF=selected_ref, LOOPX_UPDATE_CHANNEL=selected_ref, LOOPX_UPDATE_EVENTS="1")

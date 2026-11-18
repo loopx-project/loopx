@@ -61,6 +61,18 @@ backup if older code cannot read the current data. Use `loopx update plan
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.
 
+Installing or updating to a `main` runtime snapshot requires a supported
+`default_contract` in its descriptor, including when a preview revision is pinned.
+If that evidence is missing, the update plan reports a blocked target and the
+public installer stops before downloading the archive. Historical descriptors
+remain readable. Legacy `stable` releases remain installable with matching
+archive metadata, and rollback continues to use the existing local release.
+
+安装或更新到 `main` 运行时快照时，描述符必须包含受支持的 `default_contract`，
+指定预览提交时也适用。缺少此证据时，更新计划会标明目标受阻，公开安装器会在下载
+归档前停止。历史描述符仍可读取，归档元数据一致的旧版 `stable` 仍可安装，回退仍
+使用已有本地发行版。
+
 For contributors, keep the clone-plus-canary path:
 
 ```bash

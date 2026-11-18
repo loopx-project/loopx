@@ -23,7 +23,7 @@ def prepare_target(payload: dict[str, Any], *, freshness: dict, resolve_remote: 
     if source["distribution"] == "runtime":
         if resolve_remote:
             try:
-                artifact = resolve_artifact(source["repo"], source["ref"])
+                artifact = resolve_artifact(source["repo"], source["ref"], for_activation=True)
                 source["artifact"] = artifact
                 target = artifact["source_revision"]
                 version = artifact["package_version"]

@@ -117,7 +117,20 @@ def test_qualified_scope_and_historical_metadata_remain_readable():
     assert update.validate_manifest(current) == current
 
 
-def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch):
+def test_markerless_preview_remains_readable_but_stops_before_download(monkeypatch):
+    descriptor = manifest(b"runtime", "https://publisher.invalid/runtime")
+    assert update.validate_manifest(descriptor) == descriptor
+
+    def unexpected_download(*_args, **_kwargs):
+        pytest.fail("Unqualified runtime reached archive download")
+
+    monkeypatch.setattr(update, "download_artifact", unexpected_download)
+    with pytest.raises(ValueError, match="unqualified for public adoption"):
+        update.install_artifact(descriptor, env={}, timeout_seconds=10)
+
+
+@pytest.mark.parametrize("channel", ["main", "stable"])
+def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch, channel):
     archive = tmp_path / "runtime.tar.gz"
     identity = json.dumps({"source_revision": "a" * 40, "package_version": "1.2.3",
                            "default_contract": {"surface": "complete_turn"}}).encode()
@@ -126,8 +139,9 @@ def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch)
             member = tarfile.TarInfo(name)
             member.size = len(content)
             target.addfile(member, io.BytesIO(content))
-    descriptor = {**manifest(archive.read_bytes(), "https://publisher.invalid/runtime"),
-                  "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
+    descriptor = {**manifest(archive.read_bytes(), "https://publisher.invalid/runtime"), "channel": channel}
+    if channel == "main":
+        descriptor["default_contract"] = dict(update.PUBLIC_DEFAULT_CONTRACT)
     monkeypatch.setattr(update, "download_artifact", lambda *_a, **_kw: archive)
     calls = []
     monkeypatch.setattr(update, "run_installer", lambda *_a, **_kw: calls.append("activate"))
@@ -373,10 +387,13 @@ def test_bootstrap_inherits_snapshot_choice_without_taking_over_a_package_owner(
     monkeypatch.setenv("LOOPX_UPDATE_REPO_EXPLICIT", "0")
     monkeypatch.setattr(sys, "argv", ["update-artifact.py"])
     selected = []
-    monkeypatch.setattr(update, "resolve_artifact", lambda repo, ref: selected.append((repo, ref)) or manifest(b"x", "https://example.com/runtime"))
+    def resolve(repo, ref, *, for_activation=False):
+        selected.append((repo, ref, for_activation))
+        return manifest(b"x", "https://example.com/runtime")
+    monkeypatch.setattr(update, "resolve_artifact", resolve)
     monkeypatch.setattr(update, "install_artifact", lambda *_a, **_kw: (subprocess.CompletedProcess([], 0, "", ""), {}))
     assert update.main() == 0
-    assert selected == [("example/fork", "main")]
+    assert selected == [("example/fork", "main", True)]
     entry.unlink()
     entry.touch()  # pip/another installer owns a regular console entry.
     assert update.main() == 1
