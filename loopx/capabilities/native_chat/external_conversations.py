@@ -717,7 +717,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             started_at=turn["started_at"], completed_at=turn["completed_at"], work_dir=Path(context["project"]),
             input_anchor=anchors[0] if anchors else None,
             **({"include_retained_result": True} if include_retained_result else {}),
-            **({"include_raw_response": True} if include_raw_response or use_retained else {}),
+            **({"include_raw_response": True} if include_raw_response else {}),
             **({"retained_result": retained} if use_retained else {}),
         )
 

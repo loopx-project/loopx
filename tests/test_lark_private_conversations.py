@@ -2301,6 +2301,145 @@ def test_original_queue_retains_completed_answer_across_native_cleanup(tmp_path,
         fixture.close()
 
 
+def test_original_queue_recovers_long_retained_answer_without_raw_response_bloat(tmp_path, language_server, monkeypatch):  # noqa: F811 - imported pytest fixture
+    from copy import deepcopy
+    from datetime import timezone
+    from test_native_steward_private import steward
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.capabilities.manager_context import POLICY_SCHEMA, _root, _write, pending
+    from loopx.chat_store import _read_json
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, _, workspace = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        complete = "Original `<loopx-review-json>` is literal.\n\n" + "完整原答复包含中文和🙂。\n" * 30000 + "Original final paragraph."
+        assert len(complete.encode("utf-8")) == 1_140_069
+        raw_answer = '<loopx-review-json>' + json.dumps({"message": complete, "proposals": [], "gate": None}) + '</loopx-review-json>'
+        language_server.update(plain_text=True, answers={0: raw_answer})
+        start = AntigravityAdapter.start_turn
+
+        def damaged_response(adapter, message, event_sink, **kwargs):
+            response = start(adapter, message, event_sink, **kwargs)
+            return {**response, "message": "Original `"}
+
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", damaged_response)
+        event = provider.event("steward-app", "retained-long", "Complete original long request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        row = transport.core.read_request(ref)
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)["status"] == "completed"
+        assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", start)
+        retained = store.native_result(row["session_id"], row["turn_id"])
+        result_path = store._session_dir(row["session_id"]) / "native-results" / f"{row['turn_id']}.json"
+        cleared = deepcopy(retained["steps"])
+        for step in cleared:
+            step["status"] = "CORTEX_STEP_STATUS_CLEARED"
+            step.get("plannerResponse", {}).pop("stopReason", None)
+        language_server.update(frames=[], frame={"at": 0, "steps": cleared, "status": "CASCADE_RUN_STATUS_IDLE"})
+
+        session = store.load_session(row["session_id"])
+        turn = store.load_turn(row["session_id"], row["turn_id"])
+        context = runtime.project_contexts.session_context(session)
+        plain_proof = transport.core._original_native_result(row, session, turn, context)
+        assert plain_proof is not None and "raw_response" not in plain_proof
+        raw_proof = transport.core._original_native_result(row, session, turn, context, include_raw_response=True)
+        assert raw_proof is not None and raw_proof["raw_response"] == raw_answer
+
+        turn_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+        events_bytes = store._event_path(row["session_id"], row["turn_id"]).read_bytes()
+        retained_bytes = result_path.read_bytes()
+        writes = len(provider.writes)
+        calls = [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}]
+        with monkeypatch.context() as no_work:
+            no_work.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("Result recovery enqueued work"))
+            no_work.setattr(runtime, "resume_session_queue", lambda **_: pytest.fail("Result recovery resumed work"))
+            restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root, runner=provider, cli_bin="lark-cli")
+            restarted.reconcile()
+
+            recovered = restarted.core.read_request(ref).get("native_result_recovery")
+            assert recovered is not None
+            assert recovered["native_observation"]["observation_source"] == "retained_turn_result"
+            assert "raw_response" not in recovered["native_observation"]
+            assert recovered["native_observation"]["response"]["message"] == complete
+            assert recovered["delivery_verified"] is True
+            message = next(item for item in store.messages(row["session_id"]) if item["message_id"] == recovered["message_id"])
+            assert message["text"] == recovered["message_text"]
+            assert complete in message["text"]
+            new_writes = [text for _, text in provider.writes[writes:]]
+            assert len(new_writes) > 1
+            delivered_text = "".join(
+                re.sub(rf"^（{index}/{len(new_writes)}）\n\n", "", part)
+                for index, part in enumerate(new_writes, 1)
+            )
+            assert "Original `<loopx-review-json>` is literal." in delivered_text
+            assert delivered_text.endswith("Original final paragraph.")
+            assert delivered_text.count("完整原答复包含中文和🙂。") == 30000
+            assert delivered_text.replace("\n", "") == recovered["message_text"].replace("\n", "")
+            receipt = _read_json(transport.root / f"{ref}.json")["deliveries"][f"native_result.{row['turn_id']}"]
+            assert receipt["verified"] is True
+
+            after_writes = len(provider.writes)
+            restarted.reconcile()
+            assert len(provider.writes) == after_writes
+            assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == turn_bytes
+            assert store._event_path(row["session_id"], row["turn_id"]).read_bytes() == events_bytes
+            assert result_path.read_bytes() == retained_bytes
+            assert [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}] == calls
+
+        # Explicit include_raw_response=True paths (metadata review) still receive raw_response from retained results.
+        registry = json.loads(runtime.registry_path.read_text())
+        registry["goals"] = [{"id": "work", "repo": str(workspace), "coordination": {"registered_agents": ["worker"]}}]
+        runtime.registry_path.write_text(json.dumps(registry))
+        original_brief = {"schema_version": "collaboration_brief_v0", "Hypotheses": ["Assess this hypothesis"],
+            "Evidence": ["Original authorized evidence"], "Constraints": ["Return here; do not change frozen work"]}
+        handoff = {"schema_version": "context_handoff_v0", "goal_id": "work", "agent_id": "worker", "brief": original_brief}
+        language_server.update(plain_text=False, invalid_handoff=True, original_handoffs=handoff,
+            answers={1: "Original complete visible metadata answer."}, frames=None, frame=None)
+        meta_event = provider.event("steward-app", "retained-meta", "Ask the worker to assess metadata")
+        transport.admit("steward-app", meta_event)
+        meta_ref = identity_ref(binding["provider_ref"], meta_event["message_id"])
+        meta_row = transport.core.read_request(meta_ref)
+        meta_completed = runtime.wait_for_turn(session_id=meta_row["session_id"], turn_id=meta_row["turn_id"], timeout_sec=15)
+        assert meta_completed["status"] == "completed" and meta_completed["response"]["gate"]["kind"] == "response_metadata_invalid"
+        assert transport.reconcile_request(transport.root / f"{meta_ref}.json") == 1
+        meta_retained = store.native_result(meta_row["session_id"], meta_row["turn_id"])
+        assert meta_retained["upstream_turn_id"] == meta_completed["upstream_turn_id"]
+        # Clear live native completion for meta_event (index 1) so metadata review
+        # reads retained_result with include_raw_response=True while a later native
+        # completion provides normal live capacity.
+        language_server["inputs"].append({"text": "An unrelated later native input", "created_at": datetime.now(timezone.utc).isoformat()})
+        language_server["sent_count"] += 1
+        language_server["cleared_input_indices"] = [1]
+        brief = {"schema_version": "collaboration_brief_v0", "purpose": "Assess the original hypothesis",
+            "context": json.dumps(original_brief, ensure_ascii=False, separators=(",", ":")),
+            "constraints": ["Do not change frozen work"], "inputs": [], "acceptance": ["Return the assessment"],
+            "return_requirement": "Return to the original conversation"}
+        language_server["review_response"] = {"message": "Unverified model delivery claim", "proposals": [], "gate": None,
+            "context_handoff": [{"goal_id": "work", "agent_id": "worker", "brief": brief}]}
+        meta_session = store.load_session(meta_row["session_id"])
+        _write(_root(runtime.coordination_runtime_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
+            meta_session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": [binding["operator_ref"]],
+                "targets": [{"goal_id": "work", "agent_id": "worker"}]}}})
+        restarted.reconcile_request(transport.root / f"{meta_ref}.json")
+        meta_row = restarted.core.read_request(meta_ref)
+        assert meta_row["turn_id"] != meta_completed["turn_id"]
+        meta_recovery = meta_row["context_recovery"]
+        assert meta_recovery["metadata_review"] is True
+        assert meta_recovery["native_observation"]["observation_source"] == "retained_turn_result"
+        assert "raw_response" in meta_recovery["native_observation"]
+        reviewed = runtime.wait_for_turn(session_id=meta_row["session_id"], turn_id=meta_row["turn_id"], timeout_sec=15)
+        assert reviewed["status"] == "completed", reviewed
+        entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
+        assert len(entries) == 1 and entries[0]["source_id"] == meta_ref
+    finally:
+        fixture.close()
+
+
 def test_native_capture_io_failure_preserves_the_primary_answer(tmp_path, language_server, monkeypatch, caplog):  # noqa: F811 - imported pytest fixture
     from test_native_steward_private import steward
 
