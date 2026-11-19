@@ -1098,7 +1098,7 @@ class ChatActionStore:
     def reserve_agent_operation_turn(
         self, proposal_id: str, **launch_context: Any,
     ) -> dict[str, Any]:
-        """Internal callback launch intent; neither host start nor consumption.
+        """Internal callback launch intent.
 
         Commit before spawning. A lost/failed spawn is reconciled from the
         original Turn; callback replay never launches a replacement process.

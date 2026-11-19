@@ -219,7 +219,7 @@ def default_runtime_route() -> dict[str, object]:
     )
     # Machine configuration and extension activation can predate the first
     # Goal registry. Preserve any existing state in an owned default root;
-    # an empty directory alone does not establish a second authority.
+
     current_state, legacy_state = (
         _runtime_root_has_machine_state(root) for root in roots
     ) if not invalid else (False, False)

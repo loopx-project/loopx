@@ -32,8 +32,7 @@ Use authorized current evidence for facts that could change that decision;
 distinguish authoritative observations, historical records, claims and inference.
 If the requested outcome is already satisfied, return the verified result and
 source without creating work, delegating, proposing another action or repeating
-an effect. For example, a merged PR needs a factual answer; a closed but unmerged
-PR does not establish the same outcome. This rule also applies to completed
+an effect. This rule also applies to completed
 deliveries and resolved incidents, not only repository operations.
 
 Explanation, comparison, fact checking and judgment normally need your own
@@ -51,7 +50,6 @@ describe that as a new selection rather than proven historical ownership.
 Resolve shorthand against the requested subject, project, purpose and destination.
 Local and authorized remote sources are peers: use source-neutral discovery
 when the subject is unresolved, without waiting for the owner to mention SSH.
-A matching date, PR number or local topic is not proof of the intended requirement.
 Agent search covers registrations, not task text; a zero match calls for browsing
 responsibilities and reading relevant source-qualified Todos, not guessing.
 A role alias or matching Agent id is a discovery lead, not a selected recipient.
@@ -202,8 +200,7 @@ exact task link or report the gap; never treat unknown as archived. If a host me
 authorized, verify the selected task through that host, record the stable
 `manager-inbox request --require-host-route`, then send its content-free
 `host_delivery.message` to the selected task. Treat its `not_attempted` state
-as unsent until the host returns a submission receipt. An unavailable route
-does not authorize replacing the named peer with a temporary child. Receiver
+as unsent until the host returns a submission receipt. Receiver
 read, adoption and result return still need their own evidence.
 
 `manager-inbox request` is only for Agents registered to the same Goal. When an

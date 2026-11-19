@@ -1,8 +1,8 @@
 """Native Chat admission/recovery IO for explicitly bound external sources.
 
 Sessions and Turns remain in ChatSessionStore. This journal only correlates a
-provider request with those canonical objects; it is not a second queue or model
-runner. Write it before admission so a crash can replay the same client identity.
+provider request with those canonical objects;
+Write it before admission so a crash can replay the same client identity.
 """
 from __future__ import annotations
 
@@ -524,7 +524,7 @@ class ChatExternalConversations:
                             and proof.get("only_original_user_item") is True and session.get("steward_context")):
                         # The steward may use its API pool while the desktop's
                         # subscription is exhausted. Reuse that same fresh owner;
-                        # it neither replaces native no-effects proof nor admits work.
+
                         from ...chat_manager import manager_session_quota_route
                         route = manager_session_quota_route(self.controller, session)
                         if route and route["allocation"]["executor_endpoint"] == "codex":
@@ -709,8 +709,8 @@ class ChatExternalConversations:
         if len(anchors) > 1:
             return None
         # Retained facts can repair only a completed Turn's text. Failed-Turn
-        # recovery keeps its live native read and exact input requirements; old
-        # capture does not authorize another invocation or unknown-effect replay.
+        # recovery keeps its live native read and exact input requirements.
+
         retained = self.controller.store.native_result(session["session_id"], turn["turn_id"])
         if (turn.get("status") == "completed" and len(anchors) == 1 and retained
                 and retained.get("upstream_turn_id") == turn.get("upstream_turn_id")):
@@ -764,7 +764,7 @@ class ChatExternalConversations:
                 row["native_result_recovery"] = recovered
                 _atomic_write_json(path, row)
             # The same explicit message identity closes the journal/message
-            # crash gap. Neither the failed Turn nor its events are rewritten.
+            # crash gap.
             store.append_message(session["session_id"], role="agent", text=recovered["message_text"],
                 turn_id=turn["turn_id"], origin=turn["origin"], message_id=recovered["message_id"])
             return row
@@ -812,7 +812,6 @@ class ChatExternalConversations:
                             source_preflight: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         """One new read-only answer to a verified, previously uncaptured source.
 
-        This is neither a normal delayed admission nor a retry of business.
         The provider retains history provenance; Core retains the answer-only
         reservation before the same canonical queue can dispatch it.
         """
@@ -2082,8 +2081,8 @@ class ChatExternalConversations:
                     if row.get("capture_origin") == "provider_history" or row.get("native_mention"):
                         continue  # Only the original provider can reverify this source.
                     # Admission resolves current authority after both request
-                    # and route fences. A separate pre-fence network probe
-                    # neither authorizes recovery nor needs to precede it.
+                    # and route fences.
+
                     self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],
                                message=row["message"], command=row["command"],
                                attachments=row.get("attachments"), origin=row.get("origin", "lark"))

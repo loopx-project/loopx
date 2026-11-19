@@ -6,7 +6,7 @@ export type ConversationRecord = {
   id: string; end: number; role: "user" | "assistant" | "tool" | "activity";
   kind: string; label: string; text: string; truncated: boolean;
   timestamp?: string | null; content_ref?: string; redacted?: boolean; unavailable?: string;
-  /** Saved shell observations only; neither inferred failures nor task acceptance. */
+  /** Saved shell observations only; */
   tool_exit_codes?: number[];
 };
 export type ContentPage = {text: string; next_offset: number; has_more: boolean};

@@ -63,8 +63,7 @@ composing manual probe chains.
 | Repair/replan | Typed control state can preserve, repair, or replace the current route | Host and validation failures route to typed repair/replan; two stalls require a todo or vision delta | Expand real-host negative-path qualification |
 | Privacy | Raw host material stays outside LoopX state | Existing boundaries are strong | Preserve current boundary and add a typed result channel |
 
-This matrix is an implementation checklist, not evidence that the capabilities
-already match.
+This matrix is an implementation checklist.
 
 ## Product Shape
 

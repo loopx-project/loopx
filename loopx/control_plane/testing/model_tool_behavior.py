@@ -700,7 +700,7 @@ def execute_loopx_cli(
 
 
 class LoopxCliExecutionError(RuntimeError):
-    """An executed CLI returned nonzero; this does not imply state rollback."""
+    """An executed CLI returned nonzero;"""
 
     def __init__(self, returncode: int, detail: str, *, stdout: str = "") -> None:
         super().__init__(f"LoopX CLI command failed with exit={returncode}: {detail}")

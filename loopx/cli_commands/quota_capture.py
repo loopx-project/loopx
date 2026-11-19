@@ -581,8 +581,7 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
     if response.get("context_delivery") is not True or not context_delivery_enabled:
         return None
     # Both the supported caller opt-in and explicit Host request are required.
-    # The release itself does not prove
-    # delivery/retention. Read one private snapshot, never an arbitrary pathname
+    #  Read one private snapshot, never an arbitrary pathname
     # supplied by a response or a model. Invalid optimization input selects full.
     request_path = directory / "delivery-request.json"
     try:

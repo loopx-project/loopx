@@ -1,7 +1,7 @@
 """Installed prompt lifecycle; execution policy stays in heartbeat-prompt.
 
 The App API is the preferred interactive writer. The journaled store writer is
-a qualified local compatibility adapter, not a public Codex storage API.
+a qualified local compatibility adapter.
 """
 from __future__ import annotations
 

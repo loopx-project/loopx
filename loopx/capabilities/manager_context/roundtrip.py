@@ -881,7 +881,7 @@ def recover_source_chat_provenance(root, registry, store, *, cancelled=lambda: F
             if path.stem != route.get("request_id"):
                 continue
             # Reject other hosts before taking a Goal lifetime lock or loading
-            # its registry. This is one startup pass, not a polling-time scan.
+            # its registry. This is one startup pass.
             session, turn = observe_source_chat(store.root.parent, route)
             with collaboration_goal_scope(
                 registry, goal_id=route["goal_id"], agents=(route["agent_id"],),

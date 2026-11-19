@@ -102,7 +102,7 @@ class NativeWorkingContinuation:
 
 @dataclass
 class NativeHistoryRestoration:
-    """Live guards for unpublished model preparation, not a new work queue."""
+    """Live guards for unpublished model preparation."""
 
     controller: Any
     session: dict[str, Any]
@@ -838,8 +838,7 @@ class CodexAppServerAdapter:
                 if proof is not None:
                     if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;
-                        # neither a reset clock nor a generic successful RPC
-                        # establishes usable allowance. Absence fails closed.
+                        #  Absence fails closed.
                         try:
                             from loopx_codex_provider_routing.native import policy
                             from loopx_codex_provider_routing.native_host import read_usage

@@ -28,7 +28,7 @@ from loopx.kunluncode_goal_mode.runtime import (
 )
 
 
-# Single source for the adapter's `mcp` pin. It is an exact pin, not a range:
+# Single source for the adapter's `mcp` pin. It is an exact pin:
 # loopx/goal_mode_mcp.py imports `mcp.server.fastmcp`, which the MCP SDK 2.x
 # line no longer ships, and the pin is a deliberate security pin (892faa2c9
 # "fix(security): upgrade the MCP SDK pin"). It belongs to the KunlunCode

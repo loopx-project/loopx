@@ -2,8 +2,8 @@ import {NON_WORK_FIELDS, goalAcceptanceTodoDigest} from "./acceptance_work_basis
 export {goalAcceptanceTodoDigest} from "./acceptance_work_basis.ts";
 import {goalOutcomeCheckBasis, projectGoalOutcomes} from "./outcome_requirements.ts";
 import {projectGoalObjective, currentGoalObjective} from "./goal_objective.ts";
-/** Owner-configured acceptance basis. This is neither a permission grant nor
- * the full shared Goal intent/amendment authority. The Todo manifest is unchanged. */
+/** Owner-configured acceptance basis.
+ *  The Todo manifest is unchanged. */
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, authorityUnicodeCompare, canonicalAuthorityBytes,
   canonicalAuthorityObject, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";

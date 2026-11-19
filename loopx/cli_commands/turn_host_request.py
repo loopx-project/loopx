@@ -1,6 +1,6 @@
 """Parse the existing CLI Host request before any Turn execution.
 
-This is CLI argument transport and host-adapter binding, not a decision owner.
+This is CLI argument transport and host-adapter binding.
 The Turn driver retains admission, effects and settlement.
 """
 from __future__ import annotations

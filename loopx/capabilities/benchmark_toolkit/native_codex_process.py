@@ -1,7 +1,6 @@
 """Passive native-process evidence for the existing benchmark worker.
 
 The shared stdio transport owns JSON-RPC; the worker owns process cleanup.
-These observations grant neither retry authority nor a root-cause verdict.
 """
 
 from __future__ import annotations

@@ -610,8 +610,8 @@ def authority_upgrade_registries(registry_path: Path, runtime_root_arg: str | No
     return sorted(path for path in paths if path.exists())
 
 
-# Upgrade-only IO reuses the lifecycle service and codec transactions. The
-# typed migration decoder is not another normal activation decision owner.
+# Upgrade-only IO reuses the lifecycle service and codec transactions.
+
 def upgrade_goal_activation_registries(
     paths: list[Path], *, execute: bool,
 ) -> dict[str, Any]:

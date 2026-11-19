@@ -87,8 +87,7 @@ erase receipts or fabricate progress to escape a wait. See
 
 ## Upstream Issue Escalation
 
-A public GitHub issue is an optional final escalation, not a default side
-effect of self-repair. Consider it only when the responsible layer is a
+A public GitHub issue is an optional final escalation. Consider it only when the responsible layer is a
 reusable LoopX product, CLI, skill, installer, or control-plane gap and durable
 upstream tracking adds value beyond the local repair or PR.
 

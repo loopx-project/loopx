@@ -172,7 +172,7 @@ The example deliberately applies a narrow policy:
 - local and remote listeners bind only to IPv4 loopback;
 - only HTTPS `CONNECT` requests to port `443` are accepted;
 - resolved targets must be globally routable addresses;
-- proxy authentication data is neither accepted nor logged;
+
 - the SSH host, ports, retry policy, and cleanup behavior are explicit CLI
   configuration;
 - logs contain lifecycle events and error classes, not request headers or

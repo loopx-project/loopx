@@ -169,8 +169,7 @@ safe filesystem/lock diagnostic code, such as `mutation_lock_timeout`,
 `io_is_directory`, or Windows `io_permission_denied` for an occupied locator
 directory, instead of only an exit status. The message does not echo
 locator paths, tokens or Node stack traces. Inspect the named local ownership
-or filesystem problem before retrying; the diagnostic neither removes a live
-owner's lock nor repairs a foreign locator. It does not identify every possible
+or filesystem problem before retrying; It does not identify every possible
 startup crash: an exit without a typed envelope remains `runtime_exited_before_ready`.
 
 中文：启动 locator 发布失败会返回既有文件系统/锁诊断码，不回显路径、token 或
@@ -279,8 +278,7 @@ wheel instead exposes an additive `package_fingerprint` in the existing
 `loopx_runtime_identity_v1`: SHA-256 over its actual RECORD-owned LoopX package
 files, including Python, TypeScript and frontend assets. Editable, unowned,
 redirected or incomplete packages cannot claim this fingerprint. It distinguishes
-same-version artifacts for local service reuse; it does not certify a release,
-publisher or source commit. Both services capture their identity at startup, so
+same-version artifacts for local service reuse; Both services capture their identity at startup, so
 an in-place upgrade cannot make an old process report the replacement's identity.
 An unqualified install fails before the helper stops an existing service.
 
@@ -383,8 +381,7 @@ Both workflow and command installation reconcile managed duplicates between
 The selected installation root wins only when a replacement exists; a command
 facade cannot replace a rich workflow. Modified receipts, user-owned metadata,
 extra files, sole copies, and skill symlinks are preserved and reported under
-`skill_reconciliation` or `codex_skill_reconciliation`. A custom Codex profile
-does not authorize cleaning another profile. The fixed installer permits
+`skill_reconciliation` or `codex_skill_reconciliation`. The fixed installer permits
 `LOOPX_SKILL_DEDUPE_OTHER_ROOT=0` for intentionally separate host roots.
 
 To inspect and repair command discovery for the current Codex profile:
@@ -444,7 +441,7 @@ global copies untouched and retains project connection, ownership, digest,
 and containment checks. Missing or unknown source markers still fail closed.
 See [Project Skill Delivery](../../loopx/capabilities/project_skill_delivery/README.md)
 for lifecycle details. `loopx doctor` continues to require the complete default
-workflow set; a lone generated entry does not replace missing rich workflows.
+workflow set.
 
 ## Upgrade And Repair
 
@@ -567,9 +564,7 @@ loopx doctor
 
 The first command is the package transaction; the remaining commands are the
 LoopX activation and readback contract. Running only `pip install` can leave
-host material from the previous version active. Conversely, `loopx update
-apply` does not replace pip as the owner of dependency resolution, environment
-policy, package indexes, or uninstall.
+host material from the previous version active. Conversely.
 
 ### Verify The Active Layers
 

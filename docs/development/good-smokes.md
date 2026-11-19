@@ -84,9 +84,9 @@ contract. Before removing or combining a smoke:
 6. rerun the focused entries plus fleet or catalog checks to prove that the
    inventory has no coverage gap.
 
-名称相似或 setup 相同，并不能证明两个 smoke 保护同一合同。删除或合并前，应分别写明
+名称相似或 setup 相同。删除或合并前，应分别写明
 不变量、公开入口、反例、运行频率和定向 profile；把完全相同内容和直接嵌套执行当作
-审阅候选，而不是自动删除指令。可以复用 canary harness 中的 fixture 或 subprocess
+审阅候选。可以复用 canary harness 中的 fixture 或 subprocess
 setup，但不要因此合并不同的语义断言。去掉 smoke 调用另一个 smoke 的 wrapper，让每
 个合同只运行一次且仍可独立选择，最后重跑聚焦入口以及 fleet/catalog 检查，确认清单
 没有覆盖缺口。
@@ -124,7 +124,7 @@ a dated research note, candidate ranking packet, temporary run review, or
 transitional benchmark decision. Keep that information in the research document
 and cover shared invariants with a data-driven aggregate smoke.
 
-Smoke 超过约 500 行时，应重新检查它是否混合了多个测试；这不是自动删除或失败阈值。
+Smoke 超过约 500 行时，应重新检查它是否混合了多个测试；
 将可复用行为放回产品 owner，使 smoke 保持轻量；较小测试无法覆盖真实端到端 adapter
 合同时，仍可保留大型 integration smoke。不要用一次性 smoke 固化过期研究笔记、候选
 排名、临时运行评估或阶段性 benchmark 决策的精确文案；这些信息留在研究文档，共有

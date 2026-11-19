@@ -91,8 +91,8 @@ class AntigravityActivity:
                         if previous != item:
                             self.tool_calls[call_id] = None  # Ambiguous IDs cannot close another call.
                     start(item)
-            # A finished planner has only requested the tool. It is not proof
-            # that the tool ran or completed; never fabricate that transition.
+            # A finished planner has only requested the tool.
+            #  never fabricate that transition.
         elif kind == "CORTEX_STEP_TYPE_CODE_ACTION":
             if not isinstance(native.get("codeAction"), dict):
                 return events

@@ -171,7 +171,7 @@ def captured_turn_host_input(request: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
-    """Decode the two published Host transports; neither grants authority."""
+    """Decode the two published Host transports;"""
     version = request.get("schema_version")
     if version not in (LOOPX_TURN_HOST_REQUEST_SCHEMA, COMPLETE_TURN_HOST_REQUEST_SCHEMA):
         raise ValueError("unsupported LoopX Turn host request schema")

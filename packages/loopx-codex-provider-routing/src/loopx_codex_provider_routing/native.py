@@ -394,8 +394,8 @@ class NativeAccounts:
             if not refresh and not manual_slot and now < (state.get("retry_at") or 0):
                 return self._projection(state)
             if refresh or manual_slot:
-                # A deliberate check/choice starts a new retry budget; healthy
-                # quota alone does not prove that a handoff succeeded.
+                # A deliberate check/choice starts a new retry budget.
+
                 state["failure_count"] = 0
             if "adapter" not in state:
                 # An explicit check/manual choice can connect existing slots

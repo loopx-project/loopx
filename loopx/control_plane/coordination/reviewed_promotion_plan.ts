@@ -1,4 +1,4 @@
-/** Portable operator input, not a grant or a second migration-state store. */
+/** Portable operator input. */
 import type { JsonObject } from "../effect_program.ts";
 import { requireJsonObject, requireBoolean } from "../runtime_decode.ts";
 import { canonicalAuthorityObject, requireAuthorityStoreId } from "./authority_store_codec.ts";

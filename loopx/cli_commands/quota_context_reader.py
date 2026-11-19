@@ -270,7 +270,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None,
                          reader_argv: list[str] | None = None) -> dict[str, Any]:
-    """Bounded local IO over immutable JSON, not a new context/authority owner.
+    """Bounded local IO over immutable JSON.
 
     Verify the complete byte digest on every page. The cursor addresses bytes
     in that capture or its separately digest-bound selection, so a replacement

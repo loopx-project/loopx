@@ -1,6 +1,6 @@
 """Native Codex process context for the Core-owned project boundary.
 
-This is host adaptation, not another Session or authentication authority.
+This is host adaptation.
 Ordinary Chat keeps its existing host configuration. Workspace-only Chat uses
 an independent native store; no credentials or history are seeded into it.
 """

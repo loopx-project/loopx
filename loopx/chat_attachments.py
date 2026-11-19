@@ -177,7 +177,7 @@ def normalize_local_chat_attachments(session: dict[str, Any], value: Any) -> lis
 
 
 def native_attachment_inputs(attachments: Any) -> list[dict[str, Any]]:
-    """Translate validated source bytes into native Codex input, not instructions."""
+    """Translate validated source bytes into native Codex input."""
     inputs: list[dict[str, Any]] = []
     for attachment in normalize_chat_attachments(attachments):
         if attachment["mime_type"] in CHAT_TEXT_TYPES:

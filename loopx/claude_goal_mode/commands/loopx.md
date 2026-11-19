@@ -1,5 +1,5 @@
 ---
-description: loopx goal-mode setup (NOT Claude Code's built-in /goal). `/loopx <task>` sets up a goal + writes .claude/loop.md; drive the loop with native /loop. bare /loopx = arm; off | status.
+description: loopx goal-mode setup. `/loopx <task>` sets up a goal + writes .claude/loop.md; drive the loop with native /loop. bare /loopx = arm; off | status.
 argument-hint: <task to do>  |  (no args = arm)  |  off  |  status
 allowed-tools: Bash(python3:*)
 ---
@@ -14,6 +14,5 @@ claim todos, write files, or loop here: the WORK runs when the user types Claude
 Code's native `/loop` (which executes `.claude/loop.md`). Do not summarize a
 multi-line `status` detail block into one line.
 
-NOTE: this is `/loopx` (loopx control-plane SETUP), NOT a runtime and NOT Claude
-Code's built-in `/goal`. The run loop is native `/loop`; loopx provides the
+The run loop is native `/loop`; loopx provides the
 deterministic `should_run` protocol.

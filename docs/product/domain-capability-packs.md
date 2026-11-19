@@ -375,9 +375,7 @@ P2: add controlled delivery.
 8. Implement `ml_experiment` delivery mode behind explicit registry boundary,
    board selection, preflight verification, quota, capability gates, and
    writeback.
-9. Add an `ml_experiment_frontstage` card that explains the current best route,
-   why it is or is not a winner, what evidence is pending, and which user
-   feedback would change the plan.
+9. Add an `ml_experiment_frontstage` card that explains the current best route.
 10. Add an `experiment_dreaming_lane` for advisory candidate generation and
     archive suggestions. Promotion to executable agent todo requires operator
     review.

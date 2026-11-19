@@ -76,7 +76,7 @@ def build_turn_error_payload(
     planned_effects = planned.get("effects")
     planned_effects = planned_effects if isinstance(planned_effects, Mapping) else {}
     # Once the executor was entered an exception can follow a protected effect.
-    # A missing reply is not proof of non-execution. The original journal is
+    #  The original journal is
     # projected separately so a replay never looks like a second host launch.
     effects = {
         key: True if planned_effects.get(key) is True else None if execution_started else False
