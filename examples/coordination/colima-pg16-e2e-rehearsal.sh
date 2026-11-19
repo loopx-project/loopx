@@ -32,7 +32,7 @@ CONTAINER_STARTED=false
 cleanup() {
   if [ "${CONTAINER_STARTED}" = true ]; then
     echo "[colima-rehearsal] Cleaning up disposable PostgreSQL container ${CONTAINER_NAME}..." >&2
-    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    docker rm -f -v "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT INT TERM
