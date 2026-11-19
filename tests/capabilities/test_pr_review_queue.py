@@ -814,24 +814,31 @@ def test_later_other_family_does_not_repeat_a_current_matching_review(shared_log
     "first_family,second_family",
     [("Gemini", "gpt-6.2-sol"), ("gpt-6.2-sol", "Gemini")],
 )
+@pytest.mark.parametrize("state", ["APPROVED", "COMMENTED"])
 def test_shared_independent_login_keeps_both_model_families(
-    first_family: str, second_family: str,
+    first_family: str, second_family: str, state: str,
 ) -> None:
     login = "shared-peer"
-    first = _github_model_review(10, login=login, family=first_family, state="APPROVED")
-    second = _github_model_review(11, login=login, family=second_family, state="APPROVED")
-    repeat = _github_model_review(12, login=login, family=first_family, state="APPROVED")
+    prior_reviews = []
+    if state == "COMMENTED":
+        prior_reviews.append(
+            _github_model_review(9, login=login, family=first_family, state="APPROVED")
+        )
+    first = _github_model_review(10, login=login, family=first_family, state=state)
+    second = _github_model_review(11, login=login, family=second_family, state=state)
+    repeat = _github_model_review(12, login=login, family=first_family, state=state)
     comment = _github_model_review(13, login=login, family=first_family)
     comment["body"] = str(comment["body"]).splitlines()[0] + "\n\nOne follow-up question."
 
     missing = "gemini" if second_family == "Gemini" else "gpt"
-    one_family = _github_model_pr([first], reviewDecision="APPROVED")
+    one_family = _github_model_pr([*prior_reviews, first], reviewDecision="APPROVED")
     assert _model_queue_row(one_family, family=missing)["review_action_kind"] == (
         "rereview_pull_request_exact_head"
     )
-    for reviews in ([first, second], [first, second, repeat], [first, second, repeat, comment]):
-        pr = _github_model_pr(reviews, reviewDecision="APPROVED")
+    for later in ([], [repeat], [repeat, comment]):
+        pr = _github_model_pr([*prior_reviews, first, second, *later], reviewDecision="APPROVED")
         ordinary = _model_queue_row(pr, family=None)
+        assert ordinary["review_conclusion"]["state"] == "APPROVED"
         for family in ("gpt", "gemini"):
             assert _model_queue_row(pr, family=family) == ordinary
 

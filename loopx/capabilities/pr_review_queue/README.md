@@ -660,10 +660,12 @@ another family. The queue uses complete provider history. An independent
 review from the same family suppresses repeat work even when another account
 submitted a later review. If different models share an independent GitHub
 account, each valid, attributable formal review on the current head supplies
-coverage while that account maintains the same formal opinion. The most recent
-qualified `COMMENTED` review in the same history can supply coverage as well.
-An ordinary follow-up preserves both kinds of evidence. A dismissal, a different
-head or a changed formal opinion resets the account's coverage history.
+coverage while that account maintains the same formal opinion. The latest
+qualified `COMMENTED` review from each known family in that history can also
+supply coverage. A qualified comment with unknown model provenance resets the
+commented coverage for that account. An ordinary follow-up preserves both kinds
+of evidence. A dismissal, a different head or a changed formal opinion resets
+the account's coverage history.
 A qualifying review published under the shared author
 login with a matching runtime declaration also suppresses repeat work for that
 model. GitHub independence still requires independent account evidence.

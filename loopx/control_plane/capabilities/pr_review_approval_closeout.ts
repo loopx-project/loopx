@@ -76,11 +76,10 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
     const coverage = new Map<string, {
       formalState?: ReviewState;
       formalReviewIds: number[];
-      commentedReviewId?: number;
+      commentedReviewIds: Map<string, number>;
     }>();
-    // A follow-up preserves the last complete comment and the current formal
-    // opinion. Process oldest first so an opinion change can retire comments
-    // between the old and new formal reviews as well as the old formal reviews.
+    // A follow-up preserves the latest qualified comment for each model family.
+    // Process oldest first so an opinion change retires the prior coverage.
     for (const row of submitted.sort((a, b) => a.time - b.time || a.id - b.id)) {
       if (!logins.has(row.login)) continue;
       if (row.head !== head || row.state === "DISMISSED") {
@@ -90,7 +89,7 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
       const formal = row.state !== "COMMENTED";
       let account = coverage.get(row.login);
       if (!account || (formal && account.formalState !== undefined && account.formalState !== row.state)) {
-        account = {formalReviewIds: []};
+        account = {formalReviewIds: [], commentedReviewIds: new Map()};
         coverage.set(row.login, account);
       }
       if (formal) account.formalState = row.state;
@@ -98,13 +97,19 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
       if (formal && row.conclusion.valid === true) {
         account.formalReviewIds.push(row.id);
       } else if (!formal && (row.conclusion.valid === true || row.source.review_body_valid === true)) {
-        account.commentedReviewId = row.id;
+        const family = row.source.review_model_family;
+        if (typeof family === "string" && family) {
+          account.commentedReviewIds.set(family, row.id);
+        } else {
+          // A qualified review with unknown model provenance still replaces
+          // the prior commented evidence, as it did for a single comment.
+          account.commentedReviewIds.clear();
+        }
       }
     }
     evidence.independent_review_activity_ids = active.map(row => row.id);
     evidence.independent_coverage_review_ids = [...coverage.values()].flatMap(
-      ({formalReviewIds, commentedReviewId}) => commentedReviewId === undefined
-        ? formalReviewIds : [...formalReviewIds, commentedReviewId],
+      ({formalReviewIds, commentedReviewIds}) => [...formalReviewIds, ...commentedReviewIds.values()],
     );
   }
   return evidence;

@@ -863,9 +863,8 @@ def _review_conclusion(
         return evaluations[0][0]
     from .capabilities.pr_review_queue.approval_closeout import select_review_history
     include_model_coverage = bool(reviewer_model_family and pr.get("reviews_complete") is True)
-    history = {"head": head_oid, "author": pr_author,
-        "reviews_complete": pr.get("reviews_complete") is True,
-        "reviews": [{"state": conclusion["state"],
+    review_rows: list[dict[str, object]] = [
+        {"state": conclusion["state"],
             "login": str(_as_dict(review.get("author")).get("login") or ""),
             "head": str(_as_dict(review.get("commit")).get("oid") or ""),
             "time": _parse_updated_epoch(review.get("submittedAt")),
@@ -875,9 +874,18 @@ def _review_conclusion(
             "submitted_at": review.get("submittedAt"),
             "conclusion": conclusion,
             **({"review_body_valid": body_valid} if include_model_coverage else {})}
-            for review, (conclusion, body_valid) in zip(reviews, evaluations, strict=True)]}
+            for review, (conclusion, body_valid) in zip(reviews, evaluations, strict=True)
+    ]
+    history = {"head": head_oid, "author": pr_author,
+        "reviews_complete": pr.get("reviews_complete") is True, "reviews": review_rows}
+    model_reports: list[tuple[str, str] | None] = []
     if include_model_coverage:
+        from .capabilities.pr_review_queue.model_coverage import published_review_model
+
+        model_reports = [published_review_model(review.get("body")) for review in reviews]
         history["include_independent_coverage"] = True
+        for row, report in zip(review_rows, model_reports, strict=True):
+            row["review_model_family"] = report[0] if report else None
     selection = select_review_history(history)
     index = cast(int, selection["index"])
     independent = selection.get("independent_review")
@@ -890,14 +898,14 @@ def _review_conclusion(
         and isinstance(activity_ids, list)
         and (conclusion["valid"] or independent)
     ):
-        from .capabilities.pr_review_queue.model_coverage import needs_cross_model_review, published_review_model
+        from .capabilities.pr_review_queue.model_coverage import needs_cross_model_review
 
         if needs_cross_model_review(
             family=reviewer_model_family,
             history=history,
             independent_coverage_ids=coverage_ids,
             independent_activity_ids=activity_ids,
-            model_reports=[published_review_model(review.get("body")) for review in reviews],
+            model_reports=model_reports,
         ):
             conclusion["cross_model_review_needed"] = True
     return conclusion | ({"independent_review": independent} if independent else {})
