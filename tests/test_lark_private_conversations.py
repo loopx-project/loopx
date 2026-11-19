@@ -1857,10 +1857,12 @@ def test_legacy_local_reply_images_are_recovered_only_by_the_original_worker(ord
         runtime.close()
 
 
+@pytest.mark.parametrize("source_change", ["edited", "recalled", "recalled_before_send", "recalled_after_unavailable"])
 def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
-    ordinary,  # noqa: F811
+    ordinary, monkeypatch, source_change,  # noqa: F811
 ):
     from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_steward_triage
 
     store, runtime, provider, transport = connect(ordinary)
     bindings = transport.bindings
@@ -1876,10 +1878,42 @@ def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
         assert card in transport.pending_delivery_paths()
         assert transport.health()[binding["binding_id"]]["pending_count"] == 1
 
-        provider.messages[event["message_id"]]["content"] = "/status"
+        source = provider.messages[event["message_id"]]
+        if source_change == "edited":
+            source["content"] = "/status"
+        elif source_change == "recalled_before_send":
+            render = private_steward_triage._render
+
+            def render_then_recall(*args, **kwargs):
+                result = render(*args, **kwargs)
+                source["deleted"] = True
+                return result
+
+            monkeypatch.setattr(private_steward_triage, "_render", render_then_recall)
+        else:
+            source["deleted"] = True
+
+        if source_change == "recalled_after_unavailable":
+            route = f"/open-apis/im/v1/messages/{event['message_id']}"
+
+            def unavailable_envelope(args, cwd=None, timeout=None):
+                if route in args:
+                    return {"returncode": 1, "stdout": "", "stderr": "temporarily unavailable"}
+                return provider(args, cwd, timeout)
+
+            with monkeypatch.context() as fault:
+                fault.setattr(transport, "runner", unavailable_envelope)
+                assert transport.reconcile_request(card) == 0
+            assert "retired" not in json.loads(card.read_text())["triage"]
+            assert card in transport.pending_delivery_paths()
+            assert not provider.writes
+
         assert transport.reconcile_request(card) == 0
         retired = json.loads(card.read_text())
         assert retired["triage"]["retired"] == "original_source_changed"
+        if source_change == "recalled_before_send":
+            assert retired["triage"]["card"]
+        assert "send_started_at" not in retired["triage"]
 
         # Even an orphaned descriptor with this filename cannot turn an
         # upstream transport-only record into image or model recovery work.
