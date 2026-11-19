@@ -18,54 +18,20 @@ admission rule. No existing command automatically publishes work cards.
 
 ## Preview and publish
 
-### Packaged workspace
-
-In **Settings → Lark → Connections**, open **Room work** on the existing
-Agent connection. Its Goal and Agent come from that connection; the browser
-cannot supply a different actor. The view reads current canonical availability
-without publishing a card. An inactive or incompatible Goal Channel extension
-leaves the view read-only; the existing extension and permission remain the
-configuration owner.
-
-**Claim task and send receipt** explicitly claims the next eligible task at
-the displayed revision and sends its receipt through that connection. The
-result separates historical acceptance, current ownership and verified room
-delivery. It grants no execution authority. A stale revision requires a fresh
-view; a changed connection or source route cannot reuse the earlier preview.
-
-If the response or delivery is uncertain, **Reconcile this claim** retries the
-original request. Browser session storage retains only that request tuple so
-reload can recover with the same key; it is neither Todo state nor authority.
-If session storage cannot preserve the tuple, the browser does not submit the
-claim. A failed refresh does not present an earlier ownership observation as
-fresh. IDs, observation time and the receipt are available under **Claim
-details**. Private recall never enters this panel or the room card.
+This stage ships the Agent CLI path only; the earlier proposed Room work
+frontend entry is withdrawn to a follow-up proposal so steward-led automatic
+delegation remains the default collaboration route. Steward-publish with
+Agent self-claim goes through the CLI and the scoped IM claim-button offer
+below, not through a manual browser claim page.
 
 Room reads carry the existing `loopx_projection_envelope_v0` freshness and coverage
 contract. Registry, connection and
 canonical Todo source timestamps precede assembly; a delayed read cannot make
 old inputs fresh. Unknown, stale, unreadable or incomplete reads are disclosed
-before counts or current ownership, and cannot enable a new browser claim.
-CLI Markdown and public room cards disclose the same envelope alerts. A claim
-replay rereads current sources; serving a saved copy retains its original read
-time and recomputes age through the existing envelope owner.
-
-The packaged browser scenario `room-work` uses a real disposable local authority
-and synthetic connection/provider transport. It verifies duplicate-click
-isolation, uncertain delivery, reload/same-key recovery, independent CLI
-ownership readback, narrow layouts and keyboard/bilingual presentation. HTTP
-regressions also exercise File and SQLite stores, stale revision, connection
-retargeting, inactive extensions and foreign-origin/actor input. This does not
-qualify an already installed App, a live room or independently authenticated
-hosts.
-
-The images below show the proposed Chinese-locale packaged interaction on
-synthetic data: desktop before claiming, and the narrow result after recovery.
-They illustrate the local proposal rather than an installed or live room.
-
-![Packaged room claim on a synthetic connection](assets/room-work/claim-desktop.png)
-
-[View the narrow recovered result](assets/room-work/claim-mobile.png).
+before counts or current ownership. CLI Markdown and public room cards disclose
+the same envelope alerts. A claim replay rereads current sources; serving a
+saved copy retains its original read time and recomputes age through the
+existing envelope owner.
 
 ### Agent CLI
 
@@ -111,11 +77,12 @@ This explicit command authorizes those two effects. Room membership, delivery,
 a card or recalled text supplies neither the Agent identity nor write scope.
 Identity and binding are reread; binding/target revocation serialize with the
 claim transaction. The facade retains original broker/source registry witnesses
-before provider reads. Claim request v2 holds their existing cross-runtime
+before provider reads. Claim request v3 holds their existing cross-runtime
 mutation guards through the native canonical commit; drift rejects before a
 claim or receipt is written, and a busy source requires a fresh retry. Ordinary
-direct claim v0/v1 requests keep their existing behavior and reject v2 guard
-fields rather than silently dropping that obligation.
+direct claim v0/v1 requests keep their existing behavior and reject v3 guard
+fields rather than silently dropping that obligation. Claim request v2 remains
+main's managed-execution claim and is not used by this facade.
 
 The provider compares the expected revision inside the claim transaction.
 Competing commands at one revision cannot both commit. A stale revision returns
@@ -180,14 +147,14 @@ the initiating card after independent provider readback. A callback ACK alone
 is not an accepted claim. No claim callback acquires or renews execution authority.
 
 The original offer expiry also travels to the canonical owner as `admit_before`
-in claim request v3. It retains v2's broker/source guards. After provider and
+in claim request v4. It retains v3's broker/source guards. After provider and
 source reads, the native Todo owner uses its current clock immediately before
 dispatching the new claim's CAS; equality with the deadline is expired. The
 provider may finish persistence later. A deadline rejection leaves ownership,
 revision, operation receipt, offer and room message unchanged. An already
 committed native receipt is historical acceptance, not a renewed offer or
 execution lease; the callback still applies its current offer admission.
-Old receivers reject v3, and v0/v1/v2 reject the deadline field rather than
+Old receivers reject v4, and v0/v1/v2/v3 reject the deadline field rather than
 silently ignoring it. Untimed direct CLI claims retain their existing wire and
 behavior. This extends the existing claim owner, not a new permission service.
 
@@ -320,12 +287,13 @@ Goal Channel configuration remain usable.
 
 ## 中文边界
 
-领取回调通过 v3 请求把原 offer 的 `expires_at` 作为 `admit_before` 传给既有
-canonical Todo owner，并保留 v2 的来源守卫。原生 owner 在 provider／来源读取后、
+领取回调通过 v4 请求把原 offer 的 `expires_at` 作为 `admit_before` 传给既有
+canonical Todo owner，并保留 v3 的来源守卫。原生 owner 在 provider／来源读取后、
 派发新领取 CAS 前读取当前时钟；到达期限即拒绝，存储完成时间可以更晚。拒绝不改变
 归属、revision、操作回执、offer 或房间消息。既有回执只证明历史接受，不延长 offer
-或执行租约；回调仍检查当前 offer 准入。旧 receiver 拒绝 v3，旧 v0/v1/v2 请求拒绝
-夹带期限字段；不带期限的直接 CLI 领取行为保持不变。
+或执行租约；回调仍检查当前 offer 准入。旧 receiver 拒绝 v4，旧 v0/v1/v2/v3 请求
+拒绝夹带期限字段；不带期限的直接 CLI 领取行为保持不变。v2 仍是主干上的受管执行
+领取请求，本入口不使用它。
 
 本阶段组合已有的 Agent CLI、Goal Channel 与 File/SQLite Todo 权威。默认仅预览；
 显式 `--execute` 才请求领取并发布房间回执。没有新增配置 owner 或前端开关，

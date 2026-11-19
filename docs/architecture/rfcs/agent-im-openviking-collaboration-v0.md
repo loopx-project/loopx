@@ -305,24 +305,19 @@ check unchanged full state and exact receipts after pre-commit route replacement
 these bounded checks do not qualify independent hosts or native provider IO.
 
 The callback's original offer deadline is also enforced by the existing typed
-Todo owner. Claim request v3 retains the source guards and carries `admit_before`;
-the owner checks its current clock after reads, immediately before dispatching
-the new claim CAS. Expiry at that admission point refuses ownership and receipt
-creation without changing the offer or room message; persistence may finish
-later. Historical receipt recovery and untimed direct claims retain their
-existing semantics. This is a bounded local admission repair, not installed,
-independent-host or live-provider qualification.
+Todo owner. Claim request v4 retains the v3 source guards and carries
+`admit_before`; the owner checks its current clock after reads, immediately
+before dispatching the new claim CAS. Expiry at that admission point refuses
+ownership and receipt creation without changing the offer or room message;
+persistence may finish later. Historical receipt recovery and untimed direct
+claims retain their existing semantics. This is a bounded local admission
+repair, not installed, independent-host or live-provider qualification.
 
-The proposed packaged workspace companion enters through the existing Lark
-connection. It reads canonical room orientation, explicitly claims through the
-same owner and reads historical acceptance, current ownership and message
-delivery separately. Its HTTP adapter derives the actor from the current
-connection and pins the preview's binding/source scope. An uncertain request
-survives page reload only as an original retry tuple; the browser gains no
-independent work or execution authority. Packaged browser and real File/SQLite
-HTTP checks retain synthetic connection/provider transport and independent CLI
-readback. These local results do not qualify native room rendering, an installed
-App, independently authenticated hosts or live OpenViking.
+A packaged workspace companion for manual claiming was proposed earlier in this
+PR and is withdrawn from the current delivery scope: steward-led automatic
+delegation remains the default collaboration route, the Agent CLI and the
+scoped IM claim-button offer carry steward-published, Agent-claimed work, and
+a manual claim frontend requires its own later proposal and qualification.
 
 The private `work resume` path composes existing scoped Turn Recall with fresh
 channel identity, canonical projection and quota observations. It skips memory
@@ -336,7 +331,7 @@ The local continuation retains the native persisted Todo/Turn binding across
 discovery, `upgraded` and `replayed` guard outcomes. Current capability input is
 re-evaluated instead of inherited from a saved quota packet. Room orientation
 uses the existing projection envelope owner for registry, connection and
-canonical-source read facts; its HTTP, CLI and packaged consumers disclose old,
+canonical-source read facts; its CLI consumers disclose old,
 unreadable or incomplete scope before presenting current ownership. A claim
 replay rereads those sources without renewing the historical receipt. These
 local owner integrations still require exact-head installation and regression

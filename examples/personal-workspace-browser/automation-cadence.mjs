@@ -5,14 +5,14 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
-import { testPythonCommand } from "../../scripts/test-python.mjs";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
 import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 const execFileAsync = promisify(execFile);
 
 async function admitCadenceStart(root, agentId) {
-  const python = testPythonCommand(`
+  const { stdout } = await execFileAsync(resolveTestPython(), ["-c", `
 import json
 from pathlib import Path
 import sys
@@ -29,8 +29,7 @@ result = effect_runtime_result("quota.automation_cadence.admit", {
     "trigger_at_ms": now_ms,
 }, retry_safe=False)
 print(json.dumps(result))
-`);
-  const { stdout } = await execFileAsync(python.command, [...python.args, root, agentId], { cwd: repoRoot });
+`, root, agentId], { cwd: repoRoot });
   return JSON.parse(stdout);
 }
 
@@ -41,8 +40,7 @@ export async function startCadenceAuthority() {
   await writeFile(resolve(root, "registry.json"), JSON.stringify({
     schema_version: "0.1", common_runtime_root: resolve(root, "runtime"), goals: [{ id: "multi-agent-projection" }],
   }));
-  // Match the main server's explicit source/installed package provenance.
-  const python = testPythonCommand(`
+  const child = spawn(resolveTestPython(), ["-u", "-c", `
 from pathlib import Path
 import sys
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
@@ -57,8 +55,7 @@ assert Path(route["target_runtime_root"]).resolve() == server.runtime_root.resol
 server.verbose = False
 print(server.server_address[1], flush=True)
 server.serve_forever()
-`);
-  const child = spawn(python.command, [...python.args, root], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+`, root], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
   let diagnostic = "";
   child.stderr.on("data", (chunk) => { diagnostic = (diagnostic + chunk).slice(-2000); });
   const lines = createInterface({ input: child.stdout });
