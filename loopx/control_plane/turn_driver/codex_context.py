@@ -998,9 +998,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                                 if selection_command_args_template is not None else {}),
                             **({"captured_decision": captured_decision} if captured_decision is not None else {}),
                             **({"progressive_enabled": False} if not progressive else {}),
-                            "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                                page_bytes=page_bytes, max_page_output_bytes=output_bytes)
-                                + " --select '<supporting_material_pointer>/sources'",
+                            "command_template": recovery["command"] + " --select '<pointer>'",
                         } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
                         observe_first_read=progressive)
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:

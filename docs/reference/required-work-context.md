@@ -319,9 +319,10 @@ read obligations fit in one page, the opening contains those controls and
 reports EOF. Follow it and its cursor before work. Both selections pin the same
 immutable capture.
 `navigation.first_read_command` replays the opening. Use
-`navigation.recovery.command` for other fields. If the response is lost, use the
-original digest-bound capture in the wake prompt. Recovery reuses the saved
-decision and its original receipt.
+`navigation.recovery.command` for fields in the delivered view. For deferred
+fields, use the original source in `context_details`. If the response is lost,
+use the original digest-bound capture in the wake prompt. Recovery reuses the
+saved decision and its original receipt.
 
 When native quota navigation requires explicit Todo selection, the opening
 keeps the discovery and same-Turn selection commands with the read obligations
@@ -359,8 +360,9 @@ presentation changes neither admission nor the explicit off view.
 和读取义务能完整放在一页时，首屏先交付这些控制信息，并给出
 `navigation.remaining_read_command`。即使首屏已到 EOF，页级 `read_instruction` 仍指向
 这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
-`navigation.first_read_command` 可重读首屏，其他字段沿
-`navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
+`navigation.first_read_command` 可重读首屏。`navigation.recovery.command` 读取已交付视图
+中的字段，延迟交付的字段从 `context_details` 标明的原始捕获选读。结果丢失时，用唤醒
+正文中的原文件及摘要恢复，复用原决策和回执。
 
 原生额度导航要求显式选择 Todo 时，首读把候选发现、同一轮次的选择命令、必读项和执行
 约束放在一起。推荐候选的明细导致这些信息超出单页预算时，同一捕获的续读保留完整
@@ -886,11 +888,14 @@ setting. Ordinary machine validation still applies to business operations.
 Native `quota should-run` and saved `context-project` persist the complete
 capture and return a small file reference, not an eager first page. The response
 names the delta/full `path`, digest and reader `command`; `recovery` names the
-current complete file. A file delta additionally carries `baseline_reference`.
+complete file for the current delivered view. A file delta also carries `baseline_reference`.
 `index_command` lists current fields and `select_command` batches exact pointers.
 Under a smaller explicit ceiling, these shortcut commands may be omitted;
 append `--list` or `--select <pointer>` to `recovery.command` instead. Both
-operations address the current complete capture, including during delta delivery.
+operations address the current delivered view, including during delta delivery.
+For a deferred field, replace `<pointer>` in `context_details.command_template`
+with its exact pointer. The template reads the original capture with its digest
+and the same CLI route as the delivered view.
 The reference stays below 7900 serialized bytes (or the explicit smaller output
 ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
@@ -1284,10 +1289,12 @@ SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和
 沿用可见 Goal 的执行与结算身份；仅启用差分时接入捕获目录，不转换成自动心跳。
 原生 `quota should-run` 与 `context-project` 先保存完整捕获，默认返回小型文件入口，
 不内联第一页。`path`、摘要与 `command` 指向当前差分或全量；`recovery` 指向当前
-完整文件；文件差分另带 `baseline_reference`。`index_command` 展示当前字段目录，
+交付视图的完整文件；文件差分另带 `baseline_reference`。`index_command` 展示当前字段目录，
 `select_command` 批量选读精确路径。引用输出不超过 7900 序列化字节或调用者显式更小
 的上限；较小预算下可省略这两个快捷命令，改在 `recovery.command` 后追加
-`--list` 或 `--select <pointer>`，差分投递时也直接读取当前完整捕获。
+`--list` 或 `--select <pointer>`，差分投递时也直接读取当前交付视图。延迟字段可将
+`context_details.command_template` 中的 `<pointer>` 换成精确地址，沿原捕获摘要和
+本次交付使用的同一个 CLI 入口选读。
 元数据仍放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
 原始工具日志完整，不证明宿主保留给模型的字节也完整。
 
