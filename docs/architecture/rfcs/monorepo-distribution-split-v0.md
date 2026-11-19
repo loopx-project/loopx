@@ -331,8 +331,12 @@ operator-selected tools retain only their already authorized effects.
 
 A configured local caller can use `start-goal --execute` to submit one goal
 sentence and run the first checked task in a fresh project. Selecting
-`--host codex-cli` uses the installed Codex CLI and existing read-only native
-profile. The generic route accepts its approved adapter. Both routes require
+`--host codex-cli` uses the installed Codex CLI with read-only tools by default.
+An explicit `--write-dir` binds one project directory to the Goal and Task write
+scope. The native adapter confines file writes to that directory through an
+invocation-local Codex permission profile. The checker and its verification
+rules stay outside the writable directory. The generic route accepts its
+approved adapter. Both routes require
 the caller's independent check and recover through the original executor.
 Before first registration the native route looks for Codex on PATH. Adapter
 and check commands resolve from the task directory on POSIX and are checked
@@ -343,8 +347,9 @@ Goal, Todo, lease and Turn owners and defaults to project-local runtime state.
 Registration records the original operation and storage target before the
 initial source is written. The identical request can supply a missing initial
 source when the authority owner still needs it, and can recover the original
-task and Turn. The native operation records its selected host in the request
-identity. An existing generic operation retains its original identity.
+task and Turn. The native operation records its selected host and any approved
+directory in the request identity. An existing generic operation retains its
+original identity.
 Settled work returns the recorded result even if the original executables
 have been removed. The ordinary guided
 entry continues to handle interactive hosts and connected projects.

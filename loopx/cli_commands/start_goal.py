@@ -201,6 +201,10 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction[argparse.
         help="Executor for --execute. Select codex-cli to use the installed Codex CLI.",
     )
     start_goal_parser.add_argument(
+        "--write-dir",
+        help="Project-relative directory the first Codex task may write. The check runs independently.",
+    )
+    start_goal_parser.add_argument(
         "--host-adapter-command-json",
         help="Approved JSON argv for a v1 generic CLI adapter when executing the first task.",
     )
@@ -397,7 +401,7 @@ def handle_start_goal_command(
         print_payload(payload, args.format, render_managed_start_markdown)
         return 0 if payload["ok"] else 1
     if any(getattr(args, name, None) is not None for name in (
-        "execution_host", "host_adapter_command_json", "validation_command_json",
+        "execution_host", "host_adapter_command_json", "validation_command_json", "write_dir",
     )):
         print_payload({"ok": False, "error": "Host and check options require start-goal --execute."},
                       args.format, _render_start_goal_markdown)

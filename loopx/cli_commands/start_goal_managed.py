@@ -38,6 +38,8 @@ def _first_turn_args(
     host = args.execution_host or "generic-cli"
     if not args.validation_command_json:
         raise ValueError("start-goal --execute requires --validation-command-json")
+    if args.write_dir is not None and host != "codex-cli":
+        raise ValueError("--write-dir requires --host codex-cli.")
     host_args = []
     if host == "generic-cli":
         if not args.host_adapter_command_json:
@@ -57,15 +59,19 @@ def _first_turn_args(
     ])
 
 
-def _first_task_executable_available(program: str, project: Path) -> bool:
+def _first_task_executable(program: str, project: Path) -> str | None:
     if os.name == "nt":
-        # CreateProcess owns search for relative names and can use system
-        # locations outside PATH. Check explicit absolute paths here.
-        return not Path(program).is_absolute() or shutil.which(program) is not None
+        return shutil.which(program)
     if os.path.dirname(program):
-        return shutil.which(os.path.join(project, program)) is not None
+        return shutil.which(os.path.join(project, program))
     project_path = os.pathsep.join(os.path.join(project, entry) for entry in os.get_exec_path())
-    return shutil.which(program, path=project_path) is not None
+    return shutil.which(program, path=project_path)
+
+
+def _first_task_executable_available(program: str, project: Path) -> bool:
+    # CreateProcess owns its broader search for relative names.
+    return (os.name == "nt" and not Path(program).is_absolute()
+            or _first_task_executable(program, project) is not None)
 
 
 def _register_first_goal(
@@ -78,6 +84,7 @@ def _register_first_goal(
     objective: str,
     display_name: str | None,
     operation_id: str,
+    write_scope: list[str],
 ) -> None:
     if not registry_path.exists():
         try:
@@ -87,7 +94,7 @@ def _register_first_goal(
                 domain=DEFAULT_DOMAIN, role="controller", parent_goal_id=None,
                 state_file=None, goal_doc=None, adapter_kind="generic_project_goal_v0",
                 adapter_status="connected", next_probe=None, spawn_allowed=False, max_children=0,
-                allowed_domains=[], write_scope=[], force=False, dry_run=False, sync_global=False,
+                allowed_domains=[], write_scope=write_scope, force=False, dry_run=False, sync_global=False,
                 creation_operation_id=operation_id, initial_agent_id=agent_id,
             )
             if not receipt.get("ok"):
@@ -140,10 +147,25 @@ def execute_managed_start(
         runtime_root_arg, registry_path=registry_path,
     ).resolve()
     display_name = args.display_name or derive_goal_display_name(objective)
-    launch_identity = (
+    launch_identity: dict[str, object] = (
         {"adapter": host_argv} if host_argv is not None
         else {"host": turn_args.host, "binary": turn_args.codex_bin, "sandbox": turn_args.codex_sandbox}
     )
+    write_scope: list[str] = []
+    if args.write_dir is not None:
+        from ..control_plane.turn_driver.codex_cli import codex_project_write_scope
+
+        raw = Path(args.write_dir)
+        if raw.is_absolute():
+            raise ValueError("--write-dir requires a project-relative directory.")
+        directory, scope = codex_project_write_scope(project, raw, runtime_root)
+        checker = _first_task_executable(validator_argv[0], project)
+        if checker is not None and (project / checker).resolve().is_relative_to(directory):
+            raise ValueError("Keep the independent checker outside --write-dir.")
+        turn_args.codex_write_dir = directory
+        turn_args.codex_sandbox = "workspace-write"
+        write_scope = [scope]
+        launch_identity["write_dir"] = str(directory)
     digest = canonical_digest({
         "project": str(project), "runtime_root": str(runtime_root),
         "goal_id": goal_id, "agent_id": agent_id, "goal": objective, "title": display_name,
@@ -153,13 +175,13 @@ def execute_managed_start(
     _register_first_goal(
         registry_path=registry_path, runtime_root=runtime_root, project=project,
         goal_id=goal_id, agent_id=agent_id, objective=objective,
-        display_name=display_name, operation_id=operation_id,
+        display_name=display_name, operation_id=operation_id, write_scope=write_scope,
     )
     todo = add_goal_todo(
         registry_path=registry_path, runtime_root_arg=str(runtime_root),
         goal_id=goal_id, role="agent", text=objective, priority="P1",
         claimed_by=agent_id, task_class="advancement_task", action_kind="advance",
-        operation_id=f"{operation_id}:first-task",
+        operation_id=f"{operation_id}:first-task", required_write_scopes=write_scope or None,
     )
     if not todo.get("ok") or not todo.get("todo_id"):
         raise RuntimeError("The goal was registered. Retry the same start request to recover its first task.")

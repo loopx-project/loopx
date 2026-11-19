@@ -27,7 +27,21 @@ loopx start-goal --execute --host codex-cli --project . \
 ```
 
 Use an existing project check that independently verifies the result. A
-configured generic CLI caller can still supply its approved v1 adapter.
+Codex CLI installation with permission-profile support can also write a first
+artifact in a selected directory.
+
+```sh
+loopx start-goal --execute --host codex-cli --project . --write-dir reports \
+  --goal-text "Write a checked inventory total to reports/total.txt." \
+  --validation-command-json '["./check-inventory-report"]'
+```
+
+Keep the checker and its verification rules outside the writable directory.
+The Codex filesystem sandbox allows writes in that directory. Core keeps the
+registration, task state and settlement outside the write grant. Repeat the
+same directory and check when recovering the original task.
+
+A configured generic CLI caller can still supply its approved v1 adapter.
 
 ```sh
 loopx start-goal --execute --project . --goal-text "Create and check an inventory report." \

@@ -776,7 +776,8 @@ def test_installed_core_starts_one_checked_task_from_goal_text(core_python, tmp_
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_installed_core_starts_and_replays_a_checked_codex_goal(core_python, tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("write", [False, True], ids=["read-only", "write-report"])
+def test_installed_core_starts_and_replays_a_checked_codex_goal(core_python, tmp_path, monkeypatch, provider, write):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.host_process_fixture import write_python_host_fixture
     from tests.test_loopx_turn_codex_cli import _fake_codex
@@ -793,9 +794,13 @@ expected = sum(json.loads(pathlib.Path('inventory.json').read_text()))
 assert record['summary'] == f'Inventory total: {expected}'
 assert record['result_kind'] == 'validated_completion'
 """
+    if write:
+        check += "assert pathlib.Path('reports/total.txt').read_text() == str(expected)\n"
     command = ["--runtime-root", str(runtime), "--format", "json", "start-goal", "--execute",
         "--host", "codex-cli", "--project", str(project), "--goal-text", objective,
         "--validation-command-json", json.dumps([core_python, "-I", "-c", check])]
+    if write:
+        command += ["--write-dir", "reports"]
     binaries = tmp_path / "bin"
     binaries.mkdir()
     home = tmp_path / "codex-home"
@@ -813,14 +818,50 @@ assert record['result_kind'] == 'validated_completion'
     assert not (project / ".loopx").exists() and not log.exists()
 
     source = fake if os.name != "nt" else fake.with_suffix(".py")
+    behavior = [f"assert {objective!r} in prompt",
+                "total = sum(json.loads(pathlib.Path('inventory.json').read_text()))"]
+    if write:
+        behavior.extend([
+            "import tomllib",
+            "settings = tomllib.loads('\\n'.join(args[i+1] for i,a in enumerate(args) if a == '-c'))",
+            "profile = settings['permissions'][settings['default_permissions']]",
+            "assert profile['extends'] == ':read-only' and settings['approval_policy'] == 'never'",
+            "assert profile['filesystem'] == {str(pathlib.Path('reports').resolve()): 'write'}",
+            "assert '--sandbox' not in args and '--strict-config' in args and '--ignore-rules' in args",
+            "task = json.loads(prompt.split('Turn request:\\n', 1)[1])['task_context']",
+            "assert task['goal_boundary']['write_scope'] == ['reports/**']",
+            "pathlib.Path('reports').mkdir()",
+            "pathlib.Path('reports/total.txt').write_text(str(total))",
+        ])
+    else:
+        behavior.append("assert args[args.index('--sandbox') + 1] == 'read-only'")
+    behavior.append(
+        "result.update(result_kind='validated_completion', summary=f'Inventory total: {total}', "
+        "work_evidence=['artifact:inventory.json'], validation_evidence=['check:inventory-total'])"
+    )
     executable = write_python_host_fixture(binaries / "codex", source.read_text(encoding="utf-8").replace(
         "result.update(json.loads(os.environ.get(\"FAKE_CODEX_RESULT_FIELDS\", \"{}\")))",
-        f"assert {objective!r} in prompt\n"
-        "assert args[args.index('--sandbox') + 1] == 'read-only'\n"
-        "total = sum(json.loads(pathlib.Path('inventory.json').read_text()))\n"
-        "result.update(result_kind='validated_completion', summary=f'Inventory total: {total}', "
-        "work_evidence=['artifact:inventory.json'], validation_evidence=['check:inventory-total'])",
+        "\n".join(behavior),
     ))
+    if write:
+        for scope in (".loopx/runtime", ".", "../outside", "two words"):
+            denied = json.loads(_run(core_python, [*command[:-1], scope], tmp_path,
+                environment=environment, expected=1).stdout)
+            assert "--write-dir must" in denied["error"]
+        scoped_runtime = list(command)
+        scoped_runtime[1] = str(project / "reports/runtime")
+        denied = json.loads(_run(core_python, scoped_runtime, tmp_path, environment=environment, expected=1).stdout)
+        assert "separate from the goal and runtime state" in denied["error"]
+        (project / "reports").mkdir()
+        mutable = write_python_host_fixture(project / "reports/checker", "raise SystemExit(0)\n")
+        scoped_checker = list(command)
+        scoped_checker[scoped_checker.index("--validation-command-json") + 1] = json.dumps([str(mutable)])
+        denied = json.loads(_run(core_python, scoped_checker, tmp_path, environment=environment, expected=1).stdout)
+        assert "Keep the independent checker outside" in denied["error"]
+        mutable.unlink()
+        mutable.with_suffix(".py").unlink(missing_ok=True)
+        (project / "reports").rmdir()
+        assert not (project / ".loopx").exists() and not log.exists()
     # Stop after the native result is durable and before the independent check.
     interrupted = os.name == "posix"
     if interrupted:
@@ -857,8 +898,11 @@ command_validation.build_loopx_turn_command_validator = interrupt_validator
     assert replay["replayed"] and replay["resume_turn_key"] == first["resume_turn_key"]
     assert replay["todo_id"] == first["todo_id"] and not any(replay["effects"].values())
     different = list(command)
-    different[different.index("--host") + 1] = "generic-cli"
-    different += ["--host-adapter-command-json", json.dumps([core_python])]
+    if write:
+        different[-1] = "different-report"
+    else:
+        different[different.index("--host") + 1] = "generic-cli"
+        different += ["--host-adapter-command-json", json.dumps([core_python])]
     denied = json.loads(_run(core_python, different, tmp_path, environment=environment, expected=1).stdout)
     assert "already connected" in denied["error"] and registry.read_bytes() == registry_bytes
     assert len(log.read_text().splitlines()) == 1
