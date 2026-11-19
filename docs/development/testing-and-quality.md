@@ -426,7 +426,8 @@ lease。私有快照和原始输出不得进入 Git 或公开 review；快照演
 
 #### Isolate the managed Effect process as well as the data
 
-A separate worktree, registry. Its discovery directory
+Isolate the managed Effect server's discovery directory alongside the worktree,
+registry, `--runtime-root` and archive `--destination` paths. Its discovery directory
 uses Python's temporary directory and user identity; the server is selected by
 source fingerprint. Identical checkouts and an installed release can therefore
 share the same process. A large restore/audit can delay ordinary CLI requests

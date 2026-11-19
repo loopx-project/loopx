@@ -39,7 +39,7 @@ HTTP 仍为 **500**；固定公开错误文案不变，仅增加：
 - 异常链最多检查 8 个节点，按对象身份去环；显式 `__cause__` 优先。
   仅 `EffectRuntimeStartupError` 的 `runtime_launch_failed` /
   `runtime_request_failed` 允许沿未抑制的隐式 `__context__` 查找权限原因。
-  普通历史 context、`raise ...
+  普通历史 context 分支停止分类；`raise ... from None` 抑制的隐式 context 也在此停止。
 
 前端只在 HTTP >= 500 时识别该结构化错误码。错误体按实际字节最多读取 16 KiB，
 不信任 Content-Length；复用单次请求的 30 秒超时。读完、超限或取消后释放读取器。

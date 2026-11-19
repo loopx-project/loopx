@@ -238,7 +238,7 @@ comparison evidence is unknown; a summary cannot replace full requirements.
 The generated task body permits routine public commit, push and PR creation
 within existing user authority and repository rules after validation and a clean
 public/private boundary scan. Do not reintroduce a user gate for public-safe
-publication itself. An old trust setting merge and production retain their separate authorization.
+publication itself. Merge and production retain their separate authorization.
 For `notify_user_on_open_todo=true`, follow the current
 `interaction_contract.user_channel` for the concrete notice and cooldown.
 This notification flag does not decide delivery or accounting:

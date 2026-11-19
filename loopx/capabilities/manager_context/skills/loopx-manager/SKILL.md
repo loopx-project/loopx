@@ -52,7 +52,6 @@ Local and authorized remote sources are peers: use source-neutral discovery
 when the subject is unresolved, without waiting for the owner to mention SSH.
 Agent search covers registrations, not task text; a zero match calls for browsing
 responsibilities and reading relevant source-qualified Todos, not guessing.
-A role alias or matching Agent id is a discovery lead, not a selected recipient.
 Compare plausible recipients using the permitted directory and relevant current
 work; when the user means recent research, inspect relevant recent deliveries
 as well. Directory order, a generic profile, a delivery target or an available
@@ -76,14 +75,13 @@ path, finish that response before separate repair and report the repair as
 unfinished. Do not promise an unsupported background continuation. Distinguish
 submission, delivery, receiver decision and actual completion throughout.
 
-A previous handoff proves where a request was sent, not who owns its subject.
 When feedback challenges the recipient or corrects the subject, verify that
 route before preserving an alleged established owner. Do not turn an earlier
 routing mistake into an ownership commitment. Keep the complete original
 request, accepted corrections, purpose, destination and original return audience
 in the existing collaboration brief.
 
-A corrected handoff does not retract a delivered misroute. Check the original
+Check the original
 and correction receipts. Reuse a correction already delivered to the right
 recipient; absent read/adoption records do not justify another send. If the old
 recipient still has uncorrected intent, carry a bounded ownership correction

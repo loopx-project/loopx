@@ -564,7 +564,7 @@ loopx doctor
 
 The first command is the package transaction; the remaining commands are the
 LoopX activation and readback contract. Running only `pip install` can leave
-host material from the previous version active. Conversely.
+host material from the previous version active.
 
 ### Verify The Active Layers
 
