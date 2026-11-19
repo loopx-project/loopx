@@ -239,7 +239,7 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
 
     first = _quota(registry_path, runtime_root, project, cli_bin=cli_bin)
-    app = first["scheduler_hint"]["codex_app"]
+    app = first["scheduler_hint"]["app_automation"]
     target_rrule = app["recommended_rrule"]
     ack_hint = app["ack_hint"]
     compact_app = build_turn_envelope(first)["scheduler"]["app_automation"]
@@ -268,7 +268,7 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     assert ack["already_applied"] is False
 
     settled = _quota(registry_path, runtime_root, project, cli_bin=cli_bin)
-    settled_app = settled["scheduler_hint"]["codex_app"]
+    settled_app = settled["scheduler_hint"]["app_automation"]
     assert settled_app["stateful_backoff"]["apply_needed"] is False
     assert settled_app["stateful_backoff"]["ack_needed"] is False
     assert settled_app["host_action"] == "none"
@@ -285,7 +285,7 @@ def test_scheduler_ack_current_rejects_claim_before_matching_host_readback(
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_THREAD_ID", "fixture-thread")
     _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
-    app = _quota(registry_path, runtime_root, project)["scheduler_hint"]["codex_app"]
+    app = _quota(registry_path, runtime_root, project)["scheduler_hint"]["app_automation"]
     if host_missing:
         (codex_home / "automations/fixture/automation.toml").unlink()
 
@@ -314,7 +314,7 @@ def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
     _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
 
     first = _quota(registry_path, runtime_root, project)
-    first_app = first["scheduler_hint"]["codex_app"]
+    first_app = first["scheduler_hint"]["app_automation"]
     target_rrule = first_app["recommended_rrule"]
     _write_heartbeat_rrule(codex_home, target_rrule)
     stale_state = build_scheduler_state(
@@ -336,7 +336,7 @@ def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
     )
 
     reset = _quota(registry_path, runtime_root, project)
-    reset_app = reset["scheduler_hint"]["codex_app"]
+    reset_app = reset["scheduler_hint"]["app_automation"]
     reset_backoff = reset_app["stateful_backoff"]
     assert reset_backoff["state_status"] == "reset_required"
     assert reset_backoff["apply_needed"] is False
@@ -355,7 +355,7 @@ def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
     )
 
     settled = _quota(registry_path, runtime_root, project)
-    settled_backoff = settled["scheduler_hint"]["codex_app"][
+    settled_backoff = settled["scheduler_hint"]["app_automation"][
         "stateful_backoff"
     ]
     assert settled_backoff["state_status"] == "same_identity"
@@ -369,7 +369,7 @@ def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) ->
         scoped_agents=True,
     )
     first = _quota(registry_path, runtime_root, project)
-    first_rrule = first["scheduler_hint"]["codex_app"]["recommended_rrule"]
+    first_rrule = first["scheduler_hint"]["app_automation"]["recommended_rrule"]
     ack = run_json_cli(
         "quota",
         "scheduler-ack",
@@ -394,7 +394,7 @@ def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) ->
     )
 
     repaired = _quota(registry_path, runtime_root, project)
-    app = repaired["scheduler_hint"]["codex_app"]
+    app = repaired["scheduler_hint"]["app_automation"]
     assert app["recommended_rrule"] == first_rrule
     assert app["stateful_backoff"]["state_status"] == "missing"
     assert app["stateful_backoff"]["apply_needed"] is True

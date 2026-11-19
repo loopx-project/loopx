@@ -212,17 +212,17 @@ Scheduler ACK 本身不构成 delivery，不 spend。
 
 ### 兼容投影不能改变状态权威 / Compatibility preserves state authority
 
-`app_automation` 与 `codex_app` 是同一 proposal 的宿主投影，不是两个 scheduler
-writer。读取优先采用 common state；仅有旧 Codex state 时，保留它经 TS 验证的
-`state_key`。两份投影的 backoff、host facts 与 ACK/failure 命令都必须携带同一个键。
-否则 common state 的当前 identity/index 会被误写到旧键，触发真实的初始档位冲突；
-即使 CAS digest 相等也不代表 proposal 的状态归属正确。
+新决策统一使用 `app_automation` 携带调度建议和宿主行动。旧捕获仍可读取其中的
+`codex_app`。读取优先采用 common state。仅有旧 Codex state 时，保留 TS 验证过的
+`state_key`，并将同一个键贯穿 backoff、host facts 与 ACK/failure 命令。
+写回前须校验状态归属及 CAS 摘要，否则可能把已推进的档位写入错误的状态键。
 
-`app_automation` and `codex_app` project one proposal, not two scheduler writers.
-Reads prefer common state; a legacy-only Codex installation retains its
-TS-validated legacy key. Both projections must carry that same key through
-backoff, host facts and ACK/failure commands. Equal CAS digests do not prove that
-a proposal belongs to the chosen state scope.
+New decisions use `app_automation` for the cadence proposal and Host actions.
+Saved captures can still carry `codex_app`. Reads prefer common state. A
+legacy-only Codex installation retains the TS-validated state key through
+backoff, Host facts, and ACK/failure commands. Before writing, validate the
+state scope and CAS digest to keep the recorded progression in its original
+state.
 
 兼容 Python API 与手工 Codex CLI 未显式传 `state_key` 时，从当前 packet 取得实际键；
 显式键仍须匹配，不得静默改写。Trae 仍只接受 common key。这不是隐式迁移：不能把

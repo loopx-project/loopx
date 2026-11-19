@@ -812,8 +812,8 @@ def main() -> int:
         assert first_guard["automation_liveness"]["pause_allowed"] is False, first_guard
         assert first_guard["scheduler_hint"]["action"] == "backoff_until_material_transition", first_guard
         assert first_guard["scheduler_hint"]["cadence_class"] == "monitor_wait", first_guard
-        assert first_guard["scheduler_hint"]["codex_app"]["recommended_interval_minutes"] == 15, first_guard
-        assert first_guard["scheduler_hint"]["codex_app"]["recommended_rrule"] == (
+        assert first_guard["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 15, first_guard
+        assert first_guard["scheduler_hint"]["app_automation"]["recommended_rrule"] == (
             "FREQ=MINUTELY;INTERVAL=15"
         ), first_guard
         reset = first_guard["scheduler_hint"]["reset_policy"]
