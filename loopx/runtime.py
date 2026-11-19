@@ -246,7 +246,7 @@ def archive_runtime_goal(
             _validate_archive_destination(source, destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
-            from .capabilities.goal_closeout.hooks import run_goal_closeout
+            from .lifecycle.goal_closeout import run_goal_closeout
 
             archived_state_file = destination / "ACTIVE_GOAL_STATE.md"
             declared_state_file = (

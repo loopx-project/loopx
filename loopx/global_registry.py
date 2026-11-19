@@ -661,7 +661,7 @@ def retire_global_registry_goals(
 
     closeouts: list[dict[str, Any]] = []
     if execute:
-        from .capabilities.goal_closeout.hooks import run_goal_closeout
+        from .lifecycle.goal_closeout import run_goal_closeout
 
         for retired_goal in receipt.get("retired_goals", []):
             goal_id = str(retired_goal.get("id") or "").strip()
