@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
+import shutil
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 
 
@@ -40,6 +43,96 @@ _DEFAULT_ROUTE_REFERENCES = (
     ("loopx.control_plane.runtime.local_state_migration", "LEGACY_RUNTIME_ROOT", (".codex", "loopx")),
 )
 _REAL_DEFAULT_ROUTES = (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT)
+_CASE_TEMP_DIRS = pytest.StashKey[list[Path]]()
+_CASE_FAILED = pytest.StashKey[bool]()
+_CASE_SEQUENCE = pytest.StashKey[dict[str, int]]()
+_WORKER_TEMP = pytest.StashKey[Path]()
+_TEMP_RETENTION = pytest.StashKey[str]()
+_TEMP_RETENTION_INI = "tmp_path_retention_policy"
+_MIB = 1024 * 1024
+
+
+def pytest_configure(config):
+    if config.getoption("loopx_min_free_tmp_mib") < 0:
+        raise pytest.UsageError("--loopx-min-free-tmp-mib must be nonnegative")
+    overrides = config.getoption("override_ini") or ()
+    with warnings.catch_warnings():
+        # Pytest 9's getini() returns the same value for absent and explicit "all".
+        warnings.filterwarnings("ignore", message=r"config\.inicfg is deprecated", category=pytest.PytestDeprecationWarning)
+        explicit_policy = _TEMP_RETENTION_INI in config.inicfg or any(
+            override.split("=", 1)[0].strip() == _TEMP_RETENTION_INI for override in overrides
+        )
+    config.stash[_TEMP_RETENTION] = config.getini(_TEMP_RETENTION_INI) if explicit_policy else "failed"
+    config.stash[_CASE_SEQUENCE] = {}
+
+
+@pytest.fixture
+def case_mktemp(request, tmp_path_factory):
+    """Create a named temporary directory owned by the current test case."""
+    def make(name):
+        # Older pytest versions can reuse a factory name once its directory is removed.
+        sequences = request.config.stash[_CASE_SEQUENCE]
+        serial = sequences.get(name, 0)
+        sequences[name] = serial + 1
+        temporary = tmp_path_factory.mktemp(f"{name}-{serial}", numbered=False)
+        request.node.stash.setdefault(_CASE_TEMP_DIRS, []).append(temporary)
+        return temporary
+
+    return make
+
+
+@pytest.fixture
+def tmp_path(request, case_mktemp):
+    # Use pytest's test-name prefix, but own the lifetime through the teardown
+    # report. Pytest's fixture finalizer only knows about setup/call at this point.
+    name = re.sub(r"\W", "_", request.node.name)[:30]
+    return case_mktemp(name)
+
+
+def _remove_temp_dir(temporary):
+    try:
+        if temporary.is_symlink():
+            temporary.unlink()
+        else:
+            shutil.rmtree(temporary)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        warnings.warn(pytest.PytestWarning(f"Could not clean pytest temporary directory {temporary}: {exc}"),
+                      stacklevel=2)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    if report.failed:
+        item.stash[_CASE_FAILED] = True
+    if report.when == "teardown":
+        policy = item.config.stash[_TEMP_RETENTION]
+        if policy == "none" or (policy == "failed" and not item.stash.get(_CASE_FAILED, False)):
+            for temporary in item.stash.get(_CASE_TEMP_DIRS, []):
+                _remove_temp_dir(temporary)
+        for key in (_CASE_TEMP_DIRS, _CASE_FAILED):
+            if key in item.stash:
+                del item.stash[key]
+    return report
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    minimum = item.config.getoption("loopx_min_free_tmp_mib")
+    if minimum == 0:
+        return
+    configured = item.config.getoption("basetemp") or os.environ.get("PYTEST_DEBUG_TEMPROOT")
+    target = Path(configured or tempfile.gettempdir()).resolve()
+    existing = next(path for path in (target, *target.parents) if path.is_dir())
+    available = shutil.disk_usage(existing).free
+    if available < minimum * _MIB:
+        reason = (f"LoopX pytest temporary storage is low at {existing}: "
+                  f"{available // _MIB} MiB available, {minimum} MiB required.")
+        # Stop scheduling work after this setup report, including on xdist workers.
+        item.session.shouldstop = reason
+        pytest.fail(reason, pytrace=False)
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -57,11 +150,12 @@ def pytest_runtest_teardown(item):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _isolated_worker_effect_runtime(tmp_path_factory):
+def _isolated_worker_effect_runtime(tmp_path_factory, request):
     # HOME does not namespace the Effect process on POSIX: its locator uses
     # getuid() and the process temp directory. A restart in one xdist worker
     # must not retire another worker's real runtime.
     temporary = tmp_path_factory.mktemp("effect-runtime")
+    request.config.stash[_WORKER_TEMP] = temporary
     with pytest.MonkeyPatch.context() as patch:
         for variable in ("TMPDIR", "TEMP", "TMP"):
             patch.setenv(variable, str(temporary))
@@ -86,8 +180,8 @@ def isolated_effect_runtime(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolated_default_runtime_routes(tmp_path_factory, monkeypatch):
-    home = tmp_path_factory.mktemp("home")
+def _isolated_default_runtime_routes(case_mktemp, monkeypatch):
+    home = case_mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("CODEX_HOME", raising=False)
@@ -115,6 +209,10 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         if os.path.lexists(root)
     ]
     if not created:
+        temporary = session.config.stash.get(_WORKER_TEMP, None)
+        if (temporary is not None and exitstatus == pytest.ExitCode.OK
+                and session.config.stash[_TEMP_RETENTION] != "all"):
+            _remove_temp_dir(temporary)
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
@@ -127,6 +225,12 @@ def pytest_sessionfinish(session, exitstatus) -> None:
 
 
 def pytest_addoption(parser) -> None:
+    parser.getgroup("loopx-tests").addoption(
+        "--loopx-min-free-tmp-mib",
+        type=int,
+        default=2048,
+        help="Stop starting tests below this many MiB free on the pytest temporary filesystem (0 disables).",
+    )
     group = parser.getgroup("loopx-smoke-suite")
     group.addoption(
         "--loopx-smoke-suite",
