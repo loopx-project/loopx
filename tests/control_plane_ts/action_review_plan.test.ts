@@ -66,6 +66,18 @@ test("confirmed Task dispatch resolves only to the receipt's own execution Turn"
   ]) {
     assert.equal(compileActionReviewPlan({...proposal, ...change}).taskExecution, undefined);
   }
+  const pending = {...proposal, permission_classification: "durable_write", task_execution_dispatch_pending: true};
+  assert.equal(compileActionReviewPlan(pending).reason, "task_start_retry");
+  assert.equal(compileActionReviewPlan(pending).canApply, true);
+  assert.equal(compileActionReviewPlan(pending).retryOriginal, true);
+  for (const change of [
+    {task_execution_dispatch_pending: "true"},
+    {context: {binding_id: "bound-source"}},
+    {permission_classification: "protected"},
+    {receipt: {...receipt, resource_ids: {...resources, turn_id: ""}}},
+  ]) {
+    assert.equal(compileActionReviewPlan({...pending, ...change}).canApply, false);
+  }
   // Older saved actions can still report creation while the Session is unknown.
   const legacy = compileActionReviewPlan({...proposal, receipt: {projection_verified: true, outcome: "todo_added"}});
   assert.equal(legacy.interaction, "completed");
