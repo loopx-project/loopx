@@ -1247,3 +1247,128 @@ def test_fresh_scope_includes_a_new_stopped_goal_without_reusing_or_rewriting_mo
     assert not result["response"]["native_loopx"]["monitor"]["material_change"]
     assert capture.read_bytes() == calls and store.load_session(sid)["manager_authorization_scope_id"] == original_scope
     assert monitor.current(actor)["result_hash"] == first_hash
+
+
+def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_monitors(
+    steward, tmp_path, monkeypatch,
+):
+    from test_steward_generic_monitor_todo import _set_signal_source_policy
+
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    session = store.load_session(sid)
+    _set_signal_source_policy(runtime, session, binding, goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+
+    # Push the default portfolio watch into the future so our two custom monitors control due ordering.
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+
+    from loopx.capabilities.native_chat.steward_commands import native_command
+
+    first_due = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    second_due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    added_first = native_command(
+        runtime,
+        [
+            "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+            "--text", "Monitor open PR signals",
+            "--claimed-by", actor["agent_id"],
+            "--task-class", "continuous_monitor",
+            "--action-kind", "local_runtime_observe",
+            "--continuation-policy", "same_agent_non_delivery",
+            "--required-capability", "filesystem",
+            "--target-key", "steward-stalled-pr-monitor",
+            "--task-repository", "git:github.com/org/repo",
+            "--watch-only",
+            "--cadence", "30m",
+            "--next-due-at", first_due,
+            "--execute",
+        ],
+    )
+    added_second = native_command(
+        runtime,
+        [
+            "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+            "--text", "Monitor secondary inbox state",
+            "--claimed-by", actor["agent_id"],
+            "--task-class", "continuous_monitor",
+            "--action-kind", "local_runtime_observe",
+            "--continuation-policy", "same_agent_non_delivery",
+            "--required-capability", "filesystem",
+            "--target-key", "steward-secondary-watch",
+            "--watch-only",
+            "--cadence", "30m",
+            "--next-due-at", second_due,
+            "--execute",
+        ],
+    )
+    pr_todo_id = added_first["todo_id"]
+    secondary_todo_id = added_second["todo_id"]
+    transport.reconcile()
+
+    # 1. Fail due[0] inside _observe_github_repository_prs before any poll receipt.
+    calls = {"count": 0}
+
+    def flaky_repo_observe(repo_slug, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"status": "unavailable", "repository": repo_slug}
+        return {"status": "ok", "repository": repo_slug, "items": []}
+
+    monkeypatch.setattr(
+        "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+        flaky_repo_observe,
+    )
+    runtime._steward_monitor_next_check.clear()
+    initial = pump_steward_monitors(runtime)
+    assert len(initial) == 1 and initial[0]["loopx_request"]["todo_id"] == pr_todo_id
+    failed = finish(runtime, initial[0])
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "runtime_error"
+    assert failed["error"] == "steward monitor external signal source temporarily unavailable"
+
+    # 2. If due[0] stays unavailable on recovery, it executes its ONE bounded retry and stops failing over itself.
+    # Replace flaky mock to fail a second time so we prove 1-retry cap AND non-starvation of due[1]!
+    monkeypatch.setattr(
+        "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+        lambda repo_slug, **_kw: {"status": "unavailable", "repository": repo_slug},
+    )
+    runtime._steward_monitor_next_check.clear()
+    recovery = pump_steward_monitors(runtime)
+    assert len(recovery) == 1
+    assert recovery[0]["loopx_request"]["todo_id"] == pr_todo_id
+    assert recovery[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == failed["turn_id"]
+    failed_again = finish(runtime, recovery[0])
+    assert failed_again["status"] == "failed"
+
+    # 3. Next pump skips the unrecoverable due[0] and dispatches due[1] instead of starving it!
+    runtime._steward_monitor_next_check.clear()
+    next_due = pump_steward_monitors(runtime)
+    assert len(next_due) == 1 and next_due[0]["loopx_request"]["todo_id"] == secondary_todo_id
+    done_secondary = finish(runtime, next_due[0])
+    assert done_secondary["status"] == "completed", done_secondary
+    assert local_watch_row(runtime, actor, secondary_todo_id)["next_due_at"] != second_due
+
+    # 4. Also verify recovery succeeds when GitHub recovers after the first failure.
+    third_due = (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat()
+    edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", third_due)
+    monkeypatch.setattr(
+        "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+        flaky_repo_observe,
+    )
+    calls["count"] = 0
+    runtime._steward_monitor_next_check.clear()
+    first_try = pump_steward_monitors(runtime)
+    assert len(first_try) == 1 and finish(runtime, first_try[0])["status"] == "failed"
+    runtime._steward_monitor_next_check.clear()
+    recovered_try = pump_steward_monitors(runtime)
+    assert len(recovered_try) == 1
+    recovered_done = finish(runtime, recovered_try[0])
+    assert recovered_done["status"] == "completed", recovered_done
+    assert local_watch_row(runtime, actor, pr_todo_id)["next_due_at"] != third_due

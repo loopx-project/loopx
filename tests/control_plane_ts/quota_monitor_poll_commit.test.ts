@@ -291,6 +291,67 @@ test("admission revalidates due, external, and exact blocked-wait modes", async 
   );
 });
 
+test("attempt_due_monitor admits secondary claimed due monitors via registry_due_monitor unless user gate applies", async () => {
+  const secondaryCandidate = {
+    todo_id: "todo_secondary_monitor",
+    target_key: "secondary-watch",
+    task_class: "continuous_monitor",
+    claimed_by: "codex-main-control",
+    due: true,
+  };
+  const baseDecision = (overrides: Record<string, unknown> = {}) => decision({
+    should_run: true,
+    agent_id: "codex-main-control",
+    effective_action: "normal_run",
+    requires_user_action: false,
+    work_lane_contract: {
+      must_attempt_work: true,
+      obligation: "attempt_due_monitor",
+    },
+    due_monitor_candidates: [{
+      todo_id: "todo_primary_monitor",
+      target_key: "primary-watch",
+      task_class: "continuous_monitor",
+    }],
+    registry_due_monitor: secondaryCandidate,
+    ...overrides,
+  });
+  const admitted = await evaluateQuotaMonitorPollCommit(request({
+    decision: baseDecision(),
+    observation: observation({
+      todo_id: "todo_secondary_monitor",
+      target_key: "secondary-watch",
+      result_hash: "unchanged-secondary",
+    }),
+  }));
+  assert.equal(
+    (admitted.record?.monitor_event as Record<string, unknown>).monitor_mode,
+    "due_monitor_observed_without_material_transition",
+  );
+
+  for (const invalid of [
+    { requires_user_action: true },
+    { registry_due_monitor: { ...secondaryCandidate, due: false } },
+    { registry_due_monitor: { ...secondaryCandidate, claimed_by: "other-agent" } },
+  ]) {
+    await assert.rejects(
+      () => evaluateQuotaMonitorPollCommit(request({
+        decision: baseDecision(invalid),
+        observation: observation({
+          todo_id: "todo_secondary_monitor",
+          target_key: "secondary-watch",
+          result_hash: "unchanged-secondary",
+        }),
+      })),
+      (error: unknown) => {
+        assert.ok(error instanceof EffectRuntimeRequestError);
+        assert.equal(error.code, "monitor_poll_admission_rejected");
+        return true;
+      },
+    );
+  }
+});
+
 test("Todo preflight rejects invalid admission before journaling provider intent", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const effectId = "quota-monitor-poll:rejected-provider";

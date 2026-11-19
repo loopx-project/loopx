@@ -69,11 +69,14 @@ function dueMonitorAllowed(
 ): boolean {
   if (!facts.must_attempt_work) return false;
   const candidate = decision.due_monitor_candidates.find((item) => candidateMatches(item, observation));
-  if (facts.obligation === "attempt_due_monitor") return Boolean(candidate);
-  if (facts.reason_codes.has("due_monitor_context") && candidate) return true;
   const registry = decision.registry_due_monitor;
-  return facts.reason_codes.has("due_monitor_context") && registry.due === true &&
+  const registryAllowed = registry.due === true &&
     registry.claimed_by === decision.agent_id && candidateMatches(registry, observation);
+  if (facts.obligation === "attempt_due_monitor") {
+    return Boolean(candidate) || (!decision.requires_user_action && registryAllowed);
+  }
+  if (facts.reason_codes.has("due_monitor_context") && candidate) return true;
+  return facts.reason_codes.has("due_monitor_context") && registryAllowed;
 }
 
 function monitorGateAllowsObservation(decision: MonitorDecision): boolean {

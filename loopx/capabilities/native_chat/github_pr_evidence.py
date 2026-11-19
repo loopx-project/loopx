@@ -378,30 +378,177 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     return summary
 
 
+_GITHUB_PR_LIST_PAGE_SIZE = 20
+_GITHUB_PR_LIST_MAX_PAGES = 5
+_GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(
+      states: OPEN,
+      first: 20,
+      after: $cursor,
+      orderBy: {field: UPDATED_AT, direction: DESC}
+    ) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        number
+        title
+        url
+        headRefOid
+        headRefName
+        baseRefName
+        isDraft
+        reviewDecision
+        mergeStateStatus
+        mergeable
+        updatedAt
+        author {
+          login
+        }
+        reviews(last: 20) {
+          nodes {
+            id
+            state
+            submittedAt
+            body
+            author {
+              login
+            }
+            commit {
+              oid
+            }
+          }
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                contexts(first: 30) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      name
+                      status
+                      conclusion
+                    }
+                    ... on StatusContext {
+                      context
+                      state
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"""
+
+
+def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
+    raw_reviews = node.get("reviews")
+    if isinstance(raw_reviews, Mapping) and isinstance(raw_reviews.get("nodes"), list):
+        reviews = [item for item in raw_reviews["nodes"] if isinstance(item, Mapping)]
+    elif isinstance(raw_reviews, list):
+        reviews = [item for item in raw_reviews if isinstance(item, Mapping)]
+    else:
+        reviews = []
+
+    rollup = node.get("statusCheckRollup")
+    if rollup is None:
+        raw_commits = node.get("commits")
+        commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
+        first_commit = (
+            commit_nodes[0].get("commit")
+            if isinstance(commit_nodes, list) and commit_nodes and isinstance(commit_nodes[0], Mapping)
+            else None
+        )
+        raw_rollup = first_commit.get("statusCheckRollup") if isinstance(first_commit, Mapping) else None
+        raw_contexts = raw_rollup.get("contexts") if isinstance(raw_rollup, Mapping) else None
+        context_nodes = raw_contexts.get("nodes") if isinstance(raw_contexts, Mapping) else None
+        rollup = [item for item in context_nodes if isinstance(item, Mapping)] if isinstance(context_nodes, list) else []
+
+    return {
+        "number": node.get("number"),
+        "title": node.get("title"),
+        "url": node.get("url"),
+        "headRefOid": node.get("headRefOid"),
+        "headRefName": node.get("headRefName"),
+        "baseRefName": node.get("baseRefName"),
+        "isDraft": node.get("isDraft"),
+        "author": node.get("author"),
+        "reviewDecision": node.get("reviewDecision"),
+        "mergeStateStatus": node.get("mergeStateStatus"),
+        "mergeable": node.get("mergeable"),
+        "updatedAt": node.get("updatedAt"),
+        "reviews": reviews,
+        "statusCheckRollup": rollup,
+    }
+
+
 def observe_github_repository_prs(
     repo_slug: str, *, runner: Callable[..., Any] = subprocess.run
 ) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
+    normalized = normalize_github_repo_slug(repo_slug)
+    if not normalized or "/" not in normalized:
+        return {"status": "unavailable", "repository": repo_slug}
+    owner, name = normalized.split("/", 1)
+    by_number: dict[int, dict[str, Any]] = {}
+    cursor: str | None = None
     try:
-        completed = runner(
-            [
-                "gh", "pr", "list", "--repo", repo_slug, "--state", "open",
-                "--limit", "100", "--json", GITHUB_PR_LIST_FIELDS,
-            ],
-            capture_output=True, text=True, check=False, timeout=15,
-        )
-        if completed.returncode != 0:
-            return {"status": "unavailable", "repository": repo_slug}
-        rows = json.loads(completed.stdout or "[]")
-        if not isinstance(rows, list):
-            return {"status": "unavailable", "repository": repo_slug}
-        items = [
-            summarize_github_pr_signal(row)
-            for row in sorted(
-                (r for r in rows if isinstance(r, Mapping)),
-                key=lambda r: int(r.get("number") or 0),
+        for page_index in range(_GITHUB_PR_LIST_MAX_PAGES):
+            cmd = [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={_GITHUB_OPEN_PRS_GRAPHQL_QUERY}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+            ]
+            if cursor is not None:
+                cmd.extend(["-f", f"cursor={cursor}"])
+            completed = runner(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
             )
-        ]
+            if completed.returncode != 0:
+                return {"status": "unavailable", "repository": repo_slug}
+            payload = json.loads(completed.stdout or "{}")
+            if not isinstance(payload, Mapping) or payload.get("errors"):
+                return {"status": "unavailable", "repository": repo_slug}
+            data = payload.get("data")
+            repo = data.get("repository") if isinstance(data, Mapping) else None
+            pull_requests = repo.get("pullRequests") if isinstance(repo, Mapping) else None
+            nodes = pull_requests.get("nodes") if isinstance(pull_requests, Mapping) else None
+            if not isinstance(nodes, list):
+                return {"status": "unavailable", "repository": repo_slug}
+            for node in nodes:
+                if not isinstance(node, Mapping):
+                    continue
+                number = int(node.get("number") or 0)
+                if number > 0:
+                    by_number[number] = summarize_github_pr_signal(_normalize_graphql_pr_node(node))
+            page_info = pull_requests.get("pageInfo")
+            if not isinstance(page_info, Mapping) or page_info.get("hasNextPage") is not True:
+                break
+            next_cursor = str(page_info.get("endCursor") or "").strip()
+            if not next_cursor or next_cursor == cursor:
+                if page_index < _GITHUB_PR_LIST_MAX_PAGES - 1:
+                    return {"status": "unavailable", "repository": repo_slug}
+                break
+            cursor = next_cursor
+        items = [by_number[num] for num in sorted(by_number)]
         return {"status": "ok", "repository": repo_slug, "items": items}
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return {"status": "unavailable", "repository": repo_slug}

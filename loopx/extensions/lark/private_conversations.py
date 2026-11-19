@@ -12,6 +12,7 @@ import json
 import re
 import subprocess
 import time
+import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -123,6 +124,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._historical_image_probe_at: dict[Path, float] = {}
+        self._planned_repairs_stamp: tuple[bool, int | None] | None = None
+        self._planned_repairs_names: frozenset[str] = frozenset()
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
         self._body_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
@@ -1525,6 +1528,27 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             _atomic_write_json(path, record)
             return 1
 
+    def _planned_historical_repairs(self) -> frozenset[str]:
+        repairs_dir = self.root / "historical-answer-images"
+        try:
+            stamp: tuple[bool, int | None] = (True, repairs_dir.stat().st_mtime_ns)
+        except OSError:
+            stamp = (False, None)
+        if stamp == getattr(self, "_planned_repairs_stamp", None):
+            return getattr(self, "_planned_repairs_names", frozenset())
+        if not stamp[0]:
+            names: frozenset[str] = frozenset()
+        else:
+            names = frozenset(item.name for item in repairs_dir.glob("*.json"))
+            try:
+                stamp = (True, repairs_dir.stat().st_mtime_ns)
+            except OSError:
+                stamp = (False, None)
+                names = frozenset()
+        self._planned_repairs_stamp = stamp
+        self._planned_repairs_names = names
+        return names
+
     def pending_body_paths(self) -> list[Path]:
         """Find unsent bodies without waiting for historical recovery probes."""
         paths = [path for path, row, _ in self._body_discovery.rows()
@@ -1537,7 +1561,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         paths = []
         recovery_candidate = self.core.context_recovery_observer()
         now = datetime.now(timezone.utc).timestamp()
-        planned_repairs = {item.name for item in (self.root / "historical-answer-images").glob("*.json")}
+        planned_repairs = self._planned_historical_repairs()
         for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
                 if triage.pending(row) and not _answer_image_retry_waits(row, now):
@@ -1552,8 +1576,14 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 # Only a discovery/backoff hint, never execution authority.
                 # The canonical request, provider effect inventory and source
                 # are independently re-read by recover_failed_request.
-                self._context_recovery_probe_at[path] = time.monotonic() + 60
+                # Stagger steady-state ineligible re-probes across [60, 120)s by filename
+                # hash so cold-start bursts do not stay synchronized on the same tick,
+                # while keeping eligible candidates on the exact 60s retry cadence.
+                now_mono = time.monotonic()
+                stagger = zlib.crc32(path.name.encode("utf-8")) % 60
+                self._context_recovery_probe_at[path] = now_mono + 60 + stagger
                 if repairs or recovery_candidate(row["request_ref"]):
+                    self._context_recovery_probe_at[path] = now_mono + 60
                     paths.append(path)
         return [*paths, *self._web_projection_paths()]
 
