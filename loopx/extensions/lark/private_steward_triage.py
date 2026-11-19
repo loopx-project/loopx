@@ -345,7 +345,7 @@ def reconcile(transport: LarkPrivateConversations, path: Path) -> int:
             # A transient identity/read failure remains recoverable without
             # changing the source or invoking the model.
             return 0
-        source = transport._source_message(record, selected=selected)
+        source = transport._source_message(record, selected=selected, report_private_recall=True)
         if source is None:
             return 0
         if source.get("deleted") is True or private_source_text(source) != stamp["source_text"]:
@@ -379,7 +379,7 @@ def reconcile(transport: LarkPrivateConversations, path: Path) -> int:
         if stamp["scope"] != current["context"]["goal_ids"]:
             return retire("scope_changed_after_projection")
         if "message_id" not in stamp:
-            fresh_source = transport._source_message(record, selected=current)
+            fresh_source = transport._source_message(record, selected=current, report_private_recall=True)
             if fresh_source is None:
                 return 0
             if fresh_source.get("deleted") is True or private_source_text(fresh_source) != stamp["source_text"]:
