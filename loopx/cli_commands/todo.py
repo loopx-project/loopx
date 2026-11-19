@@ -7,6 +7,7 @@ from functools import partial
 from operator import itemgetter
 from pathlib import Path
 
+from ..cli_runtime import report_json_text
 from ..command_invocation import cli_option_args, loopx_cli_argv
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.capability_hooks import PostWritebackHookRegistration
@@ -151,6 +152,34 @@ def _thin_claim_projection(payload: dict[str, object], route: Sequence[str]) -> 
     }
 
 
+def _thin_claim_overlap_advisories(payload: dict[str, object], route: Sequence[str]) -> None:
+    """Link long peer scope lists to the immutable claim receipt."""
+    advisories = payload.get("integration_overlap_advisories")
+    goal_id = payload.get("goal_id")
+    operation_id = payload.get("claim_operation_id")
+    if (
+        not isinstance(goal_id, str) or not goal_id
+        or not isinstance(operation_id, str) or not operation_id
+        or not isinstance(advisories, list) or not advisories
+        or any(not isinstance(row, dict) or not isinstance(row.get("write_scopes"), list)
+               for row in advisories)
+    ):
+        return
+    compact = {
+        "integration_overlap_advisories": [
+            {**{key: value for key, value in row.items() if key != "write_scopes"},
+             "write_scope_count": len(row["write_scopes"])}
+            for row in advisories
+        ],
+        "integration_overlap_detail_command": shlex.join([
+            *route, "todo", "receipt", "--goal-id", goal_id, "--operation-id", operation_id,
+        ]),
+    }
+    original = {"integration_overlap_advisories": advisories}
+    if len(report_json_text(compact).encode("utf-8")) < len(report_json_text(original).encode("utf-8")):
+        payload.update(compact)
+
+
 def handle_todo_command(
     args: argparse.Namespace,
     *,
@@ -174,6 +203,7 @@ def handle_todo_command(
             format_name=format_name,
             list_reader=list_goal_todos,
         )
+    output_format = format_name or str(getattr(args, "format", None) or "markdown")
     renderer = render_todo_markdown
     if args.todo_command == "plan":
         renderer = render_task_planning_packet
@@ -506,6 +536,8 @@ def handle_todo_command(
                     payload.pop(internal, None)
                 if args.todo_thin:
                     _thin_claim_projection(payload, route)
+                    if output_format == "json":
+                        _thin_claim_overlap_advisories(payload, route)
         elif args.todo_command == "update":
             validate_todo_update_options(args)
             update_operation = partial(
@@ -872,7 +904,6 @@ def handle_todo_command(
             post_writeback_projection_builder=post_writeback_projection_builder,
             admission_factory=FirstPartyHostGoalAdmission,
         )
-    output_format = format_name or str(getattr(args, "format", None) or "markdown")
     print_payload(
         payload,
         output_format,

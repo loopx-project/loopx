@@ -1,5 +1,6 @@
 """Real sibling Git worktrees and the public lease CLI on both canonical providers."""
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -121,7 +122,8 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
 
 @pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="worktree fixture requires symlinks")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, capsys, provider):
+@pytest.mark.parametrize("large_peer_scope", [False, True], ids=["small-scope", "large-scope"])
+def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, capsys, provider, large_peer_scope):
     """Normal claims admit sibling edits without weakening physical collisions."""
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project = tmp_path / "repo"
@@ -145,11 +147,14 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
         "id": goal, "repo": str(project), "state_file": str(state),
         "coordination": {"registered_agents": ["agent-a", "agent-b"]},
     }]}))
+    peer_scopes = ["src/**"]
+    if large_peer_scope:
+        peer_scopes.extend(f"tests/fixtures/peer-scope/module_{i:03}.py" for i in range(92))
     projection = build_todo_runtime_shadow_projection(goal_id=goal, handoff_mode="hard_lease", leases=[], todos=[{
         "schema_version": "todo_item_v0", "todo_id": f"todo_ordinary_{key}", "role": "agent", "status": "open", "done": False,
         "text": "Edit isolated source", "archive_state": "active", "source_section": "Agent Todo", "index": i,
         "task_class": "advancement_task", "task_domain": "code", "task_repository": "git:github.com/example/project",
-        "required_write_scopes": ["src/**"],
+        "required_write_scopes": peer_scopes if key == "a" else ["src/**"],
     } for i, key in enumerate(("a", "b"), 1)])
     initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
 
@@ -160,9 +165,9 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
         assert rc == expected, output
         return json.loads(output)
 
-    def claim(key, operation, expected=0):
+    def claim(key, operation, *options, expected=0):
         return cli(["todo", "claim"], key, "--agent-id", f"agent-{key}", "--claimed-by", f"agent-{key}",
-                   "--claim-operation-id", operation, expected=expected)
+                   "--claim-operation-id", operation, *options, expected=expected)
 
     monkeypatch.chdir(a)
     assert claim("a", "claim-a")["execution_managed"]
@@ -179,12 +184,31 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
     git("remote", "set-url", "origin", "https://github.com/example/project.git")
     (b / "nested").mkdir()
     monkeypatch.chdir(b / "nested")
-    accepted = claim("b", "claim-b")
-    assert accepted["execution_managed"]
-    assert accepted["integration_overlap_advisories"] == [{
-        "todo_id": "todo_ordinary_a", "owner": "agent-a", "write_scopes": ["src/**"],
+    overlap = {
+        "todo_id": "todo_ordinary_a", "owner": "agent-a", "write_scopes": peer_scopes,
         "reason": "independent_worktree_integration_overlap",
-    }]
+    }
+    if large_peer_scope:
+        preview = claim("b", "preview-b", "--thin", "--dry-run")
+        assert preview["integration_overlap_advisories"] == [overlap]
+        assert "integration_overlap_detail_command" not in preview
+    accepted = claim("b", "claim-b", "--thin")
+    assert accepted["execution_managed"]
+    if large_peer_scope:
+        assert accepted["integration_overlap_advisories"] == [{
+            "todo_id": "todo_ordinary_a", "owner": "agent-a", "write_scope_count": len(peer_scopes),
+            "reason": "independent_worktree_integration_overlap",
+        }]
+        command = shlex.split(accepted["integration_overlap_detail_command"])
+        assert command[-6:] == ["todo", "receipt", "--goal-id", goal, "--operation-id", "claim-b"]
+        observed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
+        detail = json.loads(observed.stdout)
+        assert detail["ok"] and detail["status"] == "found"
+        assert detail["provider_revision"] == accepted["provider_revision"]
+        assert detail["receipts"][0]["result"]["integration_overlap_advisories"] == [overlap]
+    else:
+        assert accepted["integration_overlap_advisories"] == [overlap]
+        assert "integration_overlap_detail_command" not in accepted
     second = cli(["task-lease", "inspect"], "b")["lease"]
     assert "write_workspace" in first
     assert first["write_workspace"] != second["write_workspace"]
@@ -192,9 +216,16 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
     assert cli(["todo", "list"], "b")["todo"]["claimed_by"] == "agent-b"
     replay = claim("b", "claim-b")
     assert replay["status"] == "replayed"
+    assert replay["integration_overlap_advisories"] == [overlap]
     assert cli(["task-lease", "inspect"], "b")["lease"] == second
-    cli(["task-lease", "release"], "b", "--owner", "agent-b", "--idempotency-key", second["idempotency_key"],
-        "--expected-version", str(second["version"]))
+    released = cli(["task-lease", "release"], "b", "--owner", "agent-b",
+        "--idempotency-key", second["idempotency_key"], "--expected-version", str(second["version"]))
+    assert released["released"]
+    if large_peer_scope:
+        observed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
+        late = json.loads(observed.stdout)
+        assert released["provider_revision"] != detail["provider_revision"]
+        assert late == detail
     assert claim("b", "claim-b", expected=1)["ok"] is False
     assert not cli(["task-lease", "inspect"], "b")["active"]
 

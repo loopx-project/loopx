@@ -553,6 +553,14 @@ The native hook executes only a preparation bound to a captured Turn. An
 ordinary claim recommendation remains available to its caller; reading one
 or reading an original receipt does not trigger an automatic claim.
 
+A successful managed `todo claim --thin` JSON reply can show peer worktree
+overlap advice with `write_scope_count` in place of long path lists. It keeps
+the other Todo, owner and overlap reason. Run `integration_overlap_detail_command`
+to read the complete advice under `receipts[].result.integration_overlap_advisories`
+for that claim operation. This read reports what the claim observed and remains
+available after a lease changes. Use `task-lease inspect` for a current grant.
+An ordinary claim reply retains the full path lists.
+
 For a selected Todo, preparation reads the canonical Todo and leases at one
 checked provider revision. The internal read returns only that Todo's status,
 assignment and lease facts. Unrelated Todo bodies stay with the provider
