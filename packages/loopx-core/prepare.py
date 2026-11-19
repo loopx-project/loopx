@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-# These are distribution exclusions, not an authority or activation policy.
+# These are distribution exclusions.
 EXCLUDED_TREES = ("loopx/chat/", "loopx/web/", "loopx/canary/")
 EXCLUDED_MODULES = {"loopx/cli.py", "loopx/chat.py"}
 SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}

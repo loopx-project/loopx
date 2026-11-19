@@ -184,8 +184,8 @@ class CodexAgentSession:
                             expected_binding: dict[str, Any] | None = None) -> None:
         """Bind a controller-verified native fork through the existing session owner.
 
-        This admits the conversation binding only. It does not claim work,
-        restore research authority or start a model. Unknown result delivery
+        This admits the conversation binding only.
+        Unknown result delivery
         requires readback. An isolated full-state replacement may compare and
         replace only its independently verified captured binding.
         """

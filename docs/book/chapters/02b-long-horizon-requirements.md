@@ -15,9 +15,9 @@
 
 ## 要求一：状态能脱离当前上下文
 
-接手者需要知道精确 PR、commit、已经验证的行为和未解决的决定，而不是只读“我刚才修好了”。聊天可以被保存并解释历史，但它的持久性不自动产生结构、新鲜度或当前授权。
+接手者需要知道精确 PR、commit、已经验证的行为和未解决的决定。聊天可以被保存并解释历史，但它的持久性不自动产生结构、新鲜度或当前授权。
 
-有影响的事实需要可寻址的来源、适用版本与读取入口。代价是维护这些记录；收益是换会话后可以重新判断，而不是凭记忆补齐缺失条件。读[状态章节](state-substrate.md)时，重点检查 source 与 display 在当前模式下分别是什么。
+有影响的事实需要可寻址的来源、适用版本与读取入口。代价是维护这些记录；收益是换会话后可以重新判断。读[状态章节](state-substrate.md)时，重点检查 source 与 display 在当前模式下分别是什么。
 
 ## 要求二：保留已知事实，也保留不确定性
 
@@ -31,13 +31,13 @@
 
 两名 Agent 可以处理不同工作，也可能同时认为同一项工作归自己。Claim 表达责任，适用的 lease/fence 约束当前实例；二者都不能替代 Goal 边界、Gate scope、能力和工作区要求。
 
-Default legacy、soft claim 和 hard lease 有不同实施边界，不应从一个模式推广出全局独占保证。多 peer 也不意味着全 Goal 只有一个执行者。接管和并行必须落到具体 writer 和当前输入上，见[权限分层](work-graph-and-authority.md#authority-layers)。
+Default legacy、soft claim 和 hard lease 有不同实施边界，不应从一个模式推广出全局独占保证。接管和并行必须落到具体 writer 和当前输入上，见[权限分层](work-graph-and-authority.md#authority-layers)。
 
 ## 要求四：预算与观察约束无效重复
 
 预算限制数量，但余额不能独自决定下一轮是否有意义。等待 CI 需要实际读取正确 revision；等待批准需要对应决定；没有可用 Host 的 next due 只是一个时间记录。
 
-Monitor 保存目标与观察关系；scheduler/backoff 安排后续时机；Host 或已接入事件通道实际执行。退避减少重复读取但可能增加发现延迟；replan 重新判断路线，不是更强的退避。内部 no-spend 不表示模型、工具或网络免费，详见[观察责任](04b-budget-and-admission.md#observation-owners)。
+Monitor 保存目标与观察关系；scheduler/backoff 安排后续时机；Host 或已接入事件通道实际执行。退避减少重复读取但可能增加发现延迟；replan 重新判断路线。内部 no-spend 不表示模型、工具或网络免费，详见[观察责任](04b-budget-and-admission.md#observation-owners)。
 
 ## 四条要求怎样协同
 
@@ -49,13 +49,13 @@ Monitor 保存目标与观察关系；scheduler/backoff 安排后续时机；Hos
   → 重新观察变化，再决定继续、改路或停止
 ```
 
-这是教学责任链，不是新的全局 API 顺序。单项机制不能保证目标成功；读者需要理解它们怎样为彼此提供依据，以及哪一种失败应回到哪一个 owner。
+这是教学责任链。单项机制不能保证目标成功；读者需要理解它们怎样为彼此提供依据，以及哪一种失败应回到哪一个 owner。
 
 ## 阅读路线与证据
 
 **首次阅读**先进入[完整一轮](03-one-turn.md#running-turn)，看 T1 怎样形成可接受结果；再回到[状态](state-substrate.md)和[权限](work-graph-and-authority.md#design-choice)，理解支撑这轮工作的事实与写入者；随后读[恢复](04-runtime-boundaries.md)和[观察](04b-budget-and-admission.md)。这与导读中的主线相同，不要求先背状态机枚举。
 
-**替代路线**适合已有控制面经验的读者：先状态与权限，再读 Turn。状态机专题与附录供回查，不是接入前必须全部完成的课程。
+**替代路线**适合已有控制面经验的读者：先状态与权限，再读 Turn。状态机专题与附录供回查。
 
 | 核对边界 | 协议入口 | 不由它单独证明 |
 | --- | --- | --- |

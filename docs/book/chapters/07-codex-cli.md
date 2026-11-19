@@ -4,7 +4,7 @@
 
 ## 为什么 active Goal 与后台唤醒不同
 
-假设修复还未完成，你结束了当前 Codex 进程。再次打开终端时，工作没有继续。这说明执行环境已经离开，不代表 native Goal 在进程存活时每轮都需要用户发消息。
+假设修复还未完成，你结束了当前 Codex 进程。再次打开终端时，工作没有继续。这说明执行环境已经离开。
 
 | Host 状态 | 当前路径的行为 | 用户需要判断什么 |
 | --- | --- | --- |
@@ -91,8 +91,7 @@ loopx quota should-run \
   --runtime-profile codex_cli
 ```
 
-你应该看到 Host runtime 指向 `codex_cli`，scheduler owner 属于 Goal/agent loop，而不是 Codex App
-heartbeat。这个区别决定了"该唤醒时谁负责唤醒"：如果 packet 报告 scheduler context 缺失，先修复
+你应该看到 Host runtime 指向 `codex_cli`，scheduler owner 属于 Goal/agent loop。这个区别决定了"该唤醒时谁负责唤醒"：如果 packet 报告 scheduler context 缺失，先修复
 runtime profile，不要忽略 warning。scheduler context 缺失或矛盾时，`scheduler_hint` 返回
 `repair_scheduler_execution_context`，并把 unchanged poll 设为 `stop_until_context_repaired`：在修复
 runtime profile 之前，它不会提出新的 cadence，也不会替你安排下一次唤醒。
@@ -110,7 +109,7 @@ lane 时，沿用该绑定。只有 Goal 没有任何已注册 lane 或显式 `-
 lane，工作归属就被静默改写了。显式传入后，未注册的 id 会被拒绝；与 thread 绑定不同的已注册 id
 会被当作明确的覆盖选择，所以只在确实要换 lane 时这样做。
 
-Agent identity 表达 LoopX 工作 lane，不证明具体 Host。判断工作是否真的在 Codex CLI 运行，要看
+判断工作是否真的在 Codex CLI 运行，要看
 `host_surface`、runtime profile 或对应 run metadata。
 
 交接时的正确顺序是：
@@ -155,13 +154,12 @@ Agent identity 表达 LoopX 工作 lane，不证明具体 Host。判断工作是
 ### 误用了隐藏 worker
 
 停止该 worker，检查它是否写回了新 evidence 或 lease。先恢复 Todo ownership，再回到 visible
-TUI；不要让两个执行者并发修改同一工作树。检查这件事时要看 claim 与 lease 的实际归属，而不是看你
-记忆中谁在跑。
+TUI；不要让两个执行者并发修改同一工作树。检查这件事时要看 claim 与 lease 的实际归属。
 
 ### Goal 无变化轮询
 
 达到 unchanged limit 后，Goal 应阻塞或安静等待。外部状态观察应转成 monitor Todo；用户通过
-Host 的 Goal resume 表面恢复，而不是反复重发完整任务。反复重发会让同一轮工作看起来像多轮进展。
+Host 的 Goal resume 表面恢复。反复重发会让同一轮工作看起来像多轮进展。
 
 ### App 与 CLI 同时激活
 
@@ -172,7 +170,7 @@ Host 的 Goal resume 表面恢复，而不是反复重发完整任务。反复�
 1. **区分 active、blocked 与进程退出。** 活跃 native Goal 可以继续；blocked 后按 Host resume 合同处理，退出后不能假定存在定时唤醒。
 2. **setup Turn 只建立连接。** 连接和交付混在一轮里，后续每一步都建立在一个未审的计划上。
 3. **`/goal` body 保持稳定。** 动态 Todo、Gate 和能力来自当次 decision packet，不来自 prompt。
-4. **visible Goal 与 selected Todo 是两件事。** Goal 能继续，不代表这个 Todo 就该做。
+4. **visible Goal 与 selected Todo 是两件事。**
 5. **identity 一律显式传入。** 唯一已注册 lane 可能被自动选中；显式 `--agent-id` 让未注册的身份被拒绝，也让换 lane 成为看得见的选择。
 6. **两个 Host 并存需要明确执行归属。** 复核当前 mode 下的 claim、lease 与围栏，不能凭同一 Goal 可读就并发写同一项工作。
 

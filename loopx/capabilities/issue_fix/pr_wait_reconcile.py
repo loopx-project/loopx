@@ -1,7 +1,6 @@
 """Transport the typed dependency poll plan into existing public lifecycle facts.
 
-This internal issue-fix adapter changes neither Todo requirements nor claims,
-leases, status, settlement or review authority. It does not consult an open PR
+It does not consult an open PR
 queue: dependencies are selected from the complete current canonical Todo head.
 """
 from __future__ import annotations

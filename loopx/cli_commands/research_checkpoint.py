@@ -14,7 +14,7 @@ def register_research_checkpoint(subparsers, add_subcommand_format) -> None:
         help="Capture or explicitly adopt private research history through current owners.")
     add_subcommand_format(parser)
     # Local CLI operations compose existing artifact/session/continuation APIs;
-    # they are not a new persisted lifecycle or authority vocabulary.
+
     parser.add_argument("operation", choices=("capture", "verify", "admit-session", "adopt-context", "rotate"))
     parser.add_argument("--goal-id")
     parser.add_argument("--agent-id")

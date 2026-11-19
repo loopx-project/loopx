@@ -15,5 +15,4 @@ They do not grant domain providers core control-plane authority.
 - [Steward: less coordination, accepted results](steward/golden-queries.md)
 - [Community assistant: useful answers and checked contributions](community/golden-queries.md)
 
-These evaluation specifications define intended outcomes and release evidence;
-listing a query does not claim that the corresponding live journey has passed.
+These evaluation specifications define intended outcomes and release evidence.

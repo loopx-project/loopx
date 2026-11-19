@@ -24,7 +24,7 @@ The fixed algorithm is BM25 with k1=1.2, b=.75 and positive Lucene IDF.
 Casefolded Unicode word tokenization splits underscores. Repeated query terms
 do not boost scores. No synonyms, embeddings, segmentation service, discovery,
 storage, configuration, network or Goal authority are introduced. Ranking is
-corpus-relative; a score does not certify a fact, risk, investment edge or trade.
+corpus-relative.
 Historical consumers must supply only their visible corpus: future documents
 would otherwise change document frequencies even if hidden from the results.
 
@@ -169,7 +169,7 @@ controlled by this small driver, so timing samples are descriptive. It generates
 no answer and measures no causal task utility. The suite/report formats are
 local experiments, not new Core contracts.
 
-Manual recall does not enable automatic memory. Current explicit instructions
+Current explicit instructions
 belong to Semantic Preference; qualified procedural advice uses existing
 `agent-turn-recall` after admission, and verified-outcome writeback remains
 separate. Material recall still requires source rebase. No frontend comparison
@@ -185,5 +185,5 @@ No new automatic capability hook or UI/Lark configuration is enabled.
 
 自修复 skill 保留解析器、准确 pattern/code 优先级和完整正文展开。现有 workflow
 installer 和 wheel 将规范评分器打包到脚本旁，隔离运行仍无需 PATH 中的 LoopX。
-打包副本是构建/安装产物，不是第二份实现。金融消费者保留规范资产、字面匹配规则、
+打包副本是构建/安装产物。金融消费者保留规范资产、字面匹配规则、
 信源/时点/lifecycle 边界和决策权威。不启用新的自动 capability hook 或 UI/Lark 配置。

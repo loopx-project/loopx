@@ -27,7 +27,7 @@ loopx reward-memory ingest-event --input full-public-fixture.json --format json
 ## 实验能力的开启方式
 
 Reward Memory 是 provider-neutral、默认关闭的实验能力。它按某个 Goal 内已登记的具体
-Agent 显式开启，而不是对整个 Goal 或整套 LoopX 开启：
+Agent 显式开启：
 
 ```bash
 # 先 preview；确认边界变化后再追加 --execute。
@@ -57,7 +57,7 @@ Goal 内唯一，因此持久运行时身份是 `(goal_id, agent_id)`；LoopX �
 `viking://user/{user_id}/peers/{canonical_peer}/memories/...`；请求中的
 `actor_peer_id` 必须在任何 provider 调用前与 URI 中的 peer 完全相等。LoopX 禁止向
 `viking://agent/...` 写 Reward Memory，因为 OpenViking v0.4.19 把持久 memory 放在当前
-User 或 actor-bound Peer namespace 下；Agent scope 不是逐 peer 的持久 memory 根。Agent
+User 或 actor-bound Peer namespace 下；Agent
 私有 corpus 也不能使用缺少 actor-bound peer 的 user-private 路径。私有 peer
 读写要求当前代 CLI（`>=0.4.18`）和 server（`>=0.4.19`）。参见 OpenViking 的
 [多租户模型](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/11-multi-tenant.md)
@@ -122,8 +122,7 @@ authority、privacy、freshness 和 lifecycle；每个 corpus 的 scope digest�
 上例省略的 corpus 和 standing policy 字段仍使用既有完整记录 contract。这里的 `true` 展示
 新启用默认值；显式 `false` 仍是逐 hook 支持的关闭方式。
 `configure-goal` 的 preview 现在会调用 provider preflight，并返回 `preflight_ready`、
-`preflight_incomplete` 或 `unavailable`，不会再把 provider 写入标成 `planned`。Preview
-本身不证明可写；apply 必须完成新的 canary 写入和精确读回后，才能提交 Registry binding。
+`preflight_incomplete` 或 `unavailable`，不会再把 provider 写入标成 `planned`。apply 必须完成新的 canary 写入和精确读回后，才能提交 Registry binding。
 `experiment-status` 会报告 v1 config schema、corpus/surface 数量、recall profile id 和生效的
 automatic policy，但不会泄露 scope ref。Agent-scoped `quota should-run` 与
 `status --agent-id` 使用同一个 invoked registry 和 config reader 解析该 policy，不会把
@@ -161,12 +160,11 @@ Goal/Agent actor，不会替换共享绑定或其它 Agent 的路由。Goal 设�
 实际选中的重试。
 
 [设置示例：独立路由、缺少路径与窄屏读回](https://github.com/loopx-project/loopx/tree/main/loopx/capabilities/reward_memory/assets)
-使用公开安全的合成界面夹具；截图中的 Provider 观测是模拟值，不代表已安装记忆服务的资格。
+使用公开安全的合成界面夹具；截图中的 Provider 观测是模拟值。
 
 既有可重复参数 `--reward-memory-agent` 仍编辑共享 allowlist，不能与独立绑定参数混用；
 共享编辑保留独立绑定。不指定 Agent 的 `--clear-reward-memory-config` 会显式清除**全部**绑定。
-没有独立绑定的项目保留原来的默认关闭与共享配置行为。这不授予跨 Agent、执行或发布权限，
-也不证明记忆收益或额外宿主覆盖。
+没有独立绑定的项目保留原来的默认关闭与共享配置行为。
 
 启用前须确认所有调用该 Goal 的 LoopX runtime 都支持独立绑定；旧 runtime 会忽略新 map，
 仍解释共享 allowlist，无法执行单个 Agent 的关闭声明。不要混用新旧 reader。回退至旧版本
@@ -179,7 +177,7 @@ hook 只复用确定性的 candidate identity、activation、provider sync、精
 receipt。它不采集聊天、不解析 tool log、不保存 raw content，也不推导新 authority；重复
 事件保持幂等。新启用的 v1 config 若省略任一 automation 字段，该字段默认取 `true`；显式
 `false` 始终保持关闭，并以 `explicit` intent provenance 投影。已有的 false 不会被静默重释。
-显式 `ingest-event` 命令继续是调用方主动路径，不是旧配置兼容 fallback。
+显式 `ingest-event` 命令继续是调用方主动路径。
 
 生产 Codex CLI Turn 在 quota/Todo admission 后执行 recall；只有独立验证、持久 writeback 与
 quota settlement 均完成后，才接受 outcome ingest。Reflection 必须使用
@@ -230,7 +228,7 @@ no-write 评测夹具。仅加载配置不会采集反馈或代替 provider 认�
 recall 调用点：`reviewer_artifact.summary` 应用简短 reviewer-facing 摘要；
 `reviewer_notification.before_send` 在现有二级 sink 即将执行前，只允许应用一条经过验证的
 结构化 hard-policy 发送时窗。后者复用 sink 的 queue、去重和读回路径；召回策略与显式 sink
-策略都不存在时默认不限制时间，也不是通用路由器。其他 surface 在分别接线和验证前仍走
+策略都不存在时默认不限制时间。其他 surface 在分别接线和验证前仍走
 显式调用。实验关闭、provider 不可用、guard 拒绝或精确读回失败时，Issue Fix 都继续正常
 工作。非 v1 或无效配置会以 unavailable fail-open，并把两个 automatic flag 置为 false。
 
@@ -275,7 +273,7 @@ authority checkpoint 的当前状态迁移。一次 approve、reject 或 consume
 
 ## 带护栏的优先级与模型推理
 
-下面的顺序定义安全与注意力边界，不是一张穷举式决策表：
+下面的顺序定义安全与注意力边界：
 
 1. 显式 action authority 与 privacy boundary；
 2. 当前有效、作用域匹配的 hard policy；
@@ -291,11 +289,10 @@ revoked/expired、privacy 违规、同级 authority 冲突未解决，或者缺�
 summary、memory reference、artifact verification 和 authority/scope check。
 
 当证据质量接近时，优先使用 provenance 更明确的记录；这条偏好不能演化成压制有效
-推理的 hard-coded router。Raw chat、transcript、tool log、credential 和本地路径都不是
-Reward Memory record。
+推理的 hard-coded router。
 
 `loopx reward-memory route-check` 是确定性回归夹具，用于覆盖 PR #3237 一类明显的
-安全或升级条件。它不是线上 Issue Fix 决策引擎，也不替代模型推理。
+安全或升级条件。
 
 ## 架构分层与能力复用
 
@@ -358,18 +355,18 @@ Review contract 暴露五个一等决策：
 - `retire`：关闭一个已经 active 的 reviewed record；
 - `no_write`：明确记录本次不应写 provider。
 
-这些只是 decision record，不是 persistence 操作。`accept` 与 `retire` 只返回下一步提示：
+这些只是 decision record。`accept` 与 `retire` 只返回下一步提示：
 调用方必须使用 corpus 声明的 write authority，再完成 readback 验证。薄缝自身不写 LoopX
 state、OpenViking corpus、index、receipt 或外部系统，也不摄取 raw chat 或 tool transcript。
 
 `issue_fix_reward_memory_candidate_adapter_v0` 刻意保持为字段映射 adapter：把紧凑 issue
 reference、repository revision、模块自有 surface、contributor evidence 和模型 reasoning
 映射到 `reward_memory_candidate_v0`。所有 guard 与 lifecycle decision 仍由共享 core 所有。
-这是第一条复用证据，不是 Issue Fix 专用 memory 实现。
+这是第一条复用证据。
 
 ## 最简写入闭环
 
-`loopx reward-memory ingest-event` 是一条薄的原子编排，而不是新的 memory 产品层。配置好的
+`loopx reward-memory ingest-event` 是一条薄的原子编排。配置好的
 实验显式选择 adapter。`issue_fix_maintainer_feedback` 继续作为 Issue Fix 兼容适配器；
 `scoped_feedback` 则接受通用的 `scoped_feedback_reward_memory_event_v0`，可用于任意模块限定
 surface。两者都只把严格、紧凑的字段映射到同一个 `reward_memory_candidate_v0`，不拥有第二套
@@ -398,7 +395,7 @@ resource ref、candidate ref、canonical content digest 三重校验。对于
 “按精确 id 能读回来”误当成“做决策时能找到这条经验”。只有精确读回、经验质量门禁和必要的
 业务召回全部通过，`reward_memory_ingest_receipt_v0` 才返回 `activated` 和
 `memory_available_for_recall=true`。业务召回未命中时保持 `recall_unverified`，交给有界 reconciliation，
-不会提前激活。`exact_readback_verified=true` 只证明存储完整，不证明经验质量、可发现性或真实效用。
+不会提前激活。`exact_readback_verified=true` 只证明存储完整。
 Provider 不可用、commit pending、读回不一致或业务召回未命中都 fail open，不阻塞调用方的正常工作。
 `observed_at` 是事件第一次被观察到的不可变时间，retry 必须复用它；
 provider target 同时绑定 standing-policy 与 candidate digest，避免策略换版误复用旧激活。
@@ -415,7 +412,7 @@ apply、ignore 或 refute，并复用共享 application receipt；ingest seam �
 五类记忆保持 provider-neutral；Stage 0 的边界已经结合 OpenViking 当前公开架构和代码
 进行校验：
 
-- OpenViking 是 context database，不是 action-authority system。AGFS content 是
+- OpenViking 是 context database。AGFS content 是
   source of truth，vector index 保存 retrieval reference。
 - OpenViking `preferences` 可以提供经过 review 的 `soft_preference` 候选，但不会转成
   permission。
@@ -433,7 +430,7 @@ apply、ignore 或 refute，并复用共享 application receipt；ingest seam �
   repository/action authority scope 被独立验证后，内容才能成为 LoopX `hard_policy`。
   内容可以推导，authority 不能推导。
 - Account、user、peer、session 和 repository-revision boundary 始终属于 scope 与
-  privacy。Peer label 不授予 cross-user 或 cross-agent authority。
+  privacy。
 
 Provider health 拆成 `corpus_present`、`index_present`、
 `retrieval_query_succeeded`、`result_readback_verified` 和
@@ -476,7 +473,7 @@ Studio，并在 listing/storage path 增加 metadata read；同时缺少 product
 performance evidence。因为它没有声明 retrieval 或 memory-quality 收益，所以不需要
 benchmark evidence。
 
-稳定预期是 `meta_design_gate`，不是 `pilot_fix`。Meta 可以把产品行为收窄到
+稳定预期是 `meta_design_gate`。Meta 可以把产品行为收窄到
 session-specific presentation boundary，也可以关闭这项变更；已有 memory result 不能
 授权 generic-layer patch。
 
@@ -520,8 +517,7 @@ provider state、memory lifecycle、authority、quota、scheduler 或主工作�
 Stage 3 只接受显式的 `reward_memory_recall_request_v0`：调用方必须准确指定一个已登记
 corpus 和一个 module-owned surface，同时提供匹配的 read-authority checkpoint、当前
 freshness 与 conflict observation。project、surface、authority、revision、lifecycle 或
-provider binding 任一不匹配，都会在调用 provider 前停止。这里是确定性安全校验，不是
-确定性语义路由器。
+provider binding 任一不匹配，都会在调用 provider 前停止。这里是确定性安全校验。
 
 查询与解释仍由调用模块/模型负责。`function_boundary` 只允许在命名函数边界执行一次
 查询；`bounded_agentic_search` 最多允许三次由调用方/模型给出的查询。LoopX 不会按
@@ -588,11 +584,10 @@ evaluator policy。
 
 `reward_memory_evaluation_v0` 同时汇报 task outcome、真实本地 runner latency、公共证据
 字节数、model token 数、provider/storage write、false application、maintainer interruption
-与 user gate。model token 为零表示这套确定性 contract suite 没有调用模型，不代表后续
-dogfood 的 token 成本估算。只有全部 case 通过，且 write、false application、
+与 user gate。model token 为零表示这套确定性 contract suite 没有调用模型。只有全部 case 通过，且 write、false application、
 interruption 和 user gate 计数均为零，release gate 才能通过。
 
-通过后的状态是 `ready_for_bounded_dogfood`，不是 production release。它只证明 core
+通过后的状态是 `ready_for_bounded_dogfood`。它只证明 core
 contract invariant，不声明 semantic uplift，也不授权 production rollout。Stage 5 必须
 使用经 corpus owner 批准的 record、精确 provider readback 和真实模块结果，才能讨论收益。
 
@@ -608,7 +603,7 @@ loopx reward-memory dogfood-evaluate \
 ```
 
 `reward_memory_dogfood_receipt_v1` 用 `application_disposition` 记录 `applied`、
-`not_applied` 或 `refuted`。它表示 application coverage，不是因果 utility 判断。
+`not_applied` 或 `refuted`。它表示 application coverage。
 `applied` 或 `refuted` 必须同时满足精确 provider result readback 与 current-artifact
 verification。Receipt 保留精确 Stage 3 application receipt 的 opaque digest
 `application_receipt_id`，以及 opaque/hashed memory ref、紧凑的已验证 outcome ref 与摘要、

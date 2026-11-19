@@ -21,7 +21,7 @@ def installed_loopx_distribution(lookup: Callable[[str], Distribution]) -> Distr
 
     Callers still verify that its RECORD owns their actual imported file.
     Missing metadata, redirected records and content checks keep their original
-    failure behavior; the core name is not an ownership assertion.
+    failure behavior.
     """
     try:
         return lookup("loopx")

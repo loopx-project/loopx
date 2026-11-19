@@ -379,7 +379,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
                       remaining_work: dict[str, str] | None = None) -> dict:
         """Return a conclusion to the original requester. For a later changed fact,
         append an update with a stable update_id; retry with the same id and text.
-        Neither a blocker nor a returned result certifies completion of the work.
+
         For a partial result, remaining_work contains summary and resume_when;
         the receiving Agent still owns this remainder. It creates no Todo or wakeup.
         """
@@ -729,7 +729,7 @@ class Delegations:
         return self.read(operation_id)
 
     def wait(self, operation_id: str) -> dict:
-        """Observe for at most 15 seconds; waiting neither starts nor resumes work."""
+        """Observe for at most 15 seconds;"""
         for _ in range(5):
             result = self.read(operation_id)
             if (result["status"] in DELEGATION_TERMINAL_STATUSES or result["recovery_required"]

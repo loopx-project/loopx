@@ -9,9 +9,25 @@ from typing import Any
 
 BOOTSTRAP_INSTRUCTION = (
     "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
+    "通知与执行分开，等待按当前调度契约，不反复空查。"
+    "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
+)
+
+# Frozen published bytes for saved-wrapper recognition. Renderers use only the
+# current instruction; upgrades retain the saved command's explicit inputs.
+_PREVIOUS_BOOTSTRAP_INSTRUCTION = (
+    "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
     "一次操作不代表结束；通知与执行分开，等待按当前调度契约，不反复空查。"
     "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
 )
+
+
+def _matches_published_bootstrap(prompt: str, expected: str) -> bool:
+    return prompt == expected or (
+        expected.endswith(BOOTSTRAP_INSTRUCTION)
+        and prompt == expected.removesuffix(BOOTSTRAP_INSTRUCTION) + _PREVIOUS_BOOTSTRAP_INSTRUCTION
+    )
+
 
 # Keep the managed heartbeat wrapper in one module.  The host bootstrap and
 # automation-prompt lifecycle both consume this renderer so a new wake-up
@@ -180,6 +196,6 @@ def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
             return None
         expected = _render_goal_bootstrap(args, registry=registry, legacy=legacy,
                                           saved_view_alias=aliases[0] if aliases else None)
-        return {**values, "registry": registry} if prompt == expected else None
+        return {**values, "registry": registry} if _matches_published_bootstrap(prompt, expected) else None
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return None

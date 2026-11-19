@@ -1,4 +1,4 @@
-"""Book-authored, zero-permission teaching provider; not a LoopX built-in."""
+"""Book-authored, zero-permission teaching provider."""
 from __future__ import annotations
 
 import argparse

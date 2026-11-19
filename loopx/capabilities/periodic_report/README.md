@@ -385,8 +385,7 @@ leak into the capability core.
 ## Optional OpenViking archive extension
 
 `openviking-periodic-report` is a bundled **LoopX extension** that implements
-the capability's `periodic_report_sink_v0` archive port. It is not an
-OpenViking extension and it adds no OpenViking runtime ABI. The dependency
+the capability's `periodic_report_sink_v0` archive port. The dependency
 direction is:
 
 ```text

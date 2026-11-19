@@ -83,7 +83,7 @@ _SOURCE_DIGEST_SETTLE_NS = 2_000_000_000
 def source_number_tokens(value: object) -> list[list[Any]]:
     """Carry numeric IO spellings that a JavaScript number cannot distinguish.
 
-    This is transport metadata, not a hash codec or a projection policy.
+    This is transport metadata.
     Fractional doubles and safe integers keep their existing object transport.
     """
     tokens: list[list[Any]] = []
@@ -866,7 +866,7 @@ def _serving_token(path: Path) -> tuple[bool, str | None]:
     except FileNotFoundError:
         return False, None
     except (json.JSONDecodeError, OSError):
-        # An unreadable file is not evidence of a stopped runtime; keep waiting
+        #  keep waiting
         # until the deadline instead of claiming a restart that did not happen.
         return True, None
     if not isinstance(payload, dict):
@@ -1589,8 +1589,7 @@ def effect_runtime_request(
                 continue
             raise
         except TimeoutError as exc:
-            # A connect timeout is not evidence that an existing runtime died.
-            # In particular it must not replace a live server which may still
+                        # In particular it must not replace a live server which may still
             # be completing an earlier mutation under the per-Goal lock.
             raise EffectRuntimeStartupError(
                 f"TypeScript Effect runtime did not connect for {method} "
@@ -1639,8 +1638,8 @@ def effect_runtime_result(
 ) -> Any:
     state = _REQUEST_RUNTIME_REVISION.get() if method == "todo.context.page" else None
     def validate_result(result: Any) -> Any:
-        # A caller must explicitly request a bundle. A request scope or a small
-        # source does not establish that it will consume additional views.
+        # A caller must explicitly request a bundle.
+
         if set(params) == {"summary_display_views"}:
             requested = params["summary_display_views"].get("view_names", ("summary", "planning", "terminal"))
             if not isinstance(result, dict) or any(

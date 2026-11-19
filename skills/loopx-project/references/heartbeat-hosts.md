@@ -37,8 +37,7 @@ of a fixed resident session, write `sidecar_template.sidecar_json` to its
 Native `builtin: schedule` requires an `args` array beginning with the cron expression.
 `config.cron`, a top-level `sidecar` wrapper and LoopX's template metadata are not
 native config. Preserve an existing sidecar's id, enable choice and scoped permissions.
-New sidecars retain the host's user enable step; configuration does not prove a live
-loop. Inspect native startup/tick results after any change.
+New sidecars retain the host's user enable step; Inspect native startup/tick results after any change.
 
 A detached native sidecar schedule starts a fresh conversation with the stable
 bootstrap, which must still load fresh Core admission before work and preserve its
@@ -239,8 +238,7 @@ comparison evidence is unknown; a summary cannot replace full requirements.
 The generated task body permits routine public commit, push and PR creation
 within existing user authority and repository rules after validation and a clean
 public/private boundary scan. Do not reintroduce a user gate for public-safe
-publication itself. An old trust setting, context or command does not grant new
-authority; merge and production retain their separate authorization.
+publication itself. Merge and production retain their separate authorization.
 For `notify_user_on_open_todo=true`, follow the current
 `interaction_contract.user_channel` for the concrete notice and cooldown.
 This notification flag does not decide delivery or accounting:

@@ -1275,7 +1275,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         """Freeze once; a completed backfill requires the exact unchanged Turn.
 
         The automatic recovery owner first verifies the original native proof
-        and current source. This fence changes neither its Turn nor its events.
+        and current source.
         """
         with self._locked_turn_path(session_id, turn_id, "retain_native_result"):
             turn = self.load_turn(session_id, turn_id)

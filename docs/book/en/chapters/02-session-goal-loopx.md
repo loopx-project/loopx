@@ -44,7 +44,7 @@ the task's completion date does not move.
 ## Why "big tasks use LoopX, small ones use a session" is not enough
 
 The natural instinct sorts by task size: short work stays in a session, large work escalates to the
-long-running control plane. Neither story fits. The second task was small, three Todos, and a single
+long-running control plane. The second task was small, three Todos, and a single
 pending question stalled it for two days.
 
 The decisive variable is this: **when the task stops, what does it need in order to continue?** The
@@ -99,7 +99,7 @@ LoopX coordinates Goals, Agents, and Hosts, but each identity answers a differen
 | `agent_id` | Which peer or work lane owns the current responsibility? | Binds claims, Vision, quota, and writeback; new onboarding defaults to a fresh identity only when no registered lane exists or `--new-peer` is explicit |
 | `host_surface` / runtime profile | Which product surface executes and wakes this turn? | Binds App heartbeat, a visible Goal, or another Host loop; declare the surface that is actually running |
 
-Reusing a Goal does not imply that a new session should take over an existing Agent identity. The current
+The current
 Goal-start contract keeps those choices explicit:
 
 1. if several registered Goals exist, return a read-only `goal_selection_gate` and rerun with one exact
@@ -113,7 +113,7 @@ Goal-start contract keeps those choices explicit:
    `fresh_agent_registration_required` (`register_fresh_agent`), and first onboarding needs no extra
    `--new-peer`; a bound thread keeps its bound lane;
 5. continue an existing Agent only when the user explicitly selects that exact `agent_id`;
-6. an Agent name or prefix does not prove the Host surface; runtime metadata does.
+6. runtime metadata does.
 
 This lets a session continue the same project without silently impersonating the previous executor.
 
@@ -225,7 +225,7 @@ claim, lease, successor, and handoff information. Per-Agent Vision stores one pe
 direction, acceptance summary, and replan trigger. It is a per-Agent route, not a global product vision.
 
 This separates "the Goal is active" from "who may perform which work now." An agent id labels a LoopX work
-lane; it does not prove which Host is currently executing it. A new session may reuse the Goal history and
+lane. A new session may reuse the Goal history and
 frontier, registering a fresh Agent identity when no lane is registered or `--new-peer` is explicit.
 Existing claims move only through an explicit takeover or handoff.
 
@@ -245,7 +245,7 @@ the Host. That second half is exactly what the opening story was missing.
 
 ### 3. Evidence and receipt
 
-"The agent invoked a command" is not proof that a transition happened. LoopX distinguishes:
+LoopX distinguishes:
 
 - proposal: what should happen;
 - observation: what was seen;

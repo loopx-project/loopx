@@ -35,7 +35,7 @@ KunlunCode 使用独立的 `.loopx/kunluncode.json` 绑定和注册身份。它�
 
 ## 2. 三套命令空间：并不完全一致
 
-接入后同时存在三套不同的入口。名称相似不代表状态或生命周期相通：
+接入后同时存在三套不同的入口。
 
 | 命令空间 | 例子 | 所有者 | 当前适配器如何使用 |
 | --- | --- | --- | --- |
@@ -53,12 +53,12 @@ KunlunCode 使用独立的 `.loopx/kunluncode.json` 绑定和注册身份。它�
 ```
 
 它在 KunlunCode 自己的 session 中保存 persistent objective、continuation status 和 token
-budget。这个状态不是 LoopX registry 中的 goal。直接在 TUI 启动的 native Goal 不会完成
+budget。直接在 TUI 启动的 native Goal 不会完成
 LoopX todo；只有 `loopx-kunluncode run` 创建并跟踪的 native Goal，才会在验收终态后做映射。
 
 ### `/goal-pro` 是原生 `/goal` 加独立完成验证
 
-从用户可见的目标语义看，`/goal-pro` 不是另一套目标生命周期。它沿用 `/goal` 的
+从用户可见的目标语义看。它沿用 `/goal` 的
 persistent objective、`status`、`history`、`pause`、`resume`、`clear`、`edit` 和 token
 budget；核心增量是严格的完成门禁：主 Agent 请求完成时，KunlunCode 会运行独立 verifier
 sub-agent。只有 verifier 通过才会进入完成状态；验证失败或验证基础设施出错时，Goal 保持
@@ -80,7 +80,7 @@ KunlunCode 自己的 goal state，不是 LoopX goal 的“高级版”。
 
 ### 原生 Goal 由谁激活
 
-`/goal` 本身由 KunlunCode TUI 解析，不是模型能够输入给自己的普通文本命令。不过本机
+`/goal` 本身由 KunlunCode TUI 解析。不过本机
 KunlunCode 还提供两条非 TUI 激活路径：
 
 | 激活路径 | 调用者 | 约束 |

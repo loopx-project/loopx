@@ -82,7 +82,7 @@ REQUIRED_INSTALLED_SKILL_PHRASES = {
     "loopx-benchmark": (
         "builtin `benchmark-toolkit` capability owns provider-neutral",
         "without a per-Goal enable switch",
-        "Installing this skill does not grant runner",
+        "Respect the selected todo's required capabilities, any external provider binding, host permissions, and user gates.",
         "For a generic library microbenchmark",
     ),
     "loopx-self-repair": (

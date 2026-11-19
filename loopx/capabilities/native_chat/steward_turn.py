@@ -99,8 +99,8 @@ class StewardTurnHost:
         binding = next((row for row in current["bindings"] if row["binding_id"] == saved["binding_id"]), None)
         if binding != observed["binding"]:
             raise ValueError("the original steward authorization changed during identity verification")
-        # Identity IO may have waited. Its result is not a cached grant: the
-        # existing typed owner checks the current binding and Session again.
+        # Identity IO may have waited.
+
         selected = {**self.bindings._resolve_observed(current, binding, observed["observation"], {
             "source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
             "private_human_message": False, "origin": "web", "session_context": saved,
@@ -322,7 +322,7 @@ class StewardTurnHost:
 
             journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
             # Transport canonical observations to the shared typed admission
-            # owner. Neither a missing model event nor Python prose decides.
+            # owner.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
@@ -452,7 +452,7 @@ class StewardTurnHost:
     def recover_report_settlement(self, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]) -> None:
         """Resume only cached, validated native effects of the original report.
 
-        Neither Todo DONE nor outer Chat completion is a native commit. The
+        The
         journal owner must authorize a no-host continuation; its existing
         effect readbacks reconcile ambiguous writeback/debit outcomes.
         """

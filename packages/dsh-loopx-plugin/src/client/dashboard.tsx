@@ -54,7 +54,7 @@ export function LoopXDashboardIcon({
 /**
  * Central panel presenting the LoopX personal workspace dashboard served by
  * `loopx dashboard`. The iframe keeps LoopX as the owning UI; this panel is a
- * navigation surface, not a second control plane. When the loopback service is
+ * navigation surface. When the loopback service is
  * absent the panel states the recovery command instead of rendering a blank
  * frame, and retrying re-probes without reloading DSH.
  */

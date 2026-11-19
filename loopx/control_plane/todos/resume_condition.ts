@@ -621,8 +621,8 @@ export type ResumeConditionDiagnosis = {
   | { state: "invalid"; reason: string }
 );
 
-/** Shared by canonical evaluation and old compact projections. Missing source
- * facts are not proof of an invalid dependency. A historical completed monitor
+/** Shared by canonical evaluation and old compact projections.
+ *  A historical completed monitor
  * remains satisfied; a live monitor completion wait requires an explicit replan,
  * never an inferred monitor_changed generation baseline. */
 export function diagnoseTodoResumeCondition(

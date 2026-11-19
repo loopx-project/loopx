@@ -240,7 +240,7 @@ old/new writer compatibility is provided.
 ## 中文
 
 这是复用现有 ledger 和 CLI 的**人工执行、离线演练方案**，让 pilot 之前的导出、删除读回与
-恢复可复现。它没有新增自动过期、retention scheduler、命令或托管备份，也不构成生产验收。
+恢复可复现。它没有新增自动过期、retention scheduler、命令或托管备份。
 P0 exit 仍需 C0/C1 与 observer 开销实测；部署的数据 owner 须另行接受保留期限和删除范围。
 
 收集前在私有操作记录里固定 goal/session/run identity、数据 owner、存储位置、带时区的有限
@@ -267,18 +267,17 @@ public-safe 聚合。保留全部失败标记，不筛选“成功”行。
    当前项目或默认路径猜测实际目录。
 3. 新文件使用精确 Goal id 的 UTF-8 SHA-256 小写摘要，放在独立的 `by-goal` 子目录；
    冒号／下划线与大小写不同的 id 不再共用文件。旧文件仍可能混写，使用 recipe 的归属
-   检查，遇到混合、外来或不可解析行暂停删除。本变化不构成安全租户隔离。
+   检查，遇到混合、外来或不可解析行暂停删除。
 4. 完整导出、记录 SHA-256 和固定时间 receipt/projection，在隔离副本里读回并比较；删除前
    再比较源 hash。只有 owner 已授权、期限/hold 决策已核实才执行单文件删除。
 5. 删除后 receipt 必须为 `invalid`、包含 `no_observations` 且 persisted count 为 0。
 6. 如需恢复演练，先取得再次保留数据的许可，验证副本 hash，并用 exclusive creation 写入
    不存在的目标，拒绝覆盖重新启动的 writer 文件；完整字节和 receipt/projection 必须一致。
 7. 永久删除应跳过恢复，并按 owner policy 处理原件、导出、副本 runtime、读回及外部备份。
-   留有导出只能称源文件删除演练，unlink 不能证明安全擦除。整个过程不修改 Goal/Todo/quota/
+   留有导出只能称源文件删除演练。整个过程不修改 Goal/Todo/quota/
    gate/worker session，也不启用 observer；继续采集须另行授权。
 
-不要用追加合法 envelope、重置 sequence、合并 session 或筛选行后 ingest 来恢复。`ingest`
-不是字节保真恢复 API：它可能用新的 violation marker 替代非法输入。恢复整个冻结文件到
+不要用追加合法 envelope、重置 sequence、合并 session 或筛选行后 ingest 来恢复。恢复整个冻结文件到
 不存在的目标，才能保留 stats、缺口、失败标记及损坏字节的原始意义。
 
 上面的两条验证命令在临时合成状态中执行实际 shell block 和所选解释器的真实 CLI。
@@ -301,4 +300,4 @@ CLI 与 DSH 插件须一起升级，并冻结所有新旧 writer。只读 `recei
 原件、副本 hash。验证成功且 writer 仍冻结后，仅移除旧文件，再用固定 `--as-of` 比较
 receipt／projection（只有 `ledger_ref` 改变），最后恢复新版 observer。混写、损坏或归属
 不明时保留原件，禁止筛选行来消除失败。回退也须停写，保留新增记录，拒绝覆盖与碰撞；
-仅降级可执行文件不等于数据回退。不提供自动迁移或新旧 writer 并发兼容。
+不提供自动迁移或新旧 writer 并发兼容。

@@ -27,7 +27,7 @@ def managed_session_report_destination(configuration: Mapping[str, Any]) -> str 
 
 
 def normalize_session_task(value: object) -> dict[str, Any]:
-    """Codec for an existing native Task reference, not an NL classifier.
+    """Codec for an existing native Task reference.
 
     The existing Todo validator and managed Session admission still own
     execution. A description cannot grant a workspace, recipient or command.

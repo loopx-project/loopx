@@ -82,17 +82,17 @@ Dreaming proposes directions or hypotheses; it does not acquire execution author
 
 ## Material evidence delta: activity is not progress
 
-Imagine a teaching case in which a day produces notes, unrelated tests and directory reorganization, but reduces none of the acceptance gaps. The artifacts may exist; that alone does not establish convergence. This is not a claim that current policy unconditionally permits infinite repetition.
+Imagine a teaching case in which a day produces notes, unrelated tests and directory reorganization, but reduces none of the acceptance gaps. The artifacts may exist.
 
 Material evidence delta concerns new evidence or state that changes the next judgment, not counts of turns, files or characters. Negative results can matter: rejecting a hypothesis, confirming a blocker or narrowing an unknown can change the route.
 
-Delivery Batch Scale describes change scope; Delivery Outcome describes its relation to the objective. `multi_surface` or `implementation` does not automatically complete a Goal. Interpret `surface_only`, `outcome_gap`, `outcome_progress` and `primary_goal_outcome` under their contract; an attractive label is not evidence.
+Delivery Batch Scale describes change scope; Delivery Outcome describes its relation to the objective. `multi_surface` or `implementation` does not automatically complete a Goal. Interpret `surface_only`, `outcome_gap`, `outcome_progress` and `primary_goal_outcome` under their contract.
 
 ### Vision checkpoints and baselines
 
 Vision is a per-Agent execution route, not a scratchpad. Applicable material refresh must account for a patched route, supported unchanged result, retirement/supersession, or why the role does not require Vision.
 
-“Unchanged” needs a comparable baseline. Establish the route when none exists rather than describing never-checked as unchanged. For gaps such as `vision_checkpoint_missing`, return to the checkpoint owner and supply the actual relationship, not more aspirational prose. Current owners still determine precedence among replanning and repair; this explanation is not a global rule table for all Hosts.
+“Unchanged” needs a comparable baseline. Establish the route when none exists rather than describing never-checked as unchanged. For gaps such as `vision_checkpoint_missing`, return to the checkpoint owner and supply the actual relationship, not more aspirational prose. Current owners still determine precedence among replanning and repair.
 
 ### Six convergence invariants
 
@@ -105,7 +105,7 @@ These questions check completeness; they add no public fields or automatic accep
 5. **Liveness:** does unfinished work have an action, executable observation, decision, repair or explicit stopping responsibility?
 6. **Terminal state:** were successors, waits, receipts and acceptance gaps handled under the applicable contract, rather than merely finding an empty list?
 
-Safety avoids incorrect progress; liveness avoids getting stranded without a next entrypoint. Neither guarantees arbitrary objectives will succeed. See [long-horizon convergence](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/) and [evidence and repair](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
+Safety avoids incorrect progress; liveness avoids getting stranded without a next entrypoint. See [long-horizon convergence](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/) and [evidence and repair](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
 
 ## Which surface should be repaired when two disagree? {#projection-repair}
 
@@ -124,7 +124,7 @@ Legacy Markdown can still be source; a Todo under a selected canonical provider 
 
 ## Stop, closure and compensation
 
-An owner-stopped Goal, paused quota or exited Host does not prove completion. `terminal_no_followup` needs its frontier/acceptance conditions. Zero visible Todos is insufficient: output may be truncated, or Monitors, Gates, successors, handoff, replanning and result-return responsibilities may remain.
+`terminal_no_followup` needs its frontier/acceptance conditions. Zero visible Todos is insufficient: output may be truncated, or Monitors, Gates, successors, handoff, replanning and result-return responsibilities may remain.
 
 When requirements are satisfied, record the basis through the existing terminal entrypoint. Keep a successor for unfinished work or observation/blocker for unknown results. Verified negative results and coverage-backed no-follow-up can honestly end a route without inventing success.
 
@@ -150,7 +150,7 @@ A writeback may mark the vision unchanged only when all of the following hold:
   vision as the baseline automatically, so no separate revision is passed.
 
 If the baseline is missing but the agent still claims unchanged, quota will produce a
-`vision_checkpoint_missing` gap. This is not a punishment, but a guard against the agent accumulating
+`vision_checkpoint_missing` gap. a guard against the agent accumulating
 wrong assumptions on a never-checked state. For the full failure replay, see
 [Control-Plane Course Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
 

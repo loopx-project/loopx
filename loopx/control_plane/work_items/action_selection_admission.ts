@@ -43,7 +43,7 @@ export function currentActionSelectionAdmission(
     && packet.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR
     && agent.must_attempt && agent.delivery_allowed === false;
   const preparation = jsonObject(packet.execution_preparation);
-  // Binding qualified work may precede its ordinary claim; it does not grant delivery.
+  // Binding qualified work may precede its ordinary claim.
   const preparationOnly = pending && qualification.state === "qualified"
     && selectionTodoId(qualification.requested_todo_id) === requestedTodoId
     && preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION

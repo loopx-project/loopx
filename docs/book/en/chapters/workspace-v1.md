@@ -36,11 +36,11 @@ The Workspace presents and initiates governed actions, but Goal, Todo, Gate, eve
 - **HTTP success is not write completion.** A request being accepted and an action completing are two different things, and the second may be stopped by a Gate or rejected by a stale check.
 - **A button is not an independent authority.** Goal stop/resume checks owner authority and the reviewed fingerprint; Todo actions use lifecycle rules; quota governs eligibility for automated Turns.
 
-The whole chapter compresses into one sentence: **the Workspace is where you observe and initiate; it is not a new source of truth.**
+The whole chapter compresses into one sentence: **the Workspace is where you observe and initiate.**
 
 ## Confirm the runtime before trusting the page
 
-A page appearing does not mean the control plane is healthy. Check version and diagnostics before starting or reusing the service; `dashboard --no-open` is not merely a state query:
+Check version and diagnostics before starting or reusing the service; `dashboard --no-open` is not merely a state query:
 
 ```bash
 loopx --version
@@ -148,7 +148,7 @@ After configuring, read back the Goal, Agent, Topic, ingress mode, Session bindi
 loopx lark-inbox drain --goal-id <goal-id> --agent-id <agent-id>
 ```
 
-Disconnect removes only that Goal's Topic route; it does not delete the Goal, Session, history, or other connections. A message arriving also does not mean the Agent gained send, repository-write, or production permission; those actions still pass through their own Gates and Provider readback.
+Disconnect removes only that Goal's Topic route; it does not delete the Goal, Session, history, or other connections. those actions still pass through their own Gates and Provider readback.
 
 ## One-off generation and continuous delivery are two authorization chains
 
@@ -160,7 +160,7 @@ loopx periodic-report inspect-profile --preset weekly --format json
 
 `active` and `generation_allowed` in the receipt should both be `true`. The built-in weekly profile has no schedule and no sink, so **one generation creates no recurring task and sends no message**.
 
-Continuous reporting is a separate authorization chain: a custom profile declares the cadence, Host Automation performs the waking, and `enabled: true` on a machine or Goal subscription together with an explicit `route_ref` constitutes continuous-delivery authority. Pausing the Automation, disabling the profile, or closing the subscription stops the corresponding path. A successful generation does not mean a successful external send; the Provider, sending identity, route, and message readback each still need verification.
+Continuous reporting is a separate authorization chain: a custom profile declares the cadence, Host Automation performs the waking, and `enabled: true` on a machine or Goal subscription together with an explicit `route_ref` constitutes continuous-delivery authority. Pausing the Automation, disabling the profile, or closing the subscription stops the corresponding path. the Provider, sending identity, route, and message readback each still need verification.
 
 ## Cost and boundary
 
@@ -170,7 +170,7 @@ Continuous reporting is a separate authorization chain: a custom profile declare
 
 **Cost three: four kinds of "enabled" must be distinguished.** Collapsing them into one switch misjudges capability availability, and keeping them apart carries real mental overhead.
 
-**Boundary one: the Workspace does not own facts.** A broken UI proves neither a healthy control plane nor stopped execution. Distinguish source, runtime and projection first. Only after confirming source and execution conditions can the fault be limited to display recovery, not manual state edits through the UI. It also does not constitute Stage 2C authority — qualification and promotion of a shared-authority provider come from separate shadow and conformance work, not from the existence of an operator surface.
+Distinguish source, runtime and projection first. Only after confirming source and execution conditions can the fault be limited to display recovery, not manual state edits through the UI. qualification and promotion of a shared-authority provider come from separate shadow and conformance work.
 
 **Boundary two: desktop updates are narrowly scoped.** Updates can only come from the fixed official feed; macOS uses updater signature and ad-hoc code signing and should not be described as notarized. Restoring a previous version also does not promise to reverse a future-incompatible Goal schema.
 
@@ -190,10 +190,6 @@ For one Workspace acceptance pass, confirm at least that:
 
 ## Invariants
 
-1. **The UI is a projection, not a source of truth.** Re-read the source before any consequential judgment.
-2. **HTTP success does not prove the write completed.** Only a receipt and readback do.
-3. **A click is not authorization.** Goal lifecycle accepts owner operations, Todo lifecycle checks work transitions, and the current quota contract admits automated Turns. The page grants none of these permissions.
-4. **The four kinds of "enabled" need separate evidence.** They may be prerequisites for one another; one switch does not establish that every condition holds.
-5. **A message arriving does not widen permission.** Neither capture scope nor ingress mode grants new write authority.
-
-These five answer one question: **when the interface tells you everything is fine, what makes that believable?**
+1. **The UI is a projection.** Re-read the source before any consequential judgment.
+3. Goal lifecycle accepts owner operations, Todo lifecycle checks work transitions, and the current quota contract admits automated Turns. The page grants none of these permissions.
+4. **The four kinds of "enabled" need separate evidence.** They may be prerequisites for one another.

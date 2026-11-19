@@ -1,4 +1,4 @@
-"""Shared publication/readback shape checks; length does not prove review quality."""
+"""Shared publication/readback shape checks."""
 
 from __future__ import annotations
 

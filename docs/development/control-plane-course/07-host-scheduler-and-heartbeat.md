@@ -208,8 +208,6 @@ host update applied
 CLI acknowledged exact applied state
 ```
 
-Scheduler ACK 本身不构成 delivery，不 spend。
-
 ### 兼容投影不能改变状态权威 / Compatibility preserves state authority
 
 新决策统一使用 `app_automation` 携带调度建议和宿主行动。旧捕获仍可读取其中的
@@ -244,7 +242,7 @@ O: host 更新 automation，并 readback observed RRULE
 R: LoopX 持久化 ACK，证明 O 对应 P
 ```
 
-`O.target_matches=true` 只说明宿主当前值正确，不等于 `R.persisted=true`。如果 adapter
+`O.target_matches=true` 只说明宿主当前值正确。如果 adapter
 先更新 RRULE，再重新计算一份已经显示 settled 的 hint，原 proposal 的 ACK obligation
 可能被跳过。完整资格测试必须保留 P 的 `state_key`、`reset_token`、
 `identity_signature` 和 target RRULE，按以下顺序验证：
@@ -359,15 +357,15 @@ Host 只有在 CLI 派生 `terminal_no_followup` 时才应自动停止。它至�
 open todo count == 0
 ```
 
-只是必要条件之一，不是充分条件。
+只是必要条件之一。
 
-`terminal_no_followup` 是 LoopX 自己派生的 runtime closure，不是用户自定义 status，也不应由 host 根据自然语言猜测。
+`terminal_no_followup` 是 LoopX 自己派生的 runtime closure。
 
 ## 原生 Codex Goal 与 LoopX Host Surface
 
 ### 原生 Goal 的持久边界
 
-Codex 原生 Goal 不是“在 prompt 前写 `/goal`”的文本约定。自动化 surface 通过
+自动化 surface 通过
 `thread/goal/set` 把 objective、status 与可选 token budget 绑定到 thread，通过
 `thread/goal/get` 读回，再用 `turn/start` 继续执行。只有普通 prompt 的 slash 前缀、
 外部 polling loop 或 `codex exec` 成功，都不能单独证明 native Goal 已激活。
@@ -554,7 +552,7 @@ write 和兼容旧合同的 JSON/Markdown projection。持续运行的路径没�
 caller 与 unbound manual command 保留兼容入口。
 
 端到端测试仍需把 apply 前生成的 hint 原样带过 host effect。若 effect 后重新读取一份
-hint，测试仍可能漏掉 ACK obligation 丢失。ACK 不构成 delivery，也不会 spend。缺少
+hint，测试仍可能漏掉 ACK obligation 丢失。缺少
 durable ACK 时，下一轮不能把 proposal 或碰巧相同的 host 值当成已结算状态。
 
 ### 4. Monitor writeback 用 result hash 区分观察与推进
@@ -623,9 +621,9 @@ return record_quota_monitor_poll_for_decision(
 )
 ```
 
-Execution context 不是渲染选项，而是 decision input。若 CLI 入口识别出 Codex App，
+Execution context 是 decision input。若 CLI 入口识别出 Codex App，
 但 wrapper 只把 context 传给 `before`，`after` 会误以为自己处在未知 host，返回
-`repair_scheduler_execution_context`。这不是 monitor 产生了新阻塞，而是调用链丢失
+`repair_scheduler_execution_context`。这是调用链丢失
 了 authority context。
 
 对应回归应同时证明：
@@ -660,7 +658,6 @@ App tick
 
 ### 读完这一段应能回答
 
-1. 为什么 scheduler hint 不能证明 RRULE 已应用？
 2. 为什么 ACK 不消耗 delivery slot？
 3. 哪些字段变化应 reset stateful backoff？
 4. unchanged monitor 为什么必须写 `next_due_at`？
@@ -705,7 +702,7 @@ App tick
 
 ### 把 launcher 称为 supervisor agent
 
-Auto Research 的 tmux launcher 只是 host launcher，不是拥有 todo 决策权的 leader agent。可选 peer supervisor 是另一套 proposal-only overlay。
+Auto Research 的 tmux launcher 只是 host launcher。可选 peer supervisor 是另一套 proposal-only overlay。
 
 ## 课后检查
 

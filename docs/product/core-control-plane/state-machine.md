@@ -5,7 +5,7 @@ cooperating machines that are projected from the same canonical state bodies:
 registry entries, active state, todo metadata, run history, quota events,
 operator gates, scheduler acknowledgements, and projection sinks.
 
-This document is not a new store and not a private incident narrative. It is a
+It is a
 public-safe map over the current repository contracts, especially:
 
 - [`state-definitions.md`](state-definitions.md) for source state bodies and
