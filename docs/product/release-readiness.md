@@ -1039,6 +1039,17 @@ path, and canary route rather than as a user-facing release baseline.
   installation; artifact and native-host claims remain those stated by that
   release note.
 
+- `v2.3.0` release at commit
+  `92271fe114916428be6fd36558bb7a93fbe49da8` (2026-11-09).
+  The Git `stable` ref, CLI archive and bundled macOS runtime matched the tag.
+  GitHub and PyPI carry matching Python wheel and source packages.
+  The signed desktop stable feed for this release serves Apple Silicon macOS.
+  Windows stable upgrades use the MSI or NSIS installer.
+  [Published release](https://github.com/loopx-project/loopx/releases/tag/v2.3.0),
+  [PyPI packages](https://pypi.org/project/loopx/2.3.0/#files).
+  Check the installation owner and read back an existing Goal after updating.
+  [Versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.3.0/docs/product/releases/v2.3.0.md#upgrade).
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 
