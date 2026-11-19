@@ -111,6 +111,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             _validate_context_page_window(args.offset, args.page_bytes, output_limit)
         path, _, payload = _read_capture(args.capture_file, args.capture_sha256,
                                          private=hook_session is not None)
+        if payload.get("ok") is False:
+            raise ValueError("The saved capture is diagnostic. Read it with quota context-read.")
         identity = payload.get("agent_identity")
         receipt = payload.get("heartbeat_receipt")
         if (payload.get("ok") is not True or not isinstance(identity, dict) or not isinstance(receipt, dict)
