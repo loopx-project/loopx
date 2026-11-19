@@ -4,7 +4,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-09-26
-- **Last normative revision:** 2026-11-17
+- **Last normative revision:** 2026-11-19
 - **Implementation baseline:** packaging inventory `2f3d13ae9`; runtime composition audit `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **Related contracts:** [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md), [Extensions reference](../../reference/extensions.md), [Capability catalog](../../../loopx/capabilities/README.md), [Overall Roadmap v0](loopx-overall-roadmap-v0.md) (S2, S8, S12), [import-boundary tests](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **Tracking issue:** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -35,7 +35,7 @@ retain their original baselines.
    wheel is replaced over time by `loopx-core`, `loopx-workspace`, and
    per-capability packages under `packages/`, with `loopx` retained as a
    meta-package that depends on all of them.
-3. **Top-level regrouping happens before any packaging change.** `loopx/chat_*`
+3. **Regroup the selected dependency closure as needed for independent packaging.** `loopx/chat_*`
    moves to `loopx/chat/`, `loopx/*_goal_mode/` moves to `loopx/hosts/`, with
    compatibility re-exports for established public imports for at least one minor
    release. Internal-only callers move together and the old internal entry is deleted.
@@ -62,6 +62,20 @@ activated services and model-visible context. The package table defines what
 can be installed, not what every command must load. Installing standard grants
 no service activation or permission. Existing defaults and machine-enforced
 work obligations remain until a qualified, explicitly disclosed migration.
+
+The immediate outcome is an independently installed core that executes a task,
+recovers its original result and returns evidence. Unrelated directory moves,
+workspace packaging or another model session do not block that core-artifact
+slice; full M3 retains its complete distribution acceptance. Ordinary callers
+supply a task and consequential constraints, without first learning Vision,
+Quota, Lease or method names. The host carries bookkeeping; relevant permission,
+budget, uncertainty and recovery decisions remain visible when needed.
+
+The **10% complexity / 90% current-function coverage** target remains an unproven
+hypothesis. Fix a versioned journey denominator and compare necessary concepts,
+mandatory steps, loaded/activated code, model reads, complete costs and accepted
+outcomes. Report kernel-only and assembled coverage; do not drop specialized
+journeys from the denominator or treat code counts as model benefit.
 
 ## 2. Problem and motivation
 
@@ -269,6 +283,19 @@ contract into prose guidance. The kernel is a cohesive set of domains, not one
 large file. The adjacent refactor should localize the next change and preserve
 characterized behavior.
 
+### Required mechanisms and optional task methods
+
+Core owns legal scoped work, durable evidence, stop, budget and original-attempt
+recovery. Bench, workbench and manager compose specialized workflows around the
+same owners. Their absence must not block unrelated authorized core work.
+**Yardstick is an independently optional decision method, not a provider or a
+mandatory kernel stage.** Methods choose how to reason or measure; providers
+supply execution, storage or concrete external operations. Reuse existing
+capability owners and `yardstick_enabled`; add no method registry, provider id
+or enable switch. Ordinary result validation remains required when a method is
+off. Existing records, configured obligations, authority and defaults survive;
+method/dependency removal needs its own absence, parity and recovery evidence.
+
 ### Presets over the distribution tiers
 
 | Composition | Required content | Explicit optional content |
@@ -282,6 +309,16 @@ content is not an activation list. Minimal is an executable composition, not a
 flag applied after standard fully initializes. A host-free read-only kernel
 library does not qualify that executable preset. Exact contents and the first
 supported host/authority combination are D2/D5 decisions.
+
+The initial proposed **Standard** selection is `agent-turn-recall` for relevant
+prior guidance, `issue-fix` for validated repository changes, and
+`pull-request-review` for delivery review. These retain their existing capability
+owners and default-off settings; installation grants no source access, starts
+no watcher and authorizes no publication or merge. Load only the selected task's
+implementation. Basic recovery stays in Minimal without advisory recall.
+Yardstick, Stride, research/benchmark machinery and manager routing remain
+separate optional additions. This selects the R2 target; the current monolithic
+and core-candidate wheels do not yet implement that isolated package selection.
 
 Keep composition, managed/attached mode, host provider, one/two model sessions,
 storage provider and benchmark arm independent. Minimal does not imply attached,
@@ -622,6 +659,14 @@ journey qualification slices in this same plan. R0 can ship before directory
 moves; it does not qualify the kernel. R3/R4 are optional and do not block a
 qualified CLI or managed task. No unused provider, field or framework is added
 ahead of its real caller. Report the applied/deferred adjacent refactor in each PR.
+
+### Core discovery checkpoint — 2026-11-19
+
+| Boundary | Delivered delta / evidence | Still open |
+| --- | --- | --- |
+| V1/V3, capability discovery | Benchmark package exports resolve their selected existing owner on demand, retaining all 199 public symbols and their order; explicit star imports still request all. Help/list/detail succeed with benchmark execution implementations unavailable, no Node, process launch, network or state writes. | Does not remove benchmark files from the wheel or qualify absent-capability installation. |
+| Metadata and active consumers | The same catalog and all 25 details are byte-identical to the frozen `main@e235cde9c` workload; 53 CLI help/list/detail/unknown-id observations match. Discovery loads 2 benchmark children instead of 28, and 298 LoopX modules instead of 326. Existing benchmark semantics and canonical export identities remain unchanged. | Import counts are not latency, total cost, model benefit or full D2/D5 closure. |
+| Acceptance and continuation | 52 installed-core discovery/execution/context/recovery cases pass on the rebuilt artifact; 383 selected consumer cases and 43 architecture/documentation cases pass separately. No new state owner, provider id, activation toggle or top-level module. | Keep R1/M3 and V1–V5/V10 open; continue capability package isolation and selected Standard delivery. Public-channel C1 qualification remains with its release owner. |
 
 <a id="subtraction-gate"></a>
 
