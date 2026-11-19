@@ -705,6 +705,50 @@ def test_other_chat_host_cannot_delay_original_host_return(flow, explicit_source
     assert reply_status(root, receipt)[0]["status"] == "delivered"
 
 
+def test_original_return_survives_transient_goal_marker_release_failure(flow, monkeypatch):
+    import errno
+
+    from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+    from loopx.control_plane.goals.source_session_registry_state import guard_path
+    from loopx.file_lock import _effect_mutation_lock_path
+
+    root, registry, _, create = flow
+    store = ChatSessionStore(root / "source-chat")
+    session, turn, receipt = create(external=True, source_store=store)
+    request_id = receipt["request_id"]
+    acknowledge(root, "research", "worker", request_id, "adopt", "Accepted the original request")
+    report(root, "research", "worker", request_id, "conclusion", "The original request is complete.")
+    marker = _effect_mutation_lock_path(guard_path(registry, "research"))
+    retire = Path.replace
+    failed = False
+
+    def fail_once(path, target):
+        nonlocal failed
+        if path == marker and not failed:
+            failed = True
+            raise OSError(errno.ENOSPC, "simulated transient failure retiring the goal marker")
+        return retire(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_once)
+    with collaboration_goal_scope(registry, goal_id="research", agents=("worker",)):
+        assert marker.exists()
+    assert failed
+
+    calls = []
+
+    def sender(route, original_session, original_turn, text):
+        calls.append((route["return_message_id"], original_session["session_id"], original_turn["turn_id"]))
+        return {"reply_verified": True, "idempotency_key": "fixture-confirmation"}
+
+    assert drain(root, registry, store, sender) == 1
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert drain(root, registry, store, sender) == 0
+    messages = [item for item in store.messages(session["session_id"]) if item.get("origin") == "manager_followup"]
+    assert len(messages) == 1
+    assert calls == [(messages[0]["message_id"], session["session_id"], turn["turn_id"])]
+    assert not marker.exists()
+
+
 def test_exact_return_skips_other_host_before_admission(flow):
     from loopx.control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
 
