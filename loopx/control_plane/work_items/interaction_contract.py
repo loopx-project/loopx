@@ -762,7 +762,7 @@ def _successor_replan_required_cli_actions(
     goal_id: str,
     lifecycle_actor_args: str,
     typed_quota_guard: str,
-    settlement_plan: Mapping[str, object],
+    settlement_plan: Mapping[str, object] | None,
     scheduler_args: str,
     settlement_args: str,
     scoped_cli_args: str,
