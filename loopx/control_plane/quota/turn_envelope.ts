@@ -1912,9 +1912,10 @@ function disabledRewardMemoryView(value: unknown): JsonObject | null {
  * not a replacement source or a permission/settlement contract. */
 function hostModelContextChanges(decision: JsonObject): JsonObject {
   const context = {...decision};
+  // Maintenance warnings are actionable in the operator's quota/status view.
   for (const field of ["schema_version", "contract_binding", "projection_envelope",
     "scheduler_hint", "automation_cadence_readback", "automation_liveness",
-    "scheduler_execution_context"]) {
+    "scheduler_execution_context", "promotion_readiness_warning", "completed_todo_archive_warning"]) {
     delete context[field];
   }
   // Todo-authoring directions belong to the outer executor. Preserve other

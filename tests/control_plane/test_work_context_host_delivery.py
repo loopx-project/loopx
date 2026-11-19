@@ -74,6 +74,7 @@ def test_policy_observer_reads_original_signed_capture_after_todo_references(tmp
 @pytest.mark.parametrize('repetitions', [1, 40])
 def test_authored_requirements_survive_capture_projection_and_host(tmp_path, monkeypatch, provider, repetitions):
     from loopx.control_plane.quota.turn_envelope import bind_turn_decision_capture, build_turn_envelope
+    from loopx.control_plane.todos.completed_archive import DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
     from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
     from tests.control_plane.host_process_fixture import assert_host_task_context
 
@@ -89,7 +90,14 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
         '- [ ] [P1] Validate and settle the selected delivery.', f'- [ ] [P1] {task}',
     ).replace('## Next Action', f'## Acceptance\n\n{goal}\n\n## Next Action')
     # Author only disposable source input, before creating canonical authority.
-    state.write_text(authored.replace(' -->', f' note={quote(note, safe="")} -->'), encoding='utf-8')
+    completed = DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE + 1
+    completed_inputs = ''.join(
+        f'- [x] [P2] Verify historical artifact {index}.\n'
+        f'  <!-- loopx:todo todo_id=todo_historical_{index:02d} status=done task_class=advancement_task -->\n'
+        for index in range(completed)
+    )
+    state.write_text(authored.replace(' -->', f' note={quote(note, safe="")} -->') + completed_inputs,
+                     encoding='utf-8')
     todos = read_fixture_todos(state)
     source_task = next(item for item in todos if item['todo_id'] == TODO_ID)
     # The fixture helper returns an attention view. Seed the canonical record
@@ -110,6 +118,10 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
     assert current == full and full['schema_version'] == 'loopx_turn_envelope_v1'
+    promotion = full['promotion_readiness_warning']
+    assert promotion['freshness_status'] == 'missing' and promotion['requires_readiness_run'] is True
+    archive = full['completed_todo_archive_warning']
+    assert archive['active_done_count'] == completed and archive['requires_archive'] is True
     envelope = build_turn_envelope(full, captured_decision_path=str(saved))
     source_context = full['interaction_contract']['agent_channel']['work_context']
     assert source_context['complete'] is True
@@ -196,8 +208,12 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
         complete_host_request={key: request[key] for key in ('schema_version', 'turn_key', 'source_decision_hash')},
     ))
     structured = render_prompt(extract_turn_authority(request))
+    codex_prompt = _prompt(request)
+    for prompt in (structured, codex_prompt):
+        assert promotion['message'] not in prompt
+        assert archive['archive_command_template'] not in prompt
     model_input, _ = json.JSONDecoder().raw_decode(structured.split('Turn request:\n', 1)[1])
-    codex_input = json.loads(_prompt(request).split('Turn request:\n', 1)[1])
+    codex_input = json.loads(codex_prompt.split('Turn request:\n', 1)[1])
     assert model_input == codex_input
     worker = assert_host_task_context(model_input, full)
     assert worker["reward_memory_recall"] == {"status": "disabled", "goal_id": GOAL_ID, "agent_id": AGENT_ID}
@@ -217,6 +233,8 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)
     code, ordinary = _run_cli(registry, runtime, *args)
     assert code == 0, ordinary
+    assert ordinary['promotion_readiness_warning'] == promotion
+    assert ordinary['completed_todo_archive_warning'] == archive
     ordinary_context = ordinary['interaction_contract']['agent_channel']['work_context']
     assert ordinary_context['instruction'] == source_context['instruction']
     ordinary_task = next(source['content']['todo'] for source in ordinary_context['sources']

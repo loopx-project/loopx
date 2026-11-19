@@ -18,7 +18,8 @@ def assert_host_task_context(model_input, source):
     assert not {"work_contract", "turn_envelope", "turn_authority"}.intersection(model_input)
     context = model_input["task_context"]
     outer_fields = {"schema_version", "contract_binding", "projection_envelope", "scheduler_hint",
-                    "automation_cadence_readback", "automation_liveness", "scheduler_execution_context"}
+                    "automation_cadence_readback", "automation_liveness", "scheduler_execution_context",
+                    "promotion_readiness_warning", "completed_todo_archive_warning"}
     expected = {field: value for field, value in source.items() if field not in outer_fields}
     hints = expected.get("todo_write_hint")
     if isinstance(hints, dict):

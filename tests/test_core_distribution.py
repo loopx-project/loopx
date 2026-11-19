@@ -732,10 +732,12 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
     original = json.loads(capture.read_text(encoding="utf-8"))
     assert original["todo_write_hint"]["agent_todo_command_template"].startswith("loopx todo add")
+    assert original["promotion_readiness_warning"]["requires_readiness_run"] is True
     assert "spend_policy" in original["heartbeat_recommendation"]
     assert original["execution_preparation"]["lease_proof"]["expected_version"] > 0
     assert original["interaction_contract"]["cli_channel"]["execution_preparation"] == original["execution_preparation"]
     model_task = model_input["task_context"]
+    assert "promotion_readiness_warning" not in model_task
     assert "execution_preparation" not in model_task
     assert "execution_preparation" not in model_task["interaction_contract"]["agent_channel"]
     context = assert_host_task_context(model_input, original)

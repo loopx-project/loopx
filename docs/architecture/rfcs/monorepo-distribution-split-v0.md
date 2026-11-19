@@ -424,6 +424,9 @@ their original digests.
 An ordinary admitted task presents its work, scope and validation to the Worker.
 Matching ready lease preparations stay with launch and settlement. Unready,
 inconsistent and unfamiliar preparations remain visible.
+Operators read release readiness and completed-work maintenance through
+quota/status or the original capture. Task context omits these maintenance
+directions.
 
 Context reuse must be invalidated by relevant source/requirement revisions,
 session generation changes, compaction or lost acknowledgements. A smaller
