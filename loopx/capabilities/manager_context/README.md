@@ -43,6 +43,13 @@ and governed-delegation tool descriptions. Keep reader, language, corrections
 and result destination with the original work; do not maintain a second copy in
 a private manager configuration or an installed skill.
 The heartbeat hook's required Inbox read uses the same CLI entrypoint.
+It requests `read --attention-only`. An unfinished incoming request with a
+verified delivered partial answer for its current revision stays on the compact
+agenda, with its remaining work and the unfiltered read command. Requests
+without that proof, including queued or unreadable returns, still supply the
+full brief before work. Read a request's full current brief with `--request-id`
+before resuming it or returning an answer. Peer returns, native child results
+and operation handoffs use their usual readers.
 
 The rule calls for a useful outcome first, explained terms and comparisons with
 units and direction. Full evidence, negative results, unknown costs and remaining

@@ -685,6 +685,7 @@ def read_inbox(
     request_id=None,
     caller_goal_ref=None,
     turn_instance_id=None,
+    attention_only=False,
 ):
     """Read the Inbox. Only the host's invocation-bound reader supplies a Turn ID."""
     from .inbox import _pending_result
@@ -700,6 +701,8 @@ def read_inbox(
     read_command = delegation_read_command(root, registry, goal_id, agent_id)
     read_arguments = {"cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id,
         **({"turn_instance_id": turn_instance_id} if turn_instance_id else {})}
+    if attention_only:
+        read_arguments["attention_only"] = True
     with collaboration_goal_scope(
         registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref,
     ) as goal_scope:
@@ -720,6 +723,7 @@ def read_inbox(
         observed_goal_ref = dict(goal_scope.caller_goal_ref or {}) if goal_scope.exact else None
 
     native_continuation = snapshot.get("native_child_continuation") is True
+    outgoing_continuation = snapshot.get("outgoing_continuation") is True
     for child_result in result.get("native_child_results", {}).get("items", []):
         command = [*loopx_cli_argv(), "--registry", str(registry), "--runtime-root", str(root),
                    "--format", "json", "native-child", "acknowledge-result",
@@ -779,7 +783,7 @@ def read_inbox(
                 peer_result["read_token"] = read_token
                 command.extend(["--read-token", read_token])
             peer_result["acknowledge_command"] = render_host_cli_command(command)
-    if request_id is None and not native_continuation:
+    if request_id is None and not native_continuation and not outgoing_continuation:
         result["unfinished_delegations"] = final["context"]["unfinished_delegations"]
     result["followthrough"] = (
         "Use each request's receiver_followthrough to reconcile it with actual Core work. "
