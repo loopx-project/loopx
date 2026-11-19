@@ -980,6 +980,7 @@ class StewardTurnHost:
                 followup_ctx = self._steward_followup_context(actor, session_id, request, authority)
                 prompt += (
                     "\nSteward advancement instructions: Evaluate the monitor prompt and signal snapshot against authorized recipients (`context_delegation.targets`), prior receipts (`prior_handoff_receipts`, avoid duplicate delivery for unchanged PR@headRefOid), and open user todos (`open_user_todos`). "
+                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
                     "You may include optional top-level JSON fields alongside the normal kernel fields: "
                     "`context_handoff` (single object or array <=32 of {goal_id, agent_id, brief} with `schema_version='collaboration_brief_v0'` and `inputs=[]` when referencing URLs/PRs, restricted to `context_delegation.targets`), "
                     "and `steward_user_actions` (array <=16 of {dedupe_key, priority:'P0'|'P1'|'P2', text}). Set `result_kind='validated_completion'` when triage/handoff/user-action preparation is complete.\n"

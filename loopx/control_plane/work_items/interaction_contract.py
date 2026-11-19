@@ -755,6 +755,77 @@ def _automation_prompt_upgrade_cli_actions(
     ]
 
 
+def _successor_replan_required_cli_actions(
+    payload: Mapping[str, object],
+    *,
+    command_prefix: str,
+    goal_id: str,
+    lifecycle_actor_args: str,
+    typed_quota_guard: str,
+    settlement_plan: Mapping[str, object],
+    scheduler_args: str,
+    settlement_args: str,
+    scoped_cli_args: str,
+    quota_spend_action: str,
+) -> list[str]:
+    agent_scope_frontier = (
+        frontier if isinstance(frontier := payload.get("agent_scope_frontier"), dict)
+        else {}
+    )
+    if cycle_actions := _dependency_cycle_cli_actions(
+        agent_scope_frontier, command_prefix=command_prefix, goal_id=goal_id,
+        lifecycle_actor_args=lifecycle_actor_args, typed_quota_guard=typed_quota_guard,
+    ):
+        return cycle_actions
+    monitor_candidates = agent_scope_frontier.get("monitor_blocked_resume_candidates")
+    if not isinstance(monitor_candidates, list):
+        monitor_candidates = []
+    if monitor_candidates:
+        first_candidate = (
+            monitor_candidates[0]
+            if isinstance(monitor_candidates[0], dict)
+            else {}
+        )
+        monitor_todo_id = str(
+            first_candidate.get("blocking_monitor_todo_id") or "<monitor_todo_id>"
+        )
+        gated_todo_id = str(first_candidate.get("todo_id") or "<gated_todo_id>")
+        return [
+            f"{command_prefix} todo complete --goal-id {goal_id} --todo-id {monitor_todo_id}{lifecycle_actor_args} --evidence '<validated gate evidence>'",
+            f"{command_prefix} todo update --goal-id {goal_id} --todo-id {gated_todo_id}{lifecycle_actor_args} --note '<public-safe gate repair reason>'",
+            f"{command_prefix} refresh-state --goal-id {goal_id} --classification standing_monitor_gate_repair_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
+            quota_spend_action,
+        ]
+    route_candidates = agent_scope_frontier.get("route_continuation_replan_candidates")
+    if not isinstance(route_candidates, list):
+        route_candidates = []
+    if route_candidates:
+        return [
+            f"{command_prefix} todo add --goal-id {goal_id} --role agent --text '<public-safe route continuation advancement todo>'",
+            f"{command_prefix} refresh-state --goal-id {goal_id} --classification route_continuation_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
+            quota_spend_action,
+        ]
+    candidates = agent_scope_frontier.get("deferred_resume_candidates")
+    if not isinstance(candidates, list):
+        candidates = []
+    first_candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+    todo_id = str(first_candidate.get("todo_id") or "<todo_id>")
+    reopen = (
+        f"{command_prefix} todo update --goal-id {goal_id} --todo-id {todo_id}"
+        f"{lifecycle_actor_args} --status open --clear-resume-when "
+        "--reason '<public-safe successor replan reason>'"
+    )
+    if continuation := _deferred_resume_continuation(
+        todo_id, settlement_plan, scheduler_args, typed_quota_guard,
+    ):
+        return [reopen, *continuation]
+    return [
+        reopen,
+        f"{command_prefix} refresh-state --goal-id {goal_id} --classification successor_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
+        quota_spend_action,
+    ]
+
+
 def _admitted_interaction_next_cli_actions(
     payload: dict[str, Any],
     *,
@@ -924,62 +995,18 @@ def _admitted_interaction_next_cli_actions(
     ):
         return [typed_quota_guard]
     if mode == AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value:
-        agent_scope_frontier = (
-            frontier if isinstance(frontier := payload.get("agent_scope_frontier"), dict)
-            else {}
+        return _successor_replan_required_cli_actions(
+            payload,
+            command_prefix=command_prefix,
+            goal_id=goal_id,
+            lifecycle_actor_args=lifecycle_actor_args,
+            typed_quota_guard=typed_quota_guard,
+            settlement_plan=settlement_plan,
+            scheduler_args=scheduler_args,
+            settlement_args=settlement_args,
+            scoped_cli_args=scoped_cli_args,
+            quota_spend_action=quota_spend_action,
         )
-        if cycle_actions := _dependency_cycle_cli_actions(
-            agent_scope_frontier, command_prefix=command_prefix, goal_id=goal_id,
-            lifecycle_actor_args=lifecycle_actor_args, typed_quota_guard=typed_quota_guard,
-        ):
-            return cycle_actions
-        monitor_candidates = agent_scope_frontier.get("monitor_blocked_resume_candidates")
-        if not isinstance(monitor_candidates, list):
-            monitor_candidates = []
-        if monitor_candidates:
-            first_candidate = (
-                monitor_candidates[0]
-                if isinstance(monitor_candidates[0], dict)
-                else {}
-            )
-            monitor_todo_id = str(
-                first_candidate.get("blocking_monitor_todo_id") or "<monitor_todo_id>"
-            )
-            gated_todo_id = str(first_candidate.get("todo_id") or "<gated_todo_id>")
-            return [
-                f"{command_prefix} todo complete --goal-id {goal_id} --todo-id {monitor_todo_id}{lifecycle_actor_args} --evidence '<validated gate evidence>'",
-                f"{command_prefix} todo update --goal-id {goal_id} --todo-id {gated_todo_id}{lifecycle_actor_args} --note '<public-safe gate repair reason>'",
-                f"{command_prefix} refresh-state --goal-id {goal_id} --classification standing_monitor_gate_repair_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
-                quota_spend_action,
-            ]
-        route_candidates = agent_scope_frontier.get("route_continuation_replan_candidates")
-        if not isinstance(route_candidates, list):
-            route_candidates = []
-        if route_candidates:
-            return [
-                f"{command_prefix} todo add --goal-id {goal_id} --role agent --text '<public-safe route continuation advancement todo>'",
-                f"{command_prefix} refresh-state --goal-id {goal_id} --classification route_continuation_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
-                quota_spend_action,
-            ]
-        candidates = agent_scope_frontier.get("deferred_resume_candidates")
-        if not isinstance(candidates, list):
-            candidates = []
-        first_candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-        todo_id = str(first_candidate.get("todo_id") or "<todo_id>")
-        reopen = (
-            f"{command_prefix} todo update --goal-id {goal_id} --todo-id {todo_id}"
-            f"{lifecycle_actor_args} --status open --clear-resume-when "
-            "--reason '<public-safe successor replan reason>'"
-        )
-        if continuation := _deferred_resume_continuation(
-            todo_id, settlement_plan, scheduler_args, typed_quota_guard,
-        ):
-            return [reopen, *continuation]
-        return [
-            reopen,
-            f"{command_prefix} refresh-state --goal-id {goal_id} --classification successor_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
-            quota_spend_action,
-        ]
     if (
         mode == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
         and _blocked_successor_wait_observation_required(payload)

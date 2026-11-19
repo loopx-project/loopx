@@ -36,6 +36,7 @@ ACTION_KINDS = {
     "gate.resolve",
     "run.correct",
     "operation.execute",
+    "pr.merge",
     "team.plan",
 }
 PROPOSAL_STATES = {
