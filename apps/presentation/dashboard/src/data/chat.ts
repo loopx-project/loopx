@@ -1750,6 +1750,35 @@ const managedTaskEntrySchema = z.object({ok: z.literal(true), session_id: z.stri
 export type ManagedTaskEntry = z.infer<typeof managedTaskEntrySchema>;
 export type ManagedTaskTurn = z.infer<typeof managedTaskTurnSchema>;
 
+const managedTaskValidationSchema = z.object({
+  native_loopx: z.object({
+    schema_version: z.literal("loopx_turn_execution_v0"),
+    dry_run: z.literal(false),
+    validation_stage: z.literal("task_postcondition"),
+    receipt: z.object({ok: z.literal(true), lineage: z.object({
+      goal_id: z.string(), agent_id: z.string(), todo_id: z.string(),
+    })}),
+    validation: z.object({
+      schema_version: z.literal("loopx_turn_task_validation_v0"),
+      status: z.enum(["passed", "failed", "inconclusive", "unavailable"]),
+      ok: z.boolean(),
+      summary: z.string().trim().min(1).max(240),
+    }),
+  }),
+});
+
+/** Read independent checks from an already verified managed Task turn. */
+export function readManagedTaskValidation(turn: ManagedTaskTurn) {
+  if (turn.status !== "completed") return undefined;
+  const parsed = managedTaskValidationSchema.safeParse(turn.response);
+  if (!parsed.success) return undefined;
+  const {receipt: {lineage}, validation} = parsed.data.native_loopx;
+  const {actor, todo_id: todoId} = turn.loopx_request;
+  if (lineage.goal_id !== actor.goal_id || lineage.agent_id !== actor.agent_id || lineage.todo_id !== todoId
+    || validation.ok !== (validation.status === "passed")) return undefined;
+  return validation;
+}
+
 function verifyManagedTaskTurn(turn: ManagedTaskTurn, target: ManagedConversationTarget, operationId: string, todoId?: string) {
   const actor = turn.loopx_request.actor;
   if (turn.session_id !== target.sessionId || turn.client_turn_id !== `managed.${operationId}`

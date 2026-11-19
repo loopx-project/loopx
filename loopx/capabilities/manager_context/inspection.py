@@ -499,7 +499,7 @@ class ManagerInspection:
         # Turn's reader. No durable shadow history or cross-session cache.
         self._report_snapshot = None
 
-    def sources(self):
+    def sources(self) -> list[dict[str, Any]]:
         if self.context.get("scope") == "owner_goal":
             return [{"source_id": "local", "source_host": "local", "status": "available"}]
         from .ssh_evidence import sources

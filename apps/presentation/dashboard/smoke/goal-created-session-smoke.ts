@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {goalCreatedManagedSession} from "../src/features/personal-workspace/goal-created-session";
-import {conversationChannelId, conversationContextKey, createChatSession, fetchChatHistory, type TypedActionProposal} from "../src/data/chat";
+import {conversationChannelId, conversationContextKey, createChatSession, fetchChatHistory,
+  readManagedTaskValidation, type ManagedTaskTurn, type TypedActionProposal} from "../src/data/chat";
 
 const resources = {goal_id: "research", goal_instance_id: null, agent_id: "codex",
   managed_agent_id: "codex", channel_id: "agent.codex", session_id: "original-session"};
@@ -76,4 +77,30 @@ try {
   assert.equal((await fetchChatHistory({channelId: conversationContextKey(context), managed: target}, unavailable)).messages[0].text, "Original result 原始结果");
   assert.ok(requests.every(path => path.startsWith("/api/chat/sessions")));
 } finally {globalThis.fetch = originalFetch;}
+
+const lineage = {goal_id: target.goalId, agent_id: target.agentId, todo_id: "cart-repair"};
+const turn: ManagedTaskTurn = {session_id: target.sessionId, turn_id: "first-task", client_turn_id: "managed.first-task",
+  status: "completed", origin: "native_loopx", loopx_execution: true, loopx_request: {
+    operation: "native_turn", todo_id: lineage.todo_id,
+    actor: {goal_id: target.goalId, agent_id: target.agentId, session_id: target.sessionId},
+  }};
+const postcondition = {schema_version: "loopx_turn_execution_v0", dry_run: false,
+  validation_stage: "task_postcondition", receipt: {ok: true, lineage}};
+const passingCheck = {schema_version: "loopx_turn_task_validation_v0", ok: true, status: "passed", summary: "Checks passed"};
+const checkedTurn = {...turn, response: {native_loopx: {...postcondition, validation: passingCheck}}};
+assert.equal(readManagedTaskValidation(checkedTurn)?.status, "passed");
+assert.equal(readManagedTaskValidation({...turn, response: {native_loopx: {...postcondition,
+  validation: {...passingCheck, ok: false, status: "failed", summary: "One required check failed"}}}})?.status, "failed",
+  "A terminal conversation receipt can carry a failed independent check");
+for (const native_loopx of [
+  {...postcondition, dry_run: true, validation: passingCheck},
+  {...postcondition, validation_stage: "host_result_contract", validation: passingCheck},
+  {...postcondition, validation: {...passingCheck, ok: false}},
+  {...postcondition, receipt: {ok: true, lineage: {...lineage, todo_id: "another-task"}}, validation: passingCheck},
+]) {
+  assert.equal(readManagedTaskValidation({...turn, response: {native_loopx}}), undefined,
+    "Simulation, unrelated lineage and inconsistent receipts cannot certify the selected Task");
+}
+assert.equal(readManagedTaskValidation(turn), undefined, "Legacy responses cannot attest a check");
+assert.equal(readManagedTaskValidation({...checkedTurn, status: "running"}), undefined);
 console.log("goal-created-session: original owner/history, replay, legacy parity and identity failure/recovery passed");
