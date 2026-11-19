@@ -16,7 +16,7 @@ import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { decideCollaborationLifecycle } from "./goal_instance_lifecycle.ts";
 import { resolveConversationScope } from "./conversation_scope.ts";
-import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText, usesReaderReturnFormat } from "./result_publication.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText, returnMessageId, usesReaderReturnFormat } from "./result_publication.ts";
 
 export const MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA =
   "manager_return_delivery_attempt_v0";
@@ -446,14 +446,9 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
   const text = usesReaderReturnFormat(reply) ? `${body}\n\n${provenance}` : `${provenance}\n\n${body}`;
 
   return returnResponse({ action: privateConversation ? "private" : verify ? "verify" : "send",
-    text, message_id: returnMessageId(command), attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],
+    text, message_id: returnMessageId(String(command.request.request_id), command.key),
+    attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],
     revision: deliveryRevision(state), token: (state.admission as JsonObject | undefined)?.token ?? null });
-}
-
-function returnMessageId(command: ReturnCommand): string {
-  // Retain Python json.dumps' spaces in the existing ASCII-only message identity.
-  const identity = JSON.stringify([command.request.request_id, command.key]).replace(",", ", ");
-  return "handoff." + createHash("sha256").update(identity).digest("hex");
 }
 
 function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject {
@@ -461,7 +456,8 @@ function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject 
   requireStringLiteral(outcome.kind, ["private", "sent", "conflict", "verify_unavailable", "locator_unavailable",
     "verified", "error", "verification_error", "sender_unavailable"], "return outcome kind");
   if (outcome.kind === "private" || outcome.kind === "sent" && outcome.reply_verified === true) {
-    return { status: "delivered", delivered_at: command.now, message_id: returnMessageId(command),
+    return { status: "delivered", delivered_at: command.now,
+      message_id: returnMessageId(String(command.request.request_id), command.key),
       ...(outcome.kind === "sent" ? { provider_receipt: outcome.idempotency_key, reply_verified: true } : {}) };
   }
   if (outcome.kind === "conflict") return { status: "explicit_unverified", error: "manager_return_payload_conflict" };
@@ -478,7 +474,8 @@ function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject 
         status: command.exact ? "retry_pending" : "verification_required" };
     }
     return checked.status === "delivered"
-      ? { status: "delivered", delivered_at: command.now, message_id: returnMessageId(command),
+      ? { status: "delivered", delivered_at: command.now,
+        message_id: returnMessageId(String(command.request.request_id), command.key),
         provider_receipt: normalizeManagerReturnDeliveryAttempt(state.attempt).provider_receipt,
         reply_verified: true, verification: checked.verification }
       : checked.status === "explicit_unverified" ? { status: checked.status, error: checked.error }

@@ -17,6 +17,12 @@ function decisionKey(revision: number): string {
 }
 const UPDATE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
 
+export function returnMessageId(requestId: string, resultKey: string): string {
+  // Retain Python json.dumps' spaces in the existing ASCII-only message identity.
+  const identity = JSON.stringify([requestId, resultKey]).replace(",", ", ");
+  return "handoff." + createHash("sha256").update(identity).digest("hex");
+}
+
 /** Receiver-authored scope on an immutable result, not a completion verdict or scheduler. */
 export function resultRemainingWork(value: unknown): JsonObject | null {
   if (value === undefined || value === null) return null;

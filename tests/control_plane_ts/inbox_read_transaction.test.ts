@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import test from "node:test";
 import {mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
@@ -39,6 +40,11 @@ function fixture(t: test.TestContext, profile: keyof typeof targets = "exact") {
 }
 function sourceBytes(folder: string): [string, string][] {
   return readdirSync(folder).sort().map(name => [name, readFileSync(join(folder, name)).toString("hex")]);
+}
+
+function deliveredMessage(requestId: string, key: string): JsonObject {
+  return {status: "delivered",
+    message_id: "handoff." + createHash("sha256").update(`["${requestId}", "${key}"]`).digest("hex")};
 }
 
 for (const profile of ["legacy", "exact"] as const) {
@@ -237,7 +243,8 @@ test("peer-return transport reads remain pending until a concrete model Turn rec
   const replies = join(f.base, "replies", row.request_id);
   mkdirSync(replies, {recursive: true});
   writeFileSync(join(replies, "conclusion.json"), JSON.stringify({...identity, phase: "conclusion",
-    decision: "adopt", text: "Checked result", created_at: "2026-10-19T00:00:00Z"}));
+    decision: "adopt", text: "Checked result", created_at: "2026-10-19T00:00:00Z",
+    remaining_work: {summary: "Read the final package", resume_when: "The package becomes available"}}));
   const delivery = join(replies, "conclusion.delivery.json");
 
   await assert.rejects(f.call("receiver_read", {turn_instance_id: "bad/turn"}), /work Turn identity is invalid/);
@@ -246,6 +253,9 @@ test("peer-return transport reads remain pending until a concrete model Turn rec
   const transport = JSON.parse(readFileSync(delivery, "utf8"));
   assert.equal(transport.kind, "requester_cli_read");
   assert.equal(transport.model_turn, undefined);
+  const receiverView = (await f.call("pending", {attention_only: true, agent_id: "reviewer"})).result as JsonObject;
+  assert.deepEqual(receiverView.items, []);
+  assert.equal((receiverView.open_request_summaries as JsonObject[])[0].request_id, row.request_id);
   await f.call("receiver_read", {turn_instance_id: "turn-a"});
   const supplied = readFileSync(delivery);
   assert.deepEqual(JSON.parse(supplied.toString()).model_turn,
@@ -282,7 +292,7 @@ for (const profile of ["legacy", "exact"] as const) {
       writeFileSync(join(replies, key(n) + ".json"), JSON.stringify({...identity, phase: "conclusion", decision: "adopt",
         text: "Recorded evidence " + n + "😀".repeat(2000), remaining_work,
         ...(n ? {result_key: key(n), previous_result_key: key(n - 1), update_id: "evidence-" + n} : {})}));
-      writeFileSync(join(replies, key(n) + ".delivery.json"), JSON.stringify({status: "delivered"}));
+      writeFileSync(join(replies, key(n) + ".delivery.json"), JSON.stringify(deliveredMessage(row.request_id, key(n))));
     }
     const original = sourceBytes(replies);
     const pending = (await f.call("pending")).result as JsonObject;
@@ -337,7 +347,7 @@ test("attention pagination retains a delivered remainder outside the compact age
   const remaining_work = {summary: "Validate the package", resume_when: "The build is ready"};
   writeFileSync(join(replies, "conclusion.json"), JSON.stringify({...identity, phase: "conclusion",
     decision: "adopt", text: "Source verification passed.", remaining_work}));
-  writeFileSync(join(replies, "conclusion.delivery.json"), JSON.stringify({status: "delivered"}));
+  writeFileSync(join(replies, "conclusion.delivery.json"), JSON.stringify(deliveredMessage(row.request_id, "conclusion")));
 
   const first = await f.call("receiver_read", {attention_only: true});
   const firstPage = first.result as JsonObject, context = first.context as JsonObject;

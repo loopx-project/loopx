@@ -13,7 +13,7 @@ import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringLiter
 import {decideCollaborationLifecycle} from "./goal_instance_lifecycle.ts";
 import {inspectCollaborationInboxReceipts, projectReceiverFollowthrough} from "./inbox_receipts.ts";
 import {recordControlledRequestRead} from "./request_control.ts";
-import {planCollaborationResult} from "./result_publication.ts";
+import {planCollaborationResult, returnMessageId} from "./result_publication.ts";
 import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, verifyOriginalConversationReturnRoute} from "./semantic_request.ts";
 import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
 import {isNativeChildResultCursor, nativeChildResultInbox} from "../capabilities/native_child_result_inbox.ts";
@@ -389,6 +389,21 @@ async function collectReturns(source: InboxSource, page: PeerReturnPage | null =
   return {view: {items: items.slice(0, 20), has_more: hasMore,
     ...(hasMore && nextCursor ? {next_cursor: nextCursor} : {})}, deliveries};
 }
+function peerDeliveryIdentity(row: JsonObject, reply: JsonObject, key: string): JsonObject {
+  return {status: "delivered",
+    ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
+    ...(row.recipient !== undefined ? {requester: row.requester, recipient: row.recipient}
+      : Object.hasOwn(row, "goal_ref") ? {goal_ref: row.goal_ref} : {})};
+}
+
+function partialDeliveryMatches(row: JsonObject, reply: JsonObject, key: string, state: JsonObject): boolean {
+  if (row.source_kind === "peer" && state.kind === "requester_cli_read") {
+    return Object.entries(peerDeliveryIdentity(row, reply, key))
+      .every(([field, value]) => equal(state[field], value));
+  }
+  return state.message_id === returnMessageId(requestId(row.request_id), key);
+}
+
 function replyStatuses(root: string, row: JsonObject): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
   return resultKeys(folder).map(key => {
@@ -410,6 +425,10 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
     if (typeof status !== "string" || !DELIVERY_STATUSES.has(status)
         || error !== null && (typeof error !== "string" || !DELIVERY_ERRORS.has(error))) {
       status = "explicit_unverified"; error = "delivery_state_unreadable";
+    }
+    if (status === "delivered" && phase === "conclusion" && reply.remaining_work != null
+        && !partialDeliveryMatches(row, reply, key, state)) {
+      fail("partial delegation result delivery scope mismatch");
     }
     return {...identity, status, created_at: reply.created_at ?? null,
       delivered_at: typeof state.delivered_at === "string" && [...state.delivered_at].length <= 80 ? state.delivered_at : null,
@@ -568,10 +587,7 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
       if (stored.source_agent_id !== source.agent) fail("peer return scope mismatch");
       if (!conversation) lifecycle(source, "read_record", stored);
       const prior = present(path) ? readRecord(path) : null;
-      const identity = {status: "delivered",
-        ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
-        ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
-          : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})};
+      const identity = peerDeliveryIdentity(stored, reply, key);
       if (prior && Object.entries(identity).some(([field, value]) => !equal(prior[field], value))) {
         fail("peer return delivery receipt scope mismatch");
       }

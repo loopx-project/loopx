@@ -152,18 +152,24 @@ def test_before_work_reader_preserves_delivered_partial_work_without_repeating_t
                remaining_work=remainder)
         delivered[rid] = brief
     drain(root, registry, store, lambda *_: pytest.fail("local return does not use an external sender"))
-    # One formerly delivered reply can no longer be verified.
-    unreadable, *_ = delivered
+    # Preserve the original brief when the delivery is unreadable or points to another request.
+    unreadable, mismatched, matching, *_ = delivered
     delivery_file = _root(root) / "replies" / unreadable / "conclusion.delivery.json"
     assert delivery_file.is_file()
     delivery_file.write_text("{invalid")
+    wrong_delivery = _root(root) / "replies" / mismatched / "conclusion.delivery.json"
+    original_delivery = wrong_delivery.read_bytes()
+    other_delivery = _root(root) / "replies" / matching / "conclusion.delivery.json"
+    wrong_message = json.loads(other_delivery.read_bytes())["message_id"]
+    assert wrong_message != json.loads(original_delivery)["message_id"]
+    wrong_delivery.write_text(json.dumps({**json.loads(original_delivery), "message_id": wrong_message}))
     _, _, queued = create()
     queued_id = queued["request_id"]
     acknowledge(root, "research", "worker", queued_id, "adopt", "Continue validation")
     report(root, "research", "worker", queued_id, "conclusion", "The first check passed.",
            remaining_work=remainder)
     _, _, fresh = create()
-    expected = {fresh["request_id"], queued_id, unreadable}
+    expected = {fresh["request_id"], queued_id, unreadable, mismatched}
 
     for _ in range(2):
         dispatch = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "worker")])
@@ -177,7 +183,18 @@ def test_before_work_reader_preserves_delivered_partial_work_without_repeating_t
         compact = {row["request_id"]: row for row in view["unfinished_delegations"]["items"]}
         assert set(compact) == set(delivered) | expected
         assert all(compact[rid]["remaining_work"] == remainder for rid in delivered)
+        assert compact[mismatched]["step"] == "recover_evidence"
+        mismatched_item = next(row for row in view["items"] if row["request_id"] == mismatched)
+        assert mismatched_item["brief"] == delivered[mismatched]
         assert "--attention-only" not in view["unfinished_delegations"]["read_command"]
+
+    assert json.loads(wrong_delivery.read_bytes())["message_id"] == wrong_message
+    wrong_delivery.write_bytes(original_delivery)
+    restored = subprocess.run(command, cwd=root, capture_output=True, check=True, timeout=60)
+    restored_view = json.loads(restored.stdout)
+    assert {row["request_id"] for row in restored_view["items"]} == expected - {mismatched}
+    assert matching in {row["request_id"] for row in restored_view["open_request_summaries"]}
+    assert mismatched in {row["request_id"] for row in restored_view["open_request_summaries"]}
 
     entire = subprocess.run([arg for arg in command if arg != "--attention-only"],
                             cwd=root, capture_output=True, timeout=60)
