@@ -59,17 +59,28 @@ def _resolve_binding(binding_path: Path, target_path: Path, goal_id: str, actor:
 def build_work_card(packet: dict[str, Any]) -> dict[str, Any]:
     """Only content-minimal, validated projection/receipt fields reach the room."""
     validate_public_safe_value(packet)
-    projection = packet.get("projection") or {}
     receipt = packet.get("receipt")
+    if receipt:
+        # A claim result card is the message identity of one accepted
+        # operation. It carries immutable acceptance facts only, so a
+        # lost-response recovery rebuilds the exact original card even after
+        # unrelated work moved the live projection. Current revision, claimable
+        # counts and current ownership stay in the separate live projection
+        # (`work project`) and the machine readback, never in this identity.
+        body = (f"Goal: {packet['goal_id']}\nAgent: {packet['actor_id']}\n"
+            f"Historical claim receipt: {receipt['acceptance']} · Task: {receipt['todo_id']}\n"
+            f"Receipt: {receipt['receipt_id']}")
+        body += "\nRead-only orientation. Claim through the scoped Agent CLI; recheck current authority after reconnect."
+        return {"config": {"wide_screen_mode": True},
+            "header": {"title": {"tag": "plain_text", "content": "LoopX work"}},
+            "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": body}}]}
+    projection = packet.get("projection") or {}
     selected = projection.get("selected_todo") or {}
     counts = projection.get("counts") or {}
     body = (f"Goal: {packet['goal_id']}\nAgent: {packet['actor_id']}\n"
         f"Available tasks: {counts.get('unclaimed', 0)} · User gates: {counts.get('user_gates', 0)}\n"
         f"Selected task: {selected.get('todo_id') or 'none'}\n"
         f"Revision: {projection.get('source_revision') or 'unavailable'}")
-    if receipt:
-        # Replays publish the same semantic acceptance card and provider key.
-        body += f"\nHistorical claim receipt: {receipt['acceptance']} · Task: {receipt['todo_id']}\nCurrent owner: {receipt.get('current_owner') or 'none'}\nReceipt: {receipt['receipt_id']}"
     body += "\nRead-only orientation. Claim through the scoped Agent CLI; recheck current authority after reconnect."
     envelope = packet.get("projection_envelope") or {}
     if envelope.get("alert") is not False:
@@ -204,7 +215,20 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
             # Stable card identity permits lost-response recovery independently
             # of the accepted state transition. No new claim is minted here.
             card = build_work_card(packet)
-            key = "room-work:" + hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest()
+            if command == "claim" and idempotency_key is not None:
+                # One accepted operation owns one provider key. Derive it from
+                # the immutable claim identity, never from live card content:
+                # an unrelated projection change between the original send and
+                # its recovery must not mint a second key or card. The
+                # transport checks the original send first (exact card history
+                # match under the same key) before any external write.
+                key = "room-work-claim:" + hashlib.sha256(json.dumps({
+                    "goal_id": goal_id, "todo_id": str(todo_id), "actor_id": actor_id,
+                    "operation_id": str(idempotency_key)}, sort_keys=True).encode()).hexdigest()
+            else:
+                # Orientation publishes are fresh observations: identical
+                # content deduplicates, a changed observation is a new message.
+                key = "room-work:" + hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest()
             sent = session.send(card, key, route)
             packet["external_write_performed"] = sent.get("external_write_performed") is True
             readback = session.readback(str(sent["message_id"]))

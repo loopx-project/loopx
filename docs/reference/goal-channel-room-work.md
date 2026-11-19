@@ -97,6 +97,18 @@ historical acceptance; it does not renew or acquire a lease. The receipt reports
 `execution_authority_granted=false`. Execution still needs current quota,
 applicable gates and, in hard-lease mode, a separate current lease acquisition.
 
+A claim result card is the message identity of the one accepted operation. It
+carries immutable acceptance facts only (Goal, Agent, task, acceptance,
+receipt id); the live revision, claimable counts and current ownership stay in
+the separate `work project` orientation and the machine readback, never in
+this identity. The provider idempotency key is likewise derived from the
+claim identity (Goal, Todo, Agent, original key), not from card content, so
+an unrelated Todo write between the original send and its recovery cannot
+mint a second key. Recovery checks the original send first — the transport
+matches the rebuilt immutable card against exact Bot history under the same
+key — and only an unmatched operation performs an external write. Readers
+therefore get exactly one readable card per accepted claim.
+
 Check current canonical ownership through the existing direct CLI:
 
 ```sh
@@ -300,7 +312,11 @@ canonical Todo owner，并保留 v3 的来源守卫。原生 owner 在 provider�
 不自动发送卡片，也不把群成员、卡片、投递或记忆当作执行权限。
 
 竞争领取在权威事务内校验 revision；相同 key 的重试恢复历史接受结果，不能续租。
-当前 owner、历史回执与消息读回分别呈现。领取成功但消息失败时保留接受事实；
+当前 owner、历史回执与消息读回分别呈现。领取结果卡只承载一次已接受操作的不可变
+事实（Goal、Agent、任务、接受状态、回执 id），provider 幂等键同样由领取身份而非
+卡内容派生；无关待办变动不能在恢复时生成第二个键或第二张卡，恢复先按原键核对
+原发送，仅未匹配的操作才外发。实时 revision、可领数量与当前归属继续由独立的
+`work project` 投影与机器读回提供。领取成功但消息失败时保留接受事实；
 重新连接后复核当前身份、连接、权威、quota 和 lease。绑定给其他 Agent 的任务会被拒绝，
 这一修复也适用于直接的 promoted Todo claim。
 

@@ -207,6 +207,52 @@ def test_reconnect_after_unknown_delivery_reuses_canonical_receipt(setup):
     assert snapshot(args)["provider_revision"] == committed
 
 
+def _add_unrelated_todo(args):
+    """A normal, unrelated Todo write between two attempts of one claim."""
+    proc = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
+        "--format", "json", "todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--text", "Unrelated work added while the first claim response was lost"],
+        cwd=ROOT, text=True, capture_output=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PRIVATE_" not in proc.stdout
+
+
+@pytest.mark.parametrize("intermediate_change", [True, False])
+def test_unknown_delivery_recovery_binds_one_card_to_the_accepted_operation(setup, intermediate_change):
+    """One accepted claim owns exactly one room card. The first send is
+    recorded by the transport and its response lost; an unrelated Todo write
+    may change the live projection in between. Recovery with the original
+    Agent/Todo/revision/key must reuse the accepted receipt and the original
+    message instead of minting a second card with a fresh provider key."""
+    args, room, _ = setup
+    revision = snapshot(args)["provider_revision"]
+    room.fail_send = True
+    first = claim(args, "agent-a", revision, "room-lost-plus-change")
+    assert first["canonical_claim_accepted"] and not first["ok"], first
+    assert first["external_write_performed"] and first["blocker"] == "delivery_outcome_unknown"
+    receipt_id = first["receipt"]["receipt_id"]
+    committed = snapshot(args)["provider_revision"]
+    assert committed != revision
+    if intermediate_change:
+        _add_unrelated_todo(args)
+        changed = snapshot(args)["provider_revision"]
+        assert changed != committed, "intermediate unrelated write must move the projection"
+    recovered = claim(args, "agent-a", revision, "room-lost-plus-change")
+    assert recovered["ok"] and recovered["status"] == "already_applied", recovered
+    assert recovered["canonical_claim_accepted"] is True
+    assert recovered["receipt"]["receipt_id"] == receipt_id
+    # The claim transition happened exactly once; no second canonical effect.
+    final = snapshot(args)
+    claimed = [todo for todo in final["todos"] if todo["todo_id"] == TODO]
+    assert len(claimed) == 1 and claimed[0]["claimed_by"] == "agent-a"
+    if not intermediate_change:
+        assert final["provider_revision"] == committed
+    # One accepted operation, one readable room card: the recovery reuses the
+    # original send instead of publishing a second card.
+    assert len(room.messages) == 1, [m["body"]["content"] for m in room.messages]
+    assert "PRIVATE_" not in json.dumps(room.messages)
+
+
 def test_revocation_and_auth_failure_cannot_create_or_replay_claim(setup):
     args, room, binding = setup
     before = snapshot(args)["provider_revision"]
