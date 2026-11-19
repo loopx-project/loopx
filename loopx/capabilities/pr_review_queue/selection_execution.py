@@ -124,8 +124,7 @@ def materialize_review_execution(
         "merge_readiness_observation": readiness_observation,
     }
     if not action_kind:
-        # No action is an inventory decision, not evidence that a review exists.
-        # Keep its explanation beside selection so every presentation uses the
+                # Keep its explanation beside selection so every presentation uses the
         # same lifecycle/conclusion facts without granting another action.
         if item.get("is_draft") is True:
             instruction = "Draft PR: read back submission state and any recorded conclusion."

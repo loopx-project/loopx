@@ -568,3 +568,53 @@ def test_exact_heartbeat_requires_agent_and_receipt_producing_profile() -> None:
             runtime_profile="codex_cli",
             turn_instance_id="turn-exact",
         )
+
+
+def test_antigravity_app_heartbeat_prompt_guides_inplace_schedule_patrol_within_budget() -> None:
+    for mode in ("full", "compact", "brief", "thin"):
+        for scope_chars in (0, 320):
+            for explicit_route in (False, True):
+                for reward_memory_enabled in (False, True):
+                    profile = {"scope_summary": "x" * scope_chars} if scope_chars else None
+                    route = (
+                        {"registry_path": "/fixture/registry.json", "runtime_root": "/fixture/runtime"}
+                        if explicit_route
+                        else {}
+                    )
+                    payload = build_heartbeat_prompt(
+                        goal_id="reward-memory-budget-fixture",
+                        agent_id="worker-a",
+                        registered_agents=["worker-a"],
+                        agent_profile=profile,
+                        runtime_profile="antigravity_app",
+                        reward_memory_enabled=reward_memory_enabled,
+                        **route,
+                        **{mode: True},
+                    )
+                    body = str(payload["task_body"])
+                    assert payload["interface_budget"]["within_budget"] is True, (
+                        mode,
+                        scope_chars,
+                        explicit_route,
+                        reward_memory_enabled,
+                    )
+                    assert "automation_update" not in body, mode
+                    assert "DurationSeconds=max(180, interval*60)" in body, mode
+                    assert 'TimerCondition="any"' in body, mode
+                    assert "3->6->10" in body, mode
+                    assert ".worktrees/" in body, mode
+                    assert "manage_task" in body, mode
+                    assert "do not re-arm" in body, mode
+                    assert "pause_or_delete_current_heartbeat" in body, mode
+
+    codex_payload = build_heartbeat_prompt(
+        goal_id="loopx-meta",
+        agent_id="codex-side-bypass",
+        registered_agents=["codex-side-bypass"],
+        runtime_profile="codex_app_heartbeat",
+        thin=True,
+    )
+    codex_body = str(codex_payload["task_body"])
+    assert "automation_update" in codex_body
+    assert 'TimerCondition="any"' not in codex_body
+    assert "DurationSeconds=max(180, interval*60)" not in codex_body

@@ -27,9 +27,7 @@ tool output must not enter public status or evidence artifacts.
 
 For an active-user collaboration lane, request a writable feed mount and use
 the pull-based commands documented by the returned
-`active_user_intervention_channel_contract`. This channel does not expose hidden
-tests, expected solutions, evaluator answers, credentials, or private project
-material, and it does not authorize score or leaderboard claims.
+`active_user_intervention_channel_contract`.
 
 The same `worker-bridge` surface also carries the provider-neutral
 [`attached Agent session broker`](attached-agent-session-broker.md). That

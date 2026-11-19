@@ -3,7 +3,6 @@
 Canonical Goals use the existing AuthorityStore transaction and projection outbox.
 Pre-cutoff Markdown receipts remain read-only historical results.
 Source locks and historical receipt readers remain shared IO.
-Neither adapter grants receiver adoption or execution authority.
 """
 from __future__ import annotations
 

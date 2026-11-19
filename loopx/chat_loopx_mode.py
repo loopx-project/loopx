@@ -1043,8 +1043,7 @@ class ChatLoopXMode:
                         result = service.read(operation_id)
             else:
                 raise ValueError("unsupported collaboration action")
-            # Goal acceptance responses also carry a status, but they are
-            # neither member deliveries nor evidence for observing a wake.
+
             if action in {"start", "read", "wait", "resume", "revalidate", "adopt"} and "status" in result:
                 if result["status"] == "accepted":
                     # Seen inside this Turn: the pending wake would be redundant.

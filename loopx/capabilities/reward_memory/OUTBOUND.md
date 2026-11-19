@@ -80,8 +80,7 @@ grant permission. It does not enforce bans through unrelated senders.
 
 Enabled agents with missing/invalid configuration or inconsistent corpus scope
 now receive `configuration_error` and zero sends, before any memory-provider call.
-Previously these failures silently removed the hook. Neither urgency nor an old
-review digest waives the error. Repair and check `reward-memory experiment-status`;
+Previously these failures silently removed the hook. Repair and check `reward-memory experiment-status`.
 do not discard invalid required fields or automatically disable the capability.
 Explicitly disabled agents, valid `automatic_recall: false` configurations and
 valid configurations without this surface still preserve the original sender.
@@ -95,7 +94,6 @@ precede the final guidance limit; this is bounded refill, not an exhaustive scan
 Validate with the real destination and purpose preview above, without putting
 the desired answer or candidate ID in the message. Check that required refs are
 present, `required_guidance_complete` is true, and external writes remain false.
-Ingest-verification search alone does not prove this business recall path.
 
 Purposes are `help`, `progress`, `urgent`, and default `unspecified`; there is
 no substring inference from message text. Urgent notices recall guidance but

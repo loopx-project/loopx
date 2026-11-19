@@ -1,8 +1,7 @@
 # Targeted diagnosis and command cost
 
 Choose the missing fact, then the existing owner that can answer it. Preserve
-the current Goal, runtime/registry route, Agent and Turn identity; diagnosis
-does not authorize borrowing another session's identity or changing providers.
+the current Goal, runtime/registry route, Agent and Turn identity.
 
 | Missing fact | First useful surface |
 | --- | --- |
@@ -25,8 +24,7 @@ For an already repaired defect, keep the original receipt and binding intact.
 Qualify the installed runtime after an authorized upgrade and add missing
 composition coverage instead of duplicating the fix or marking the Todo blocked
 merely to escape a receipt conflict. Upgrading and resetting task state are
-different actions; neither a successful installation nor a fresh Turn proves
-recovery of the original operation.
+different actions.
 
 ## Read one response more than once, not one command
 
@@ -58,8 +56,7 @@ private file with restricted permissions, or in the tool runtime's value store.
 Keep the command exit status and validate that the capture is complete JSON.
 Select fields from that saved response; if you need additional fields, read
 the same capture. Do not rerun a costly or stateful command just to increase
-`max_output_tokens`. A tool's truncated display does not mean the command
-failed or did not commit.
+`max_output_tokens`.
 
 Use server-side selectors where they exist: `todo list --todo-id` for a known
 Todo and a bounded `pr-review --limit` for queue selection. A shell `jq` filter
@@ -97,9 +94,7 @@ The child output budget does not raise the enclosing code cell's output budget.
 
 If the handle was already lost and the operation may have committed, recover its
 original receipt or digest-bound capture before considering another execution.
-Preserve Goal, Agent, Turn and operation identity. A directory listing, a wrapper's
-"completed" label or a later file's existence does not prove the child outcome,
-full context delivery or current authority.
+Preserve Goal, Agent, Turn and operation identity. A directory listing.
 
 ### Separate tool waits from command duration
 
@@ -157,5 +152,4 @@ do not apply retired File-v0 whole-history-write assumptions to File-v1.
 Prove a shared optimization through
 the common read/transaction contract, then qualify each affected real backend.
 Preserve original-receipt recovery, stale-revision rejection and missing-state
-fail-closed behavior. A successful promotion establishes authority ownership;
-it does not establish latency or capacity equivalence to the previous path.
+fail-closed behavior. A successful promotion establishes authority ownership.

@@ -337,7 +337,7 @@ def build_goal_channel_projection(
 ) -> dict[str, Any]:
     """Build a read-only channel snapshot for a LoopX goal.
 
-    The returned object is a frontstage projection, not a new source of truth.
+    The returned object is a frontstage projection.
     It summarizes existing compact status/quota/history/todo surfaces and
     records raw/private-looking inputs as warnings without copying their values.
     """
@@ -385,6 +385,8 @@ def build_goal_channel_projection(
         "mode": "read_only",
         "generated_at": _text(generated_at, limit=80),
         "display_name": _first_text(
+            # History carries the current registry name, including after a rename.
+            run_history_goal_dict.get("display_name"),
             project_asset.get("display_name"),
             status_item_dict.get("display_name"),
             status_item_dict.get("domain"),

@@ -709,8 +709,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("observation_delta contains an unknown typed outcome");
   }
   const identityOutcome = outcomes.some(outcome => PROGRESS_IDENTITY_OUTCOMES.has(outcome));
-  // A claim already made while the obligation formed is not a new disposition,
-  // whatever the delta against the single baseline says.
+
   const replayed = externalReview && observation.observation_repeated === true;
   const identityWithoutEvidence = externalReview && identityOutcome && !replayed &&
     observation.evidence_novel !== true;

@@ -85,7 +85,7 @@ Review the full proposed edit, not only its opening or poster:
   may be treated as alternatives rather than mixed together. For one intended
   soundtrack, render a mix containing every required layer and check narration
   at the opening and inserted shots; a nonzero full-film peak can hide silent
-  passages. This does not replace listening to the complete result.
+  passages.
 
 工程宣发先按完整时间线铺开材料，再选能说明核心机制、技术价值和实际结果的
 案例；近期 PR、改动行数和醒目数字不能替代选材理由。选材改变时，同步修订
@@ -96,7 +96,7 @@ Review the full proposed edit, not only its opening or poster:
 提高信息密度不靠小字、加速语音或强行缩短停顿。条件、单位、反例和来源必须
 仍能读懂。完整听看声音衔接、字幕节奏和实际观看尺寸；未做听审或观众理解
 测试就保留未验证，不以成功导出代替创作质量。在实际审阅播放器中检查完整
-播放、跨剪辑点拖动、字幕和版本切换；本地解码通过不代表浏览器兼容。
+播放、跨剪辑点拖动、字幕和版本切换；
 还应核对播放器实际选择的音轨：独立旁白轨可能被当作备选轨，而非同时
 混音。只有一套配音时，导出包含全部所需声音层的混音，并核对开场和新增镜头
 是否有旁白；整片峰值非零不能排除局部静音，也不能替代完整听审。以上
@@ -314,8 +314,7 @@ user's provider, and another Agent's private corpus is not a shared seed store.
    [`agent_workflow.turn_admission`](../agent_turn_recall/README.md) surface,
    configured to the compatible corpus with automatic recall enabled. Name
    actual X preparation in the selected Todo so its bounded query can retrieve
-   the relevant experience. Memory availability is not proof of recall, and
-   recall is not proof that the Agent applied or verified the lesson.
+   the relevant experience.
 
 经验种子读取、写入个人 memory、下一轮召回、当前操作验证，是四个不同结果。
 未配置或不可用时，直接参考仓库种子并如实报告，不冒称“已入库/已召回”。后续

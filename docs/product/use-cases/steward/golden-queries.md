@@ -20,8 +20,7 @@ This pack qualifies the [overall roadmap R1–R3](../../../architecture/rfcs/loo
 and [shared conversation surface](../../../architecture/rfcs/intelligent-review-presentation-surfaces-v0.md#88-reusable-conversation-work-surface).
 It adds no capability, runtime schema, routing keyword list or scheduler.
 Canonical Todos own implementation work; this document owns case intent and
-evaluation rules. Existing [workspace qualification](README.md) uses synthetic
-turns and does not establish these live outcomes.
+evaluation rules.
 
 ## Request style / 请求写法
 
@@ -71,7 +70,7 @@ past the compact scheduling label, with a public evidence link. The App detail
 and provider notice must retain the request object and available evidence. Two
 requests with the same title remain distinguishable; a replay sends no second
 notice. Bound oversized content explicitly and preserve redaction. A notification
-is a preview, not proof of approval, execution or a fresh authorization grant.
+is a preview.
 
 ### A working receiver still owes this request / 负责人正在工作，仍需接续这条请求
 
@@ -114,8 +113,7 @@ App/channel result without human reminders or manual relay.
 “这些已经交办的事，落实后把结果带回来。” / “Finish the requests I delegated
 and bring the results back.” This is a GQ03/GQ07–GQ09 journey under
 [handoff RFC §5.15](../../../architecture/rfcs/capable-manager-semantic-handoff-v0.md#515-accepted-requests-remain-accountable-through-fulfillment),
-with A25–A28 acceptance. It does not authorize bulk execution, cancellation,
-priority changes or creation of another task authority.
+with A25–A28 acceptance.
 
 Freeze a disposable source with more than 40 requests, several qualified
 receivers, mixed dispositions and long original content. Include two requests
@@ -163,7 +161,7 @@ while a mention or verified bot reply still works. Bots, missing sender evidence
 historical backfill (even with an old mention), an unrelated group and a worker's
 own Topic are negative cases. This admission probe does not qualify autonomous
 execution: the external read-only profile and recipient grants must be evaluated
-separately. Passing transport fixtures is not evidence of a deployed group run.
+separately.
 
 #### Source-bound follow-ups / 找准追问对象
 
@@ -300,8 +298,7 @@ suggestions. Unknown requirements stay unspecified. Selecting a suggestion must
 only fill the composer; a free-text correction must remain usable. After a reply,
 reload and recover the corrected draft, optionally open the existing Goal form and edit its
 criteria, preview and explicitly apply once, then inspect the creation receipt.
-Before confirmation there is no Goal/action write or worker launch. A draft is
-neither a created Goal nor completed research. Ask an ordinary explanatory question
+Before confirmation there is no Goal/action write or worker launch. Ask an ordinary explanatory question
 and confirm no draft appears. Reject an attempted permission/Agent-binding field
 inside a draft. Qualify model response quality separately from scripted transport
 and packaged-browser tests; the full GQ01 start-and-return outcome remains open.
@@ -338,7 +335,6 @@ high reasoning, a fresh disposable working directory per case and the current
 host login. API raw-envelope integrity and Codex adapter outcomes are separate
 measurements, not interchangeable provider scores. Fixed contexts do not certify dynamic tool
 discovery or receiver adoption. Compare providers/settings separately.
-
 
 ### App-first execution profiles and ordinary questions
 
@@ -528,8 +524,7 @@ documents conversation/topic identity
 and separate conversation/operation permissions. Its
 [steering study](https://github.com/deepcoldy/botmux/blob/982e2c9f16e4f45ae2581967bc1a35a286e7bfa2/docs/design/2026-05-28-codex-type-ahead-steer-design.md)
 describes merged and separate replies under one tested Codex version. These
-are source observations, not proof of current LoopX behavior or universal
-provider guarantees. Do not install Botmux or bind a live bot to run this case.
+are source observations. Do not install Botmux or bind a live bot to run this case.
 
 Use the existing presentation RFC as the already-indexed twin. The evaluator
 then supplies a small synthetic public note and a disposable work item, varying

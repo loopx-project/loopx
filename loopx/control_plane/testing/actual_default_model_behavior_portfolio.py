@@ -428,7 +428,7 @@ def _write_scenario_project(root: Path) -> tuple[Path, Path]:
         "status": "active", "repo": str(project),
         "state_file": str(state_file.relative_to(project)),
     }
-    # This is a new empty synthetic Goal, not an imported legacy authority.
+    # This is a new empty synthetic Goal.
     # Reuse the first-party typed creation owner before requesting its frontier.
     configure_source_creation_goal(goal, [ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID],
                                    "sqlite", "portfolio-entry-fixture")

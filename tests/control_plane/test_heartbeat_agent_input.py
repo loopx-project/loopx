@@ -36,7 +36,7 @@ def test_peer_prompt_defers_workspace_and_lease_requirements_to_current_contract
     )
     body = payload["task_body"]
     assert "agent_channel.work_context" in body
-    assert "required_reads (or envelope) before work" in body
+    assert "required_reads before work" in body
     assert "quota claim/lease and workspace contract plus repository rules" in body
     assert "use an independent worktree for repository writes" not in body
     assert "independent repo worktree" not in body
@@ -73,6 +73,7 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
     assert f"scope: {scope}" in body
     assert "DONT_NOTIFY: no chat text" in body
     assert "required host quiet result in full" in body
+    assert "required_reads before work" in body
     assert "quota claim/lease and workspace contract plus repository rules" in body
     assert "Follow todo continuation policy" in body
     assert "Task-scoped coordination grants no authority over other agents" in body

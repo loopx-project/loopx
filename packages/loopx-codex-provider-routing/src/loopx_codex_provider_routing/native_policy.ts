@@ -152,8 +152,7 @@ export function account(observation: Observation, now: number): Account {
   const blocked = values.filter(v => v.used === 100);
   if (blocked.length) {
     result.reset_at = Math.max(...blocked.map(v => v.reset!));
-    // Subscription exhaustion alone does not prove a credit-funded account is
-    // unusable. This observer never buys credits or invokes a paid reset.
+        //  This observer never buys credits or invokes a paid reset.
     result.availability = result.credits_available === true ? "available"
       : result.credits_available === false ? "exhausted" : "unknown";
   } else if (values.length && limits.allowed !== false && limits.limit_reached !== true) {

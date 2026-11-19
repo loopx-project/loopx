@@ -44,8 +44,7 @@ def assess_numeric_accuracy(
 
     Missing accuracy and precision=0 are valid but unknown. Conflicting or
     malformed declarations raise ValueError. INF is the producer's declaration
-    about this lexical fact; it does not certify a ratio, rounding policy,
-    first availability, economic equivalence, or an independently true value.
+    about this lexical fact.
     """
     if (
         not isinstance(value, str)

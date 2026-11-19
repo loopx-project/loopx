@@ -108,8 +108,7 @@ def load_json_object_or_file(
 def split_explore_result_input(vision_packet, result_path, *, scope_context=None):
     """Transport explicit attachments; the capability owns validation/conflicts.
 
-    Keep the generic vision packet separate. No attachment means no capability
-    call, and neither ordinary vision fields nor local files imply a finding.
+    Keep the generic vision packet separate.
     """
     attachments = []
     if isinstance(vision_packet, dict) and "explore_result" in vision_packet:

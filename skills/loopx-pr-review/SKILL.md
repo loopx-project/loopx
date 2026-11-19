@@ -74,12 +74,12 @@ or substantive conclusion follows the normal review workflow.
 ## Execute One Review Plan
 
 Receive pending current-session requests through `review_execution_contract.decision_procedure.establish_goal` before generic queue selection, including other agents sharing a GitHub account; task intake and claimed action authority are separate judgments. Resolve the selected requests with repeatable `--target-exact-head NUMBER@HEAD_OID`. Follow `scheduling_policy` and its ranked actionable `review_sequence`; explicit current-request PR selection may override ordering only, never `pull_requests[].review_action_kind` or exact-head idempotency. Generic `re-review`, `重新review`, and `复审` wording selects the named PR; it is not a force-refresh token. Todo/monitor prose may not select work.
-When `review_action_kind` is null, the row stays in `pull_requests` inventory but must not appear in `review_sequence`; its `review_plan` and `review_template` are null and `evidence_commands` is empty. Read the packet's actual no-action reason and read back the relevant lifecycle/draft state or conclusion once; null action does not imply an existing conclusion. If the caller is also the authorized author and its proposal is complete, mark Draft ready and read back its state and unchanged head, then regenerate the packet. Reserve Draft for unfinished author work with a concrete remaining implementation or integration step. Missing review or held CI/merge qualification does not require Draft. A reviewer alone has no authority to change another author's submission state or invent a review action. Run a fresh audit only when the user explicitly requests fresh evidence despite an existing conclusion, or supplies a concrete new concern; regenerate with `--fresh-audit-exact-head NUMBER@HEAD_OID`, then execute the complete current plan and never inherit the earlier approval. Fresh audit is not a Draft bypass. For every actionable PR:
+When `review_action_kind` is null, the row stays in `pull_requests` inventory but must not appear in `review_sequence`; its `review_plan` and `review_template` are null and `evidence_commands` is empty. Read the packet's actual no-action reason and read back the relevant lifecycle/draft state or conclusion once; If the caller is also the authorized author and its proposal is complete, mark Draft ready and read back its state and unchanged head, then regenerate the packet. Reserve Draft for unfinished author work with a concrete remaining implementation or integration step. Missing review or held CI/merge qualification does not require Draft. A reviewer alone has no authority to change another author's submission state or invent a review action. Run a fresh audit only when the user explicitly requests fresh evidence despite an existing conclusion, or supplies a concrete new concern; regenerate with `--fresh-audit-exact-head NUMBER@HEAD_OID`, then execute the complete current plan and never inherit the earlier approval. Fresh audit is not a Draft bypass. For every actionable PR:
 
 When the capability supplies `independent_review` and a null action, read back
 that submitted review and skip duplicate full review. Its source-bound coverage
 does not require this agent's bilingual body format, grant approval or merge
-authority, or clear blockers. Unknown provenance does not establish coverage.
+authority, or clear blockers.
 An explicitly authorized fresh audit uses the same exact-head override above.
 
 1. Record the packet's exact head, then follow `review_execution_contract.decision_procedure`:
@@ -98,24 +98,23 @@ An explicitly authorized fresh audit uses the same exact-head override above.
    loopx --format json pr-review --check-result review-result.json --packet review-packet.json
    ```
 
-   Fix contradictory verdicts, not evidence labels. It cannot verify evidence truth,
+   Fix contradictory verdicts. It cannot verify evidence truth,
    architecture, freshness or a relabeled old result.
 4. Publish the checked `review_body`; recheck after edits. Replace `result.review_body`
-   with the remote readback and rerun `--check-result`; matching does not certify reasoning.
+   with the remote readback and rerun `--check-result`.
 5. Re-read the remote head immediately before verdict and publication; restart evidence if it changed.
 
 Each PR needs independent evidence and a standalone card; a queue table is a preface only.
 
-For managed review, pass `--goal-id GOAL` and execute the packet's current
-`validation_matrix`: its `wait_for_ci`, `validation_source` and
-`failure_attribution` (including `evidence_scope`) own CI observation and failure
-judgment. With `wait_for_ci=false`, never fetch, poll or wait for CI. Keep review
-verdict and merge readiness separate; do not substitute CI metadata for decisive
-changed-invariant evidence. Follow the packet's diagnostic-row rule for unknown
-or red CI; do not invent a CI-success or exhaustive attribution requirement.
-Configure one Goal with `configure-goal --goal-id GOAL
---no-pr-review-wait-for-ci --execute`; clear with
-`--clear-pr-review-configuration --execute`.
+For managed review (including inside worktrees or subagents), pass explicit
+`--registry` and `--goal-id GOAL` to apply `validation_matrix` (`wait_for_ci`,
+`validation_source`, `failure_attribution`); omitting them silently falls back
+to `wait_for_ci=true`. With `wait_for_ci=false`, never fetch, poll or wait for
+CI. Keep review verdict and merge readiness separate; never substitute CI metadata
+for changed-invariant evidence or invent CI-success rules on unknown/red CI.
+Configure `wait_for_ci=false` via `configure-goal --goal-id GOAL
+--no-pr-review-wait-for-ci --execute` (`--clear-pr-review-configuration --execute`
+to clear).
 
 ## Publish And Read Back
 For an open PR, publish validated actionable findings by default unless the user
@@ -135,13 +134,14 @@ owner/GitHub authority, preserving discussion and unresolved reviews. Merge rout
 `loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
 Immediately before every merge, run `loopx --format json pr-review --repo OWNER/REPO
---check-merge-readiness NUMBER@HEAD_OID`. Pass `--goal-id GOAL` when the work is already
-Goal-managed; its compact observation suppresses only unchanged requalification.
-Standalone work requires no Goal and writes no Goal observation. `ready=true` needs no
-bypass. Explicit maintainer authorization means admin bypass may override a readiness
-or GitHub policy hold, but never missing exact-head review,
-required validation, unresolved findings or threads, a changed head, an unmergeable
-conflict, or absent merge authority. Material change reopens qualification.
+--check-merge-readiness NUMBER@HEAD_OID` (pass explicit `--registry` and
+`--goal-id GOAL` on Goal-managed work so `wait_for_ci=false` is honored without
+waiting on remote CI; standalone work needs no Goal). `ready=true` permits
+immediate merge (including `--admin` for author-owned `COMMENTED` approvals or
+unconsulted status checks when `wait_for_ci=false`); explicit maintainer
+authorization means admin bypass may override a readiness or GitHub policy hold,
+never missing exact-head review, validation, unresolved threads, a changed head,
+an unmergeable conflict, or absent merge authority.
 
 ## Full PR Review And Bilingual Format
 

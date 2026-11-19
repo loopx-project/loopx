@@ -268,6 +268,52 @@ def capability_configuration_editor(
                 ),
             ],
         },
+        "steward_memory": {
+            "supported_scopes": ["machine"],
+            "writable_scopes": ["machine"],
+            "fields": [
+                _field(
+                    "enabled",
+                    "Enabled",
+                    "boolean",
+                    required=True,
+                    description=(
+                        "Enable isolated OpenViking long-term memory for owner "
+                        "private steward conversations."
+                    ),
+                ),
+                _field(
+                    "user_space",
+                    "User space",
+                    "text",
+                    required=True,
+                    description=(
+                        "OpenViking user space isolating steward memory on this machine."
+                    ),
+                ),
+                _field(
+                    "auto_recall",
+                    "Auto recall history",
+                    "boolean",
+                    required=True,
+                    description=(
+                        "Run one bounded search across past steward exchanges for "
+                        "substantive private messages."
+                    ),
+                ),
+                _field(
+                    "recall_timeout_seconds",
+                    "Recall timeout (seconds)",
+                    "number",
+                    minimum=1,
+                    maximum=15,
+                    required=True,
+                    description=(
+                        "Maximum wait before continuing normal replies without memory recall."
+                    ),
+                ),
+            ],
+        },
         "multi_subagent": {
             "supported_scopes": ["goal"],
             "writable_scopes": ["goal"],

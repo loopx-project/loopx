@@ -18,7 +18,7 @@ LoopX Core 仍是生命周期和动作权限的唯一 authority。
 
 - 项目状态和信源文档各自变化；
 - 旧判断可能已经过期；
-- 语义召回可以找到线索，但不能证明当前事实；
+- 语义召回可以找到线索
 - 模型建议容易被误当成事实；
 - 如果决策和后续结果没有关联，就难以校准下一次决策。
 
@@ -126,7 +126,7 @@ exact-read 完整度和未覆盖的 P0 source 投影为公开安全的回执。`
 | `decision_outcome_receipt_v0` | 决策之后实际发生了什么？ | 接受的决策、状态迁移、真实结果、失效假设、复核时间 |
 
 Evidence packet 尽量确定性和可审计；proposal 明确只是建议；review receipt
-只结算“这批材料是否已经处理”，不是未来 outcome 的证明。Outcome receipt 是
+只结算“这批材料是否已经处理”。Outcome receipt 是
 追加式证据。只有经过验证的 outcome 才可能生成 Reward Memory candidate，而
 candidate 仍需走 Reward Memory 自己的 review 和 activation。
 
@@ -182,8 +182,7 @@ loopx decision-context recall-context \
 ```
 
 Profile 仍负责 Goal、Agent 与 provider activation gate，但本次 scope 不落盘。
-该命令不扫描 authority source、不读写 cursor、不创建 pending settlement，也不授予
-execution authority。顶层输出显式标记为 `local_private_transient`，因为其中包含供当前
+该命令不扫描 authority source、不读写 cursor、不创建 pending settlement。顶层输出显式标记为 `local_private_transient`，因为其中包含供当前
 Agent 使用的召回原文；嵌套 retrieval receipt 保持 public-safe，只保留查询摘要、
 provider-safe 摘要、分数与哈希引用。每个召回 item 都标记为
 `untrusted_advisory`，不得当作指令执行。
@@ -229,7 +228,7 @@ scope 后重试即可，原 profile 不变。窄屏仍使用同一原生召回�
 
 </details>
 
-保持该 profile 启用，并不意味着 Obelisk 会变成 LoopX 的必需依赖。如果指定的
+保持该 profile 启用。如果指定的
 extension 尚未安装、已禁用，或缺少当前有效的 doctor 证明，召回仍会正常退出，
 返回 `status=unavailable` 和类型化的 `provider_readiness` 回执，并且不会执行
 provider scan 或写入。恢复时无需删除或改写 profile：根据
@@ -293,7 +292,7 @@ loopx decision-context settle-review \
 
 显式语义 `no_change` 不传 `--proposal-json` 和 `--source-event-id`，也不会创建
 user gate。去掉 `--execute` 即为预览。这些命令只写调用方指定的私有 pending/
-cursor 状态和现有本地 rollout event log，不授予交易、外部动作或其他不可逆权限。
+cursor 状态和现有本地 rollout event log。
 移除私有 profile 即关闭入口；删除尚未结算的 pending checkpoint 不会改变 active
 cursor。
 
@@ -357,7 +356,7 @@ loopx decision-context prepare-captured --goal-id <goal-id> --agent-id <agent-id
 ```
 
 宿主也可调用 `assemble_captured_decision_evidence`，由 `rebase` 回调读取瞬时正文。
-准备证据不代表消费完成；继续走上述 `settle-review`。后续采集只在新观察到的
+继续走上述 `settle-review`。后续采集只在新观察到的
 **既有 review settlement 写入的游标文件**变化，与最早批次的前后游标同时匹配时，
 清理该单个批次。未变化的审阅游标不能确认后续批次，包括 A→B→A 的来源变化。
 采集侧的观察记录不拥有审阅权，绝不把采集游标当作审阅游标，也不能手工伪造“已消费”。
@@ -367,10 +366,10 @@ loopx decision-context prepare-captured --goal-id <goal-id> --agent-id <agent-id
 这两类阻塞均需依据真实审阅证据显式核对，或使用下述受保护的恢复入口。
 本协议不保证跳过审阅变化后自动排空队列。
 
-这是变更引用队列，**不是无损历史归档**。首轮历史范围、分页、旧消息编辑/删除可见性、
+这是变更引用队列。首轮历史范围、分页、旧消息编辑/删除可见性、
 超时依然由 provider 保证。回读要求同一边界能确定性复现；历史版本已不可读时明确
 阻塞，不能拿新正文冒充旧证据。此时应显式读取当前来源并经普通 review settlement
-完成 rebase。采集健康不等于决策覆盖完整。
+完成 rebase。
 
 停用时设置 `automatic_capture=false` 并卸载宿主定时任务，已有私有批次仍可回读。
 回滚有界续扫时移除 `max_sources_per_tick`；若回滚到尚未支持引用采集的版本，
@@ -396,7 +395,7 @@ python3 -m pytest -q tests/capabilities/test_decision_context_capture.py
 2. `capture-recovery --action hold` 先预览；确认影响范围后，以
    `--execute --expected-token <preview_token>` 显式应用。该来源所有待审阅引用
    原样转入 **held、未解决历史**，暂停其采集，释放活跃队列容量给其他来源。
-   这不是审阅完成，不修改 reviewed cursor，也不丢弃旧证据。
+
 3. 准备读取当前材料时，重新预览并应用 `--action restart`。它以当前 profile
    binding 和 **未改动的审阅游标** 重启采集，清除此来源的扫描间隔等待。
    下一次正常 capture 产生新批次，再走 `prepare-captured` / `settle-review`。
@@ -422,19 +421,18 @@ hold 是显式恢复操作，默认来源窗口则阻止高频来源借走其他
 审阅或恢复。若全局容量小于登记来源数，不能保证隔离，状态会明确报告
 `reservation_capacity_sufficient=false`，仍严格遵守全局上限。
 `capture-status.capacity_policy` 给出两层上限，各来源给出 `pending_capacity`、
-`review_required` 和 `recovery_diagnosis_required`。这些是工作提示，不代表已探测到
-回放失败，也不授予恢复或结算权限。已退出采集登记的来源留下的 pending 仍计入全局容量。
+`review_required` 和 `recovery_diagnosis_required`。已退出采集登记的来源留下的 pending 仍计入全局容量。
 
 `capture-status` 分开报告 active pending、held 历史、每来源 acquisition hold，
 并明确 `semantic_review_completion=not_inferred_from_capture`。`last_checked_at`
 是尝试时间，不保证成功。
-仅看 status 不能证明历史可重放或决策覆盖完整。停用仍使用原 profile 开关；
+停用仍使用原 profile 开关；
 降级旧版本前必须停止调度器，因为旧运行时不认识 recovery hold。
 保留 spool 与回执，不能把软件降级当成状态回滚。
 
 #### 来源新鲜度合同
 
-profile 已启用、`loopx doctor` 健康或已有结算投影，都不代表来源是新鲜的。
+profile 已启用、`loopx doctor` 健康或已有结算投影。
 每个 `prepare-evidence` / `prepare-review` 组装结果，以及每次 `capture` /
 `capture-status` 输出，都携带 `source_freshness`（`decision_source_freshness_v0`）：
 每个已启用来源一行，包含 `last_read_at`（最近一次**成功**读取）、`staleness_seconds`、

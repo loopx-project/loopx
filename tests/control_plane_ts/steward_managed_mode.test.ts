@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {admitStewardManagedTurn, bindStewardManagedActor, planStewardManagedMode,
-  planStewardMonitor, observeStewardPortfolio} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+  planStewardMonitor, observeStewardPortfolio,
+  observeStewardSignalMonitor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 
 function fixture() {
@@ -78,6 +79,45 @@ test("identity-refused watches need independent collector evidence and retain cu
   for (const changed of [{queued_turn_count: 1}, {goal_active: false},
     {monitor_todo: {...monitor, status: "blocked"}}, {observation: {...params.observation, verified: false}}]) {
     assert.throws(() => admitStewardManagedTurn({...input, ...changed}));
+  }
+});
+
+test("signal-unavailable custom monitors admit exactly one zero-effect recovery after manager_context", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.signal", todo_id: "todo_signal_watch", validation_command: null,
+    monitor_deadline: "2026-11-19T13:21:54Z", monitor_lease_version: 0};
+  const original = {turn_id: "2".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_error",
+    error: "steward monitor external signal source temporarily unavailable",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, loopx_request: prior};
+  const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+    phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true};
+  const monitor = {todo_id: "todo_signal_watch", task_class: "continuous_monitor",
+    target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
+    next_due_at: prior.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+
+  for (const changed of [
+    {contexts: []},
+    {contexts: [{schema_version: "wrong_schema"}]},
+    {contexts: [...basis.contexts, ...basis.contexts]},
+    {phases: [{phase: "model_start"}]},
+    {event_kinds: ["turn.queued", "agent.phase", "turn.failed"]},
+    {poll_absent: false},
+    {lease_available: false},
+    {original: {...original, error: "other transient failure"}},
+    {original: {...original, upstream_turn_id: "model-started"}},
+    {original: {...original, loopx_request: {...prior, monitor_restart_recovery: {original_turn_id: "3".repeat(32)}}}},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...changed}}));
   }
 });
 
@@ -226,4 +266,62 @@ test("publication changes only the native actor reference; scope configuration r
   assert.deepEqual((configured.state as typeof next).bindings[0].managed_actor, prepared.managed_actor);
   assert.throws(() => planConversationBinding({current: next, expected_revision: 5, operation: "configure",
     binding: {...prepared, context_kind: "project", grant: "workspace_read"}, observation: params.observation}));
+});
+
+test("custom steward signal monitors admit model-free probes while excluding local-session watches", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const request = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.custom", todo_id: "todo_pr_watch", validation_command: null,
+    monitor_deadline: "2026-11-19T12:00:00Z", monitor_lease_version: 0};
+  const customMonitor = {todo_id: "todo_pr_watch", task_class: "continuous_monitor",
+    target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
+    next_due_at: request.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request, monitor_todo: customMonitor};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+  for (const excludedKey of ["managed-session-watch." + "0".repeat(32), "steward-monitor-followup:todo_1", "bad key!"]) {
+    assert.throws(() => admitStewardManagedTurn({
+      ...input,
+      monitor_todo: {...customMonitor, target_key: excludedKey},
+    }));
+  }
+
+  const prItem = {number: 9024, headRefOid: "abc123", reviewDecision: "CHANGES_REQUESTED"};
+  const first = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [prItem], observed_at: "t1"},
+    previous_hash: null,
+  });
+  assert.equal(first.material_change, true);
+  assert.equal(first.observation_incomplete, false);
+
+  const unchanged = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [prItem], observed_at: "t2", collected_at: "later"},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(unchanged.result_hash, first.result_hash);
+  assert.equal(unchanged.material_change, false);
+
+  const changed = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [{...prItem, headRefOid: "def456"}]},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(changed.material_change, true);
+  assert.notEqual(changed.result_hash, first.result_hash);
+
+  const unavailable = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "unavailable", repository: "acme/widgets"},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(unavailable.observation_incomplete, true);
+  assert.equal(unavailable.material_change, false);
+  assert.equal(unavailable.result_hash, first.result_hash);
 });

@@ -365,6 +365,7 @@ def _main(argv: list[str] | None = None) -> int:
         args,
         registry_path=registry_path,
         allow_missing_registry=not user_supplied_registry(raw_argv),
+        registry_was_configured=registry_was_configured,
     )
     if common_command_result is not None:
         return common_command_result

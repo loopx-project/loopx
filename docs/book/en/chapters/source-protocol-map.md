@@ -32,7 +32,7 @@ developer job
   -> current implementation and validation
 ```
 
-This chapter is a protocol-first source map. It is not a complete API catalog, and it does not ask you to memorize current function names. Its job is to help you identify the contract your Issue or PR will change.
+This chapter is a protocol-first source map. Its job is to help you identify the contract your Issue or PR will change.
 
 ## What you should learn
 
@@ -257,7 +257,7 @@ Protocols define cross-module contracts. Bounded contexts identify which change 
 | `handoff` | Cross-runtime handoff, review packets, and owner routes |
 | `work_items` | Attention, selection, and operator-facing work read models |
 
-On the `v0.5.4` migration baseline, bounded context and implementation language are separate dimensions. Complete transactions under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` now have TypeScript semantic owners. Examples include Vision refresh, the local task-lease lifecycle, quota spend/void/monitor-poll commit, and receipt-bound scheduler follow-up. Adjacent Python facade modules may serve only as CLI transport, legacy projection, an explicit external Provider or Host effect, or writeback that has not migrated. Read the shipped baseline in the [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) and trace the active request handler and caller before assigning ownership. A Python entrypoint does not prove that Python still owns the decision.
+On the `v0.5.4` migration baseline, bounded context and implementation language are separate dimensions. Complete transactions under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` now have TypeScript semantic owners. Examples include Vision refresh, the local task-lease lifecycle, quota spend/void/monitor-poll commit, and receipt-bound scheduler follow-up. Adjacent Python facade modules may serve only as CLI transport, legacy projection, an explicit external Provider or Host effect, or writeback that has not migrated. Read the shipped baseline in the [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) and trace the active request handler and caller before assigning ownership.
 
 Ask:
 
@@ -296,7 +296,7 @@ Treat repository routes as owners, not as automatic placement from a directory n
 | Operator projection | Status, frontstage, or projection owner; a renderer only consumes the typed model |
 | Documentation and validation | Owning protocol document, `tests/`, `examples/`, or a public-safe fixture |
 
-Current capability packages own their documentation and register through `catalog_entry.py`. Before contributing, run `loopx capability list --format json` and `loopx capability show <capability-id> --format json` to confirm that the capability is registered and to read its entry commands, Provider boundary, and durable validation. A directory or README alone does not prove that a capability is shipped.
+Current capability packages own their documentation and register through `catalog_entry.py`. Before contributing, run `loopx capability list --format json` and `loopx capability show <capability-id> --format json` to confirm that the capability is registered and to read its entry commands, Provider boundary, and durable validation.
 
 Code under `loopx/capabilities/<name>/` is not automatically a public Capability; it still needs explicit registration and a real caller contract. `loopx/extensions/` is not a bucket for every external integration; it owns generic Extension lifecycle, while an independently versioned Provider belongs in its delivery package. Keep private helpers with the nearest owner instead of promoting them to a Capability or Extension merely because they span several files.
 
@@ -474,7 +474,7 @@ Before entering the source, confirm these hold on their own:
 1. **The owner of a rule is the module that decides legal transitions, not the module that first prints words about it.** If you cannot name the protected invariant, the change is not yet located.
 2. **A PR description carries one complete causal chain: source, invariant, decision, projection or effect, receipt, validation.** A slice that can only list function names cannot be reviewed.
 3. **Documents describe responsibility ownership; code describes current behavior.** When they conflict, pick the authority by conflict type and make this PR update the other side.
-4. **Code under `loopx/capabilities/<name>/` does not prove the Capability is shipped.** Registration plus a real caller contract is the release test; verify with `loopx capability list --format json`.
+4. Registration plus a real caller contract is the release test; verify with `loopx capability list --format json`.
 5. **Placement precedes implementation.** The capability id, provider id, and built-in or extension-delivered choice come with a written reason before the first line of code.
 6. **Tasks come from public entrypoints.** Public Contributor Tasks, Issues, and fixtures are the only source of work you can participate in; live active state and maintainer-local judgment are not.
 

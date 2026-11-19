@@ -122,7 +122,7 @@ def reconcile_benchmark_terminal(
         result["board_readback_verified"] = True
         if not decision["already_released"]:
             # The CAS input was rechecked under this same envelope lock.
-            # Reuse the existing release transformation, not a second ledger rule.
+            # Reuse the existing release transformation.
             release, replacement = _release_preview(
                 envelope, compact_run_id=row["run_id"],
                 timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),

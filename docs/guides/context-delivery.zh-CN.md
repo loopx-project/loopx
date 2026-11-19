@@ -10,7 +10,7 @@
 默认开启原生路径。保存 off 或显式关闭可禁用；普通 CLI、其他宿主与不支持的平台
 继承完整交付。
 
-保存开关不证明宿主已就绪、某次输入用了 delta，或模型已理解材料。完整 C1 消费链迁移和
+完整 C1 消费链迁移和
 长程成果／成本资格仍未完成；广泛默认化和旧路径退役须取得下文证据。
 
 - 理解一次工作，从[四种场景](#一项任务四种场景)开始。
@@ -52,7 +52,7 @@ flowchart TD
 [`prepareProgressiveContextDelivery`](../../loopx/control_plane/quota/progressive_context.ts)
 开始，使用[精确 codec](../../loopx/control_plane/quota/context_delivery.ts)，文件、锁和原生
 生命周期 IO 留给 [Codex adapter](../../loopx/control_plane/turn_driver/codex_context.py)。
-一次共享准备调用，不证明所有最终消费者已经迁移。
+一次共享准备调用。
 
 ### 三种复用分别看
 
@@ -88,7 +88,7 @@ provider cache 命中都不能替它通过。
 ## 一项任务，四种场景
 
 用一个合成任务贯穿：**增加 UTF-8 导出，保留原有格式，绝不覆盖已有目标文件**。
-下列检查和证据是说明例子，不是 benchmark 结果。
+下列检查和证据是说明例子。
 
 | 场景 | Agent 看到或取得什么 | 仍须完成什么 |
 | --- | --- | --- |
@@ -135,7 +135,7 @@ Full 表示完整保存视图可用，不要求判断任何问题前先遍历所
   等价于 `--list --select /interaction_contract --list-depth 2`。重复的 `--list POINTER`
   与 `--select POINTER` 会合并到同一个索引。列出根节点用不带 selector 的 `--list`
   或 `--list ''`；`/` 仍表示空名称属性。
-- 未完成的选择沿返回的字节 cursor 继续。EOF 只覆盖该选择，不代表读了其他字段。
+- 未完成的选择沿返回的字节 cursor 继续。EOF 只覆盖该选择。
 - 同时控制 reader 页与宿主工具的合计输出预算。合法 JSON、落盘日志和 EOF 都不能
   补上被宿主截掉的字节；缩小批次，从同一 capture 补缺失范围。
 - 基线缺失、不支持的 delta 或绑定无效时，恢复当前完整 capture；不要先取旧包给
@@ -154,7 +154,7 @@ Full 表示完整保存视图可用，不要求判断任何问题前先遍历所
 
 App 中使用 **Settings → This machine → Capabilities → Differential context → Codex**。
 已有的 revision 锁定 preview/apply/readback 事务拥有这项设置；它不初始化当前原生
-session，也不证明生命周期 hook 已安装。只读设置页不能保存。
+session。只读设置页不能保存。
 
 CLI 使用同一个 `context_delivery` 机器 namespace，详见
 [机器级默认](../reference/required-work-context.md#机器级默认)，无需再建 Goal 配置。
@@ -169,8 +169,7 @@ CLI 使用同一个 `context_delivery` 机器 namespace，详见
 生命周期上下文应一致。冷启动、丢失后或完整交付更便宜时，full 完全合法；保存 on
 与看到 full 本身，都不能判断差分是否正确复用。
 
-解析原始 `should_run` 或结算事实的机器消费者，其内部调用仍须请求 raw 输出。原生
-展示封装不是原始权威响应；封装中缺少 `should_run` 不表示拒绝准入。不能通过改机器
+解析原始 `should_run` 或结算事实的机器消费者，其内部调用仍须请求 raw 输出。封装中缺少 `should_run` 不表示拒绝准入。不能通过改机器
 设置改变某个实验冻结的模式、来源或时钟；trial 保留原显式配置与权限。
 
 ### 回退到另一个运行时
@@ -210,8 +209,8 @@ journal，限制权限并拒绝不安全路径。不要把原始 capture、本�
 
 未来扩大默认采用范围必须同时有**明确版本的 DeepSeek 模型与强模型**的可比效果、完整成本
 证据。每个模型内部固定条件分别比较，不能合并结果掩盖某一个模型退步。本指南提供
-方案，不授予新实验权限，也不宣称任何一个模型系列已经通过。
-这些标准约束现有范围化默认的扩展；已交付的默认行为本身不证明双模型对照通过。
+方案。
+这些标准约束现有范围化默认的扩展；
 
 ### 最小判别研究
 
@@ -237,10 +236,9 @@ journal，限制权限并拒绝不安全路径。不要把原始 capture、本�
 选案例前先读现有 board，复用合格 run；缺失一格就保持未合格。预登记各处理组的基线
 run 绑定及重复／顺序策略，再由获授权 runner 执行不变的任务输入与 evaluator。
 每格返回 source/host 绑定、实际最终输入与恢复补读、原生任务成果、完整成本及
-integrity 状态，保留失败或截尾尝试。Board 表达 run 资格，本身不证明因果比较，也不
-授权启动。
+integrity 状态，保留失败或截尾尝试。Board 表达 run 资格。
 
-上述原生 adapter 范围是 Codex，**不证明 DeepSeek 宿主已支持**。DeepSeek 对照需要
+上述原生 adapter 范围是 Codex。DeepSeek 对照需要
 获授权且已资格化、能经过同一语义管线的宿主。不支持保持缺口，不能替换成 Codex
 结果或修改在跑研究。
 

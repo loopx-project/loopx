@@ -10,7 +10,7 @@ hook。urgent 和旧确认摘要都不能豁免；需修正配置并通过
 的配置仍保留原发送行为。
 
 这个可选的 Reward Memory surface 会在 Agent 发送消息前召回已经审阅过的
-操作偏好。它不是消息传输、文本分类器或发送权限。首个正式调用方是绑定
+操作偏好。首个正式调用方是绑定
 Goal/Agent 的 `loopx lark-inbox send` 和 `reply`；本次集成不拦截其他工具，
 也不拦截 Goal Topic 自动回复。
 
@@ -40,9 +40,9 @@ Provider preflight 先校验身份、群成员、mention 和 provider dry-run，
 
 执行 Agent 需要阅读指导，核对当前事实、替代方案、收件方和重复消息；仍然
 应该发送时，用同一条 send/reply 命令加上 `--execute` 和返回的
-`--reviewed-guidance-digest`。这是 Agent 的审视步骤，**不是用户审批**。
+`--reviewed-guidance-digest`。这是 Agent 的审视步骤。
 摘要绑定了指导、用途、scope、发送方、目标、placement 和消息；任一变化都会
-让旧摘要失效。它只能证明 Agent 确认过指导，不能证明推理质量。原发送器继续
+让旧摘要失效。它只能证明 Agent 确认过指导。原发送器继续
 负责幂等和 readback。
 
 ## 目标群召回与必读记录
@@ -64,12 +64,12 @@ Provider preflight 先校验身份、群成员、mention 和 provider dry-run，
 每条必读记录另有一次精确引用查询，必须通过 active、scope 和正文校验并进入
 最终指导列表。缺失时返回 `required_guidance_missing` 并停止发送，urgent 或
 复用旧 review digest 也不能跳过；完整时 urgent 也必须审阅。这是明确配置的
-必读契约，不是通过关键词判断禁令的分类器。Agent 仍需遵守记忆中的禁发要求，
+必读契约。Agent 仍需遵守记忆中的禁发要求，
 确认摘要不授予发送权，也不拦截其他发送工具。总计最多五路有界召回。
 
 OpenViking 的 Reward Memory 查询只取 L2 正文，最多多取 32 个候选；先规范化
 chunk URI、排除摘要和不可读或格式错误的记录，再填充结果上限。应用层按 scope、
-有效期和 candidate 去重后截取。其他 namespace 的查询保持原行为；这不是全量扫描。
+有效期和 candidate 去重后截取。其他 namespace 的查询保持原行为；
 
 验收应使用真实目标和消息用途的只读 preflight，检查必读记录实际出现、
 `required_guidance_complete=true` 且无外部写入；不要在消息中塞入待召回答案。

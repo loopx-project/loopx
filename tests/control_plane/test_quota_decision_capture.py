@@ -28,7 +28,7 @@ def request(path, **overrides):
 
 @pytest.mark.parametrize("overrides", [
     {"turn_instance_id": None}, {"quota_command": "plan"}, {"format": "markdown"},
-    {"turn_envelope": True}, {"decision_handoff_socket": "/unused/socket"},
+    {"decision_handoff_socket": "/unused/socket"},
     {"context_delivery": "on", "codex_app": True},
 ])
 def test_prepared_reference_rejects_incompatible_delivery_before_guard(tmp_path, overrides):
@@ -39,6 +39,55 @@ def test_prepared_reference_rejects_incompatible_delivery_before_guard(tmp_path,
     with pytest.raises(QuotaCommandValidationError, match="prepared capture reference"):
         prepare_quota_capture(args, None)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+@pytest.mark.parametrize("alias", [None, "--turn-envelope", "--complete-turn"])
+def test_prepared_capture_verifies_the_same_complete_turn_with_compatibility_aliases(
+    tmp_path, monkeypatch, provider, context_delivery, alias,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _spend_run_count
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    capture_dir = tmp_path / "capture"
+    context_dir = tmp_path / "context"
+    context_args = []
+    if context_delivery == "on":
+        context_dir.mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", "fixture-prepared-capture")
+        context_args = ["--codex-context-dir", str(context_dir), "--defer-context-presentation"]
+    code, prepared = _run_cli(
+        registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID, "--codex-app",
+        "--context-delivery", context_delivery, *context_args, *([alias] if alias else []),
+        "--decision-output-dir", str(capture_dir), "--prepared-capture-reference",
+    )
+    assert code == 0, prepared
+    assert prepared["ok"] and prepared["normal_delivery_allowed"]
+    assert prepared["selected_todo"] == {"todo_id": TODO_ID}
+    assert prepared["heartbeat_receipt"] == {"turn_instance_id": TURN_ID}
+    saved = capture_dir / "decision.json"
+    original = saved.read_bytes()
+    digest = sha256(original).hexdigest()
+    assert prepared["capture_sha256"] == digest
+    source = json.loads(original)
+    assert source["schema_version"] == "loopx_turn_envelope_v1"
+    identity = source["heartbeat_receipt"]["settlement_identity"]
+    assert identity["turn_instance_id"] == TURN_ID and identity["todo_id"] == TODO_ID
+    identity_pointer = "/interaction_contract/cli_channel/settlement_plan/identity"
+    code, readback = _run_cli(
+        registry, runtime, "quota", "context-read", "--capture-file", str(saved),
+        "--capture-sha256", digest, "--select", identity_pointer,
+    )
+    assert code == 0 and readback["eof"]
+    assert json.loads(readback["content"])["selections"] == [{"pointer": identity_pointer, "value": identity}]
+    assert not context_dir.exists() or not list(context_dir.iterdir())
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
 
 
 def test_disabled_capture_does_not_touch_disk(tmp_path):
@@ -806,6 +855,87 @@ def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('delivery', ['off', 'on'])
+def test_failed_complete_composition_captures_only_recovery_evidence(
+    tmp_path, monkeypatch, capsys, provider, delivery,
+):
+    from loopx.cli import main
+    from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.turn_driver import codex_context
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _spend_run_count
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    project = project.resolve()
+    monkeypatch.chdir(project)
+    state = _configure_read_only_todo(project)
+    mode = 'hard_lease' if delivery == 'on' else 'soft_claim'
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider, handoff_mode=mode)
+    original_state = state.read_bytes()
+    capture, native = tmp_path / 'failure', tmp_path / 'native'
+    delivery_args = ['--codex-app', '--context-delivery', delivery]
+    if delivery == 'on':
+        native.mkdir(mode=0o700)
+        session = 'composition-failure-session'
+        monkeypatch.setenv('CODEX_THREAD_ID', session)
+        assert codex_context.codex_context_hook(str(native), {
+            'session_id': session, 'cwd': str(project), 'hook_event_name': 'SessionStart', 'source': 'startup',
+        }) == {}
+        delivery_args += ['--codex-context-dir', str(native)]
+    native_before = {path.name: path.read_bytes() for path in native.glob('*') if path.is_file()}
+    binding = ['--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--turn-instance-id', TURN_ID]
+    captured = []
+    run_typed = turn_envelope._turn_envelope_result
+
+    def interrupt_compose(action, **kwargs):
+        if action == 'compose_complete':
+            captured.append(kwargs['payload'])
+            raise EffectRuntimeStartupError('fixture composition unavailable', diagnostic_code='fixture_unavailable')
+        return run_typed(action, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(turn_envelope, '_turn_envelope_result', interrupt_compose)
+        code = main(['--registry', str(registry), '--runtime-root', str(runtime), '--format', 'json',
+            'quota', 'should-run', *binding, '--todo-id', TODO_ID, *delivery_args, '--decision-output-dir', str(capture)])
+    failure = json.loads(capsys.readouterr().out)
+    assert code == 1 and failure['ok'] is False
+    assert failure['error_code'] == 'quota_decision_transport_failed'
+    assert len(captured) == 1 and captured[0]['ok'] is True
+    original_receipt = captured[0]['heartbeat_receipt']
+    assert failure['heartbeat_receipt'] == original_receipt
+    assert original_receipt['settlement_identity']['todo_id'] == TODO_ID
+    if delivery == 'on':
+        assert captured[0]['execution_preparation']['state'] == 'claim_required'
+    before_readback = _heartbeat_receipt_count(runtime, TURN_ID)
+    assert before_readback == 1
+
+    saved = capture / 'decision.json'
+    reference = failure['captured_decision']
+    assert saved.read_bytes() and reference['sha256'] == sha256(saved.read_bytes()).hexdigest()
+    code, projection = _run_cli(registry, runtime, 'quota', 'context-project', *binding, *delivery_args,
+        '--capture-file', reference['path'], '--capture-sha256', reference['sha256'], cwd=project)
+    assert code == 1 and projection['ok'] is False
+    assert 'diagnostic' in projection['reason']
+    diagnostic = json.loads(saved.read_bytes())
+    assert diagnostic['ok'] is False and diagnostic['should_run'] is False
+    assert 'interaction_contract' not in diagnostic and 'execution_preparation' not in diagnostic
+    assert diagnostic['heartbeat_receipt'] == original_receipt
+    reader = shlex.split(reference['command'])
+    code, page = _run_cli(registry, runtime, *reader[reader.index('quota'):],
+        '--select', '/heartbeat_receipt', cwd=project)
+    assert code == 0 and page['ok'] and page['eof']
+    assert json.loads(page['content'])['selections'] == [
+        {'pointer': '/heartbeat_receipt', 'value': original_receipt},
+    ]
+    assert {path.name: path.read_bytes() for path in native.glob('*') if path.is_file()} == native_before
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == before_readback
+    assert _spend_run_count(runtime) == 0
+    assert state.read_bytes() == original_state
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('turn_envelope', [False, True])
 def test_native_recovery_failure_keeps_original_receipt_and_capture(
     tmp_path, monkeypatch, capsys, provider, turn_envelope,
@@ -828,10 +958,7 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
 
     def refuse_recovery(payload, **kwargs):
         saved = kwargs['capture_directory'] / 'decision.json'
-        attempts.append(saved.read_bytes())
-        if turn_envelope:
-            assert payload['schema_version'] == 'loopx_turn_envelope_v0'
-            assert 'heartbeat_receipt' not in payload
+        attempts.append((payload, saved.read_bytes()))
         raise QuotaDecisionTransportError(
             'Current context recovery could not be published or safely invalidated. '
             'Read the saved original decision/receipt; do not rerun admission.'
@@ -851,15 +978,19 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
     assert code == 1 and failure['ok'] is False
     assert failure['error_code'] == 'quota_decision_transport_failed'
     assert failure['status'] == 'decision_transport_failed'
+    assert failure['reason'].startswith('Current context recovery could not be published')
     saved = list(captures.glob('*/decision.json'))
     assert len(saved) == len(attempts) == 1
-    assert saved[0].read_bytes() == attempts[0]
-    original = json.loads(attempts[0])
+    projected, raw = attempts[0]
+    assert saved[0].read_bytes() == raw
+    original = json.loads(raw)
     assert original['ok'] is True
+    assert projected['schema_version'] == original['schema_version'] == 'loopx_turn_envelope_v1'
+    assert projected['heartbeat_receipt'] == original['heartbeat_receipt']
     assert failure['heartbeat_receipt'] == original['heartbeat_receipt']
     assert failure['rollout_event'] == original['rollout_event']
     assert failure['captured_decision']['path'] == str(saved[0])
-    assert failure['captured_decision']['sha256'] == sha256(attempts[0]).hexdigest()
+    assert failure['captured_decision']['sha256'] == sha256(raw).hexdigest()
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
     assert state.read_bytes() == original_state

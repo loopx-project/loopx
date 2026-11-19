@@ -59,7 +59,7 @@ def build_benchmark_four_arm_contract(
 ) -> dict[str, Any]:
     """Build the canonical Goal/LoopX by plain/domain-hint factorial contract.
 
-    The returned prompt text is runner input, not a public experiment artifact.
+    The returned prompt text is runner input.
     Compact receipts omit it by default.
     """
 

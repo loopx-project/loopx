@@ -663,8 +663,7 @@ def stream_lark_goal_topic_profile(
         else None
     )
     if health_sink is not None:
-        # A live child process is not proof that lark-cli registered a consumer
-        # with its local event bus.  Keep the connection non-ready until the
+                #   Keep the connection non-ready until the
         # provider emits its explicit ready marker (or a real event arrives).
         health_sink({"status": "starting", "error_code": None})
     watcher_done = threading.Event()

@@ -67,7 +67,7 @@ control_plane/todos
 control_plane/work_items
 ```
 
-归属原则不是“哪个文件短”，而是 change reason：
+归属原则是 change reason：
 
 - agent identity/supervisor observation 属于 `agents`；
 - todo lifecycle 属于 `todos`；
@@ -75,7 +75,7 @@ control_plane/work_items
 - cadence/ACK 属于 `scheduler`；
 - repo/write-scope 选择属于 workspace/work item boundary。
 
-大文件是 warning signal，不是自动拆分理由。先找一组已经有 parity fixture 的 cohesive rules，再移动到 bounded context。
+大文件是 warning signal。先找一组已经有 parity fixture 的 cohesive rules，再移动到 bounded context。
 
 ## 新规则的 8 个层次
 
@@ -167,7 +167,7 @@ terminal_no_followup =>
 
 普通 Python smoke 可以检查有限案例；property-based test 可以搜索更多组合；TLA+/Alloy 可以检查状态机；Lean 可以把状态、transition 和 theorem 写进依赖类型系统，并由 kernel 检查 proof term。
 
-Lean 的价值不是“让 agent 写更多形式化文本”，而是对少量高价值 invariants 给出机器证明，例如：
+Lean 的价值是对少量高价值 invariants 给出机器证明，例如：
 
 - 执行过的 supervisor action 必然有 capability-matched receipt；
 - terminal state 不可能同时有 runnable successor；
@@ -253,7 +253,7 @@ def select_goal_frontier_replan_rule(facts):
 4. quality surface catalog 将它标为 high risk，要求 unit、smoke、canary 和 release gate；
    模型行为层记为 `not_applicable`，因为确定性 precedence 不应交给模型裁判。
 
-这个案例的评审重点不是“新模块是否更漂亮”，而是：facts 是否来自同一 canonical
+这个案例的评审重点是：facts 是否来自同一 canonical
 projection、rule order 是否完整、每条负向规则是否有反例、runtime payload builder 是否
 仍复用原实现。只有这四点成立，代码移动才是行为保持的重构。
 
@@ -377,7 +377,6 @@ Supervisor contract 推荐把 supervisor task 作为 synthesis channel，因为�
 - 所有改变 authority 的决定仍写成 LoopX user todo/gate；
 - supervisor 不能 claim 其他 peer 的 todo；
 - supervisor 不能花其他 peer 的 quota；
-- supervisor 不是隐藏 review owner。
 
 ### Inject 为什么先有 canary
 
@@ -409,7 +408,7 @@ Fork 与 handoff 不同：
 | handoff | 通常完成或 yield | 转移 continuation，不默认增加 branch 数 |
 | fork | 继续 | 新增临时 execution branch，需要 capacity reservation |
 
-正确未来模型不是复制长期 peer identity，而是：
+正确未来模型是：
 
 ```text
 source_agent_id
@@ -475,7 +474,7 @@ Smoke 应同时证明：
 
 本讲只保留规则开发的入口；完整分层、频率、模型行为门和发布门见[第 10 讲](10-autonomous-agent-quality-gates.md)。
 
-测试先回答“这个状态和规则合理吗”，再验证实现是否符合。共享 quota/status/todo 行为可以先加 parity fixture 描述现状，但 fixture 不是授权书；如果现状与 independently reviewed invariant 冲突，应修规则并增加负向或 mutation coverage，不能刷新 golden 把错误合法化。
+测试先回答“这个状态和规则合理吗”，再验证实现是否符合。共享 quota/status/todo 行为可以先加 parity fixture 描述现状；如果现状与 independently reviewed invariant 冲突，应修规则并增加负向或 mutation coverage，不能刷新 golden 把错误合法化。
 
 例如 gate lifecycle 至少要先写出这张语义表，再决定 schema 和 transition：
 
@@ -552,7 +551,7 @@ HOST_CAPABILITIES_BY_DECISION = {
 }
 ```
 
-`normalize_peer_supervisor` 的关键不是 enum，而是身份约束：
+`normalize_peer_supervisor` 的关键是身份约束：
 
 ```python
 if raw in (None, {}) or raw.get("enabled") is False:
@@ -572,11 +571,11 @@ return {
 }
 ```
 
-`supervisor` 是某个已注册 peer 的额外职责，不是新的 primary/side hierarchy。默认空配置直接返回 `None`，所以实验功能不会默认开启。
+`supervisor` 是某个已注册 peer 的额外职责。默认空配置直接返回 `None`，所以实验功能不会默认开启。
 
 ### 2. Contract 明确 user channel 与 authority 边界
 
-`build_peer_supervisor_contract` 里最重要的字段不是 prompt 文案，而是权力模型：
+`build_peer_supervisor_contract` 里最重要的字段是权力模型：
 
 ```python
 {

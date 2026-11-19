@@ -139,10 +139,7 @@ Late/common windows and feedback availability are declared before outcome review
 The existing Negative-Evidence Reuse definition includes communication and
 frontier-selection signals. It is not interchangeable with the proposed stricter
 **actual adoption** measure, which requires a version-bound artifact or behavior
-consequence after an opportunity to use the evidence. Citation, narration or
-visibility alone does not establish that consequence or downstream benefit.
-Neither missing LoopX metadata in a baseline nor a lack of subsequent opportunity
-proves no useful work or ignored evidence.
+consequence after an opportunity to use the evidence. Citation.
 
 Research may analyze permitted private evidence under its own contract; product
 extraction still consumes only authorized safe versioned projections with coverage.

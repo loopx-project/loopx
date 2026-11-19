@@ -1139,6 +1139,7 @@ def refresh_state_run(
                     "explore_review", {}).get("result_pages"))
 
         replan_qualification = qualify_refresh_replan_writeback(
+            goal_ref=goal_ref,
             replan_explore_reader=read_explore_context,
             replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root)},
             capability_evidence=capability_evidence,

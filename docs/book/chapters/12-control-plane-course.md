@@ -58,7 +58,7 @@ uv sync --extra test
 
 前三组使用临时目录中的真实本地状态或 CLI，第四组使用构造的 quota 输入。它们会写测试状态，也可能启动本地 Effect runtime。不能把 fixture 的 registry、删除或损坏注入步骤替换成 live Goal。缺依赖、收集失败、零项测试或 runtime 不可用，都不等于行为通过。
 
-源码链接固定到核对过的提交，命令运行你记录的 checkout。先核对版本差异；测试改名时沿原 invariant 找 owner，不把新输出直接抄为期望。这些测试不是模型、真实 Host、远端 provider 或全产品资格验证。
+源码链接固定到核对过的提交，命令运行你记录的 checkout。先核对版本差异；测试改名时沿原 invariant 找 owner，不把新输出直接抄为期望。
 
 ### 先读取，再决定是否改变状态 {#read-before-change}
 
@@ -75,7 +75,7 @@ uv sync --extra test
 
 #### 允许或拒绝的理由 {#state-reason}
 
-拒绝来自当前源状态或读取失败，不是页面措辞。done/blocked 不能因缓存显示 open 而重新获得准入；authority 不可读也不能证明工作开放。另一方面，显示截断不是拒绝依据：真实存在、当前满足条件的 Todo，可以经精确选择进入本轮。
+拒绝来自当前源状态或读取失败。done/blocked 不能因缓存显示 open 而重新获得准入；authority 不可读也不能证明工作开放。另一方面，显示截断不是拒绝依据：真实存在、当前满足条件的 Todo，可以经精确选择进入本轮。
 
 #### 支持结论的证据 {#state-evidence}
 
@@ -88,7 +88,7 @@ uv run --extra test pytest -q \
 
 [原测试](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_quota_authority_settlement_journey.py)的第一项断言 `decision=skip`、没有 selected Todo、receipt 为 `not_committed`；第二项断言没有选中项且本轮 receipt 数为零。第三项覆盖 legacy/File/SQLite：精确选择得到 `decision=run`，selected Todo 与 settlement identity 都绑定目标 id，即使它超出展示范围。
 
-这证明特定路径的来源与选择约束，不证明 provider 已恢复、所有 legacy 路径只读投影，或仅凭 Todo open 就能执行。
+这证明特定路径的来源与选择约束。
 
 #### 下一步入口与停止条件 {#state-next}
 
@@ -102,11 +102,11 @@ uv run --extra test pytest -q \
 
 #### 事实依据 {#lease-facts}
 
-分别读取当前 lease 与 original receipt，核对 Goal/Todo、owner、模式、状态、version 与 execution identity。本例仅覆盖 File/SQLite 的 `hard_lease` fixture；同名 Agent 和过去的成功都不是当前执行实例的充分证明。
+分别读取当前 lease 与 original receipt，核对 Goal/Todo、owner、模式、状态、version 与 execution identity。本例仅覆盖 File/SQLite 的 `hard_lease` fixture。
 
 #### 允许或拒绝的理由 {#lease-reason}
 
-返回历史结果不应复活旧权限。renew 后仍需使用当前 lease 的证明；release 后旧 acquire key 已退役，不能把同一请求变成新的执行。新的 key 也不是绕过拒绝的方法：只有新的工作准入、当前归属和版本条件均满足时，才能获取新 lease。
+返回历史结果不应复活旧权限。renew 后仍需使用当前 lease 的证明；release 后旧 acquire key 已退役，不能把同一请求变成新的执行。只有新的工作准入、当前归属和版本条件均满足时，才能获取新 lease。
 
 #### 支持结论的证据 {#lease-evidence}
 
@@ -117,7 +117,7 @@ uv run --extra test pytest -q \
 
 [原测试](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_canonical_lease_acquire.py)断言 renew 后 acquire 读回当前 lease，同时保留 original receipt；release 后复用旧 key 得到 `idempotency_key_reuse`。新的合法 acquire 推进版本，完成后 Todo 为 done、lease 为 released；对已完成 Todo 再 acquire 得到 `todo_not_open`。真正完成后 `state.exists()` 为真，并非所有状态文件都被删除。
 
-这是顺序执行的测试，不证明 soft-claim 的强互斥、TTL 到期后的真实竞争，或外部服务能够拒绝旧执行者的写入。
+这是顺序执行的测试。
 
 #### 下一步入口与停止条件 {#lease-next}
 
@@ -146,7 +146,7 @@ uv run --extra test pytest -q \
 
 [原测试](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_quota_authority_settlement_journey.py)先从 `spend_required` 到 `settled`，随后仅在 fixture 中移除对应回执。再次写回得到 `spend_receipt_required` 与 `recovery_does_not_spend=true`；执行返回的命令后 `appended=false`，扣减记录仍为一次。最终再次检查达到 `settled` 且没有 `settlement_owed`，下一轮不再卡在这项结算恢复上。
 
-这些断言证明本例的内部结算恢复，不证明供应商账单为零、不确认其他未知 effect，也不关闭 G1 或接受整个 Goal。测试通过本身不是 live Goal 已恢复的证据。
+这些断言证明本例的内部结算恢复。
 
 #### 下一步入口与停止条件 {#settlement-next}
 
@@ -166,7 +166,7 @@ uv run --extra test pytest -q \
 
 #### 允许或拒绝的理由 {#monitor-reason}
 
-是否产生这项 replan obligation，要同时考虑计数、归属和可选工作。这里的五次是具体策略阈值，不是所有等待的定理；current-Agent advancement 可以优先，显式 watch-only 也不受同一重规划触发约束。不产生 obligation 不代表一定有 Host 会醒来，更不自动授权一次写入或交付扣额。
+是否产生这项 replan obligation，要同时考虑计数、归属和可选工作。这里的五次是具体策略阈值；current-Agent advancement 可以优先，显式 watch-only 也不受同一重规划触发约束。
 
 #### 支持结论的证据 {#monitor-evidence}
 
@@ -178,7 +178,7 @@ uv run --extra test pytest -q \
   tests/control_plane/test_settled_replay_construction.py::test_settled_replay_preserves_schedule_without_new_host_effects
 ```
 
-[原测试](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_monitor_replan_agent_scope.py)分别断言：只有符合条件的当前 Agent lane 产生 `monitor_no_change_streak`；有当前 advancement 时为 `run` 且没有该 obligation；watch-only 即使 streak 为 50 也不因此触发。它们预置计数器后执行决策，没有交错发送远端 poll，不证明计数写入并发、真实唤醒或 backoff 时间。
+[原测试](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_monitor_replan_agent_scope.py)分别断言：只有符合条件的当前 Agent lane 产生 `monitor_no_change_streak`；有当前 advancement 时为 `run` 且没有该 obligation；watch-only 即使 streak 为 50 也不因此触发。它们预置计数器后执行决策。
 
 这里同时给出一个直接反例：**已结算 Turn 的回放**。该测试在仍有 open advancement successor 时返回
 `should_run=false`，但 `scheduler_hint.action` 是 `preserve_current_schedule`、`next_trigger` 是 `fresh_turn_identity`，host action 为 `none` 且不需要 ACK。所以 `false` 的
@@ -197,7 +197,7 @@ uv run --extra test pytest -q \
 假设外部写入已经发出，随后响应丢失。现在只有超时和 prepared 意图，缺少能确认结果的读回。**不知道是否发生**与**已经确认没发生**是不同事实；换 operation id 再发一次可能制造第二次效果。
 
 在当前 Turn settlement 的
-[`_resolve_prepared_effect`](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/loopx/control_plane/turn_driver/settlement.py)中，没有 resolver、resolver 异常或 unsupported kind 都不能授权执行；有效 committed payload 可供复用，`absent` 才进入未提交分支。这个局部判断仍受外围 journal、身份与恢复条件约束，不是所有外部系统的统一恢复保证。
+[`_resolve_prepared_effect`](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/loopx/control_plane/turn_driver/settlement.py)中，没有 resolver、resolver 异常或 unsupported kind 都不能授权执行；有效 committed payload 可供复用，`absent` 才进入未提交分支。这个局部判断仍受外围 journal、身份与恢复条件约束。
 
 | 原身份的读回 | 允许或拒绝的理由 | 下一入口及需要取得的证据 |
 | --- | --- | --- |
@@ -213,7 +213,7 @@ uv run --extra test pytest -q \
 
 ## 综合练习：一次交付为什么仍未获准？ {#integrated-judgment}
 
-回到[贯穿任务](00-reading-guide.md#running-example)。以下是合成推演，不是新增产品 fixture：T1 在 C1 上验证过且已结算；随后代码变成 C2。M1 仍只有 C1 的绿色 CI 观察，G1 的发布批准尚未完成，T2 有可独立检查的文档工作。
+回到[贯穿任务](00-reading-guide.md#running-example)。以下是合成推演：T1 在 C1 上验证过且已结算；随后代码变成 C2。M1 仍只有 C1 的绿色 CI 观察，G1 的发布批准尚未完成，T2 有可独立检查的文档工作。
 
 | 四问 | 足够具体的答案 |
 | --- | --- |
@@ -222,13 +222,13 @@ uv run --extra test pytest -q \
 | 哪项证据支持？ | 当前 revision 的验证与外部读回、覆盖正确对象/scope 的明确决定，以及当前工作的读回；单独一张绿色截图不足以组合成批准 |
 | 下一步找哪个入口？ | 经现有验证/Monitor 路径获取 C2 的证据；由维护者通过已有 Gate/Workspace 决定入口处理 G1；独立工作交回当前准入。条件满足后重算 T3，而不是重做已确认的 C1 工作 |
 
-[权限](work-graph-and-authority.md)、[恢复](04-runtime-boundaries.md)与 [Workspace](workspace-v1.md)分别拥有这些操作说明。Owner 决定不统一由自动 Turn 的 quota 授权；运行某个内部测试也不证明本次真实 CI 或批准已经发生。
+[权限](work-graph-and-authority.md)、[恢复](04-runtime-boundaries.md)与 [Workspace](workspace-v1.md)分别拥有这些操作说明。Owner 决定不统一由自动 Turn 的 quota 授权。
 
 将任务换成“依据两份公开材料完成比较报告”，仍能使用同一判断：材料版本替代 commit，方法与引用检查支持结论，接受人与发布范围需要明确。材料更新后重新检查受影响的分析，不把全部旧讨论变成新证据；报告写完也不自动授权发布。这是概念迁移练习，不宣称另一条产品旅程已经验证。
 
 ### 再加一个条件：原 Turn 尚未收口
 
-若 T1 还欠原身份的等待写回，“T2 独立”并不允许同一 Turn 改绑结算身份。先解释原 Turn 怎样收口，再解释新的准入怎样选择 T2。进阶测试与版本边界见[等待时序](03-one-turn.md#wait-closeout)；上面八个测试函数是四组练习选定的范围，不是完整源码的测试清单。
+若 T1 还欠原身份的等待写回，“T2 独立”并不允许同一 Turn 改绑结算身份。先解释原 Turn 怎样收口，再解释新的准入怎样选择 T2。进阶测试与版本边界见[等待时序](03-one-turn.md#wait-closeout)；上面八个测试函数是四组练习选定的范围。
 
 再检查协作：A 和 B 各自通过验证，不足以验收组合结果；按[交接到集成](work-graph-and-authority.md#handoff-to-integration)指出采用版本、集成验证、发布决定与最终接受者。
 

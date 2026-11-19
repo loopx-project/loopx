@@ -322,3 +322,75 @@ def test_only_one_process_can_take_the_last_recovery_admission(
     ]
     assert sorted(grants) == sorted(["prior-recovery-0", "prior-recovery-1", winner])
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("pause_mode", ["goal_stopped", "compute_zero"])
+def test_paused_goal_blocks_unsettled_recovery_without_fabricating_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, pause_mode: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    rc, first = _run_cli(
+        registry, runtime, *guard, "--turn-instance-id", "owed-original", "--todo-id", TODO_ID,
+    )
+    assert rc == 0 and first["should_run"] is True and first["heartbeat_receipt"]["closeout_required"], first
+    effect = first["heartbeat_receipt"]["settlement_identity"]["effect_id"]
+
+    if pause_mode == "goal_stopped":
+        rc, stopped = _run_cli(
+            registry, runtime, "goal-lifecycle", "--goal-id", GOAL_ID,
+            "--operation", "stop", "--actor-kind", "owner", "--execute",
+        )
+        assert rc == 0 and stopped["written"] is True, stopped
+    else:
+        raw_registry = json.loads(registry.read_text(encoding="utf-8"))
+        raw_registry["goals"][0]["quota"]["compute"] = 0
+        raw_registry["goals"][0]["quota"]["allowed_slots"] = 0
+        registry.write_text(json.dumps(raw_registry, indent=2) + "\n", encoding="utf-8")
+
+    log = rollout_event_log_path(runtime, GOAL_ID)
+    expected_cause = "goal_stopped" if pause_mode == "goal_stopped" else "compute_quota_zero"
+    for pause_turn in ("pause-poll-1", "pause-poll-2"):
+        rc, paused = _run_cli(registry, runtime, *guard, "--turn-instance-id", pause_turn)
+        assert rc == 0, paused
+        assert paused["should_run"] is False, paused
+        assert (paused.get("quota") or {}).get("state") == "paused", paused
+        assert paused.get("pause_cause") == expected_cause, paused
+        assert "unsettled_host_turn_recovery" not in paused, paused
+        receipt = paused.get("heartbeat_receipt") or {}
+        assert not receipt.get("closeout_required"), receipt
+        assert "settlement_identity" not in receipt, receipt
+
+    paused_events = [
+        event for event in load_rollout_events(log)
+        if event.get("run_id") in {"pause-poll-1", "pause-poll-2"}
+    ]
+    assert len(paused_events) == 2
+    for event in paused_events:
+        details = event.get("details") or {}
+        assert details.get("should_run") is False, event
+        assert not details.get("closeout_required"), event
+        assert not str(details.get("recovery_effect_id") or "").strip(), event
+        assert not str(details.get("settlement_effect_id") or "").strip(), event
+
+    if pause_mode == "goal_stopped":
+        rc, resumed = _run_cli(
+            registry, runtime, "goal-lifecycle", "--goal-id", GOAL_ID,
+            "--operation", "resume", "--actor-kind", "owner", "--execute",
+        )
+        assert rc == 0 and resumed["written"] is True, resumed
+    else:
+        raw_registry = json.loads(registry.read_text(encoding="utf-8"))
+        raw_registry["goals"][0]["quota"]["compute"] = 1
+        raw_registry["goals"][0]["quota"]["allowed_slots"] = 4
+        registry.write_text(json.dumps(raw_registry, indent=2) + "\n", encoding="utf-8")
+
+    rc, recovered = _run_cli(registry, runtime, *guard, "--turn-instance-id", "after-resume")
+    assert rc == 0 and recovered["should_run"] is True, recovered
+    debt = recovered["unsettled_host_turn_recovery"]
+    assert debt["prior_turn_instance_id"] == "owed-original"
+    assert debt["settlement_effect_id"] == effect
+    assert debt["admissions_without_progress"] == 0, debt
+    assert _spend_run_count(runtime) == 0

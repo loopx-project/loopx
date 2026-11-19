@@ -6,7 +6,7 @@ DEFAULT_PERMISSION_RULE = "Reuse existing authorization for the current action; 
 OPERATOR_LANGUAGE_RULE = "Language=user; fallback=English; mix only if asked/scoped-bilingual."
 OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
-    "Read agent_channel.work_context and required_reads (or envelope) before work. "
+    "Read agent_channel.work_context and required_reads before work. "
     "Size by task/evidence/risk within authority/budget, not ops/files/wakes; "
     "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, "
     "never wake counts. Continue through integration, negative cases and readback "
@@ -84,6 +84,28 @@ SCHEDULER_HINT_COMPACT_RULE = (
 SCHEDULER_HINT_THIN_RULE = (
     "Bootstrap/min=floor; backoff. "
     + SCHEDULER_STOP_RULE + "Else RRULE/projected-fallback_hint/ack/fail."
+)
+ANTIGRAVITY_SCHEDULER_STOP_RULE = (
+    "host_action=pause_or_delete_current_heartbeat: cancel schedule via manage_task, do not re-arm, end, no work/spend. "
+)
+ANTIGRAVITY_SCHEDULER_HINT_APPLICATION_RULE = (
+    "Min=3m (DurationSeconds>=180); backoff 3->6->10m. "
+    + ANTIGRAVITY_SCHEDULER_STOP_RULE
+    + "Fixed session (no new-conversation sidecar unless asked): edit/guard in `.worktrees/`; "
+    "ack/fail if projected; end every turn with `schedule(DurationSeconds=max(180, interval*60), "
+    "TimerCondition=\"any\", Prompt=...)`, no shell sleep."
+)
+ANTIGRAVITY_SCHEDULER_HINT_COMPACT_RULE = (
+    "Min=3m (DurationSeconds>=180); backoff 3->6->10m. "
+    + ANTIGRAVITY_SCHEDULER_STOP_RULE
+    + "Use `.worktrees/` (no new-conversation sidecar unless asked); ack/fail if projected; "
+    "end turn via `schedule(DurationSeconds=max(180, interval*60), TimerCondition=\"any\", Prompt=...)`, no sleep."
+)
+ANTIGRAVITY_SCHEDULER_HINT_THIN_RULE = (
+    "Min=3m; backoff 3->6->10m. "
+    + ANTIGRAVITY_SCHEDULER_STOP_RULE
+    + "Edit in `.worktrees/` (no sidecar unless asked); ack/fail if projected; "
+    "end turn via `schedule(DurationSeconds=max(180, interval*60), TimerCondition=\"any\", Prompt=...)` (no sleep)."
 )
 RUNTIME_CAPABILITY_PROJECTION_THIN_RULE = (
     "Observed capabilities -> `--available-capability`; never user gates."

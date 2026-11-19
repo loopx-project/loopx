@@ -9,6 +9,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tarfile
 
 import pytest
 import yaml
@@ -298,7 +299,8 @@ def test_failed_view_does_not_replace_an_existing_release(publication, tag):
 
 
 @pytest.mark.parametrize("channel", ["main", "stable"])
-def test_builder_freezes_correct_archive_url_before_publication(tmp_path, monkeypatch, channel):
+@pytest.mark.parametrize("supported", [True, False], ids=["supported-default", "unqualified-default"])
+def test_builder_qualifies_committed_default_before_writing_artifacts(tmp_path, monkeypatch, channel, supported):
     from scripts import runtime_artifact as builder
 
     root = tmp_path / "source"
@@ -310,6 +312,7 @@ def test_builder_freezes_correct_archive_url_before_publication(tmp_path, monkey
             (path / "fixture.txt").write_text("public fixture", encoding="utf-8")
         else:
             path.write_text("public fixture", encoding="utf-8")
+    (root / "scripts/install-local.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "pyproject.toml").write_text('[project]\nversion = "1.2.3"\n', encoding="utf-8")
     bundle = root / "loopx/web/chat"
     bundle.mkdir(parents=True)
@@ -320,17 +323,43 @@ def test_builder_freezes_correct_archive_url_before_publication(tmp_path, monkey
     for args in (["init", "--quiet"], ["add", "--", *builder.PATHS], ["commit", "--quiet", "-m", "Synthetic runtime"]):
         subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True, timeout=15)
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8").strip()
+    (root / "loopx/fixture.txt").write_text("uncommitted runtime", encoding="utf-8")
     # Frontend qualification is independent; archive and descriptor creation
     # still execute through the real committed-source builder below.
     monkeypatch.setattr(builder, "validate_bundle", lambda *_a, **_kw: {
         "source_revision": revision, "source_files": {}, "files": {"index.html": "fixture"}})
+
+    def observe(source: Path) -> dict:
+        assert source != root
+        assert (source / "loopx/fixture.txt").read_text(encoding="utf-8") == "public fixture"
+        if supported:
+            return dict(PUBLIC_DEFAULT_CONTRACT)
+        return {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+                "interaction_schema_version": "loopx_interaction_contract_v0"}
+
+    monkeypatch.setattr(builder, "observe_default_contract", observe)
     output = tmp_path / "runtime"
+    if not supported:
+        output.mkdir()
+        previous = output / "loopx-runtime.json"
+        previous.write_bytes(b"previous descriptor")
+        with pytest.raises(ValueError, match="unqualified for public adoption"):
+            builder.build(root, output, repository="example/loopx", channel=channel)
+        assert list(output.iterdir()) == [previous]
+        assert previous.read_bytes() == b"previous descriptor"
+        return
+
     descriptor = builder.build(root, output, repository="example/loopx", channel=channel)
     tag = f"runtime-main-{revision}" if channel == "main" else "v1.2.3"
     assert descriptor["urls"] == [f"https://github.com/example/loopx/releases/download/{tag}/loopx-runtime-{revision}.tar.gz"]
     assert json.loads((output / "loopx-runtime.json").read_text(encoding="utf-8")) == descriptor
-    assert (output / f"loopx-runtime-{revision}.tar.gz").stat().st_size == descriptor["size"]
+    runtime = output / f"loopx-runtime-{revision}.tar.gz"
+    assert runtime.stat().st_size == descriptor["size"]
     assert descriptor["default_contract"] == PUBLIC_DEFAULT_CONTRACT
+    with tarfile.open(runtime, "r:gz") as archive:
+        identity = archive.extractfile("runtime-artifact.json")
+        assert identity is not None
+        assert json.load(identity)["default_contract"] == descriptor["default_contract"]
 
 
 def test_release_probe_observes_real_default_without_model_or_active_goal():

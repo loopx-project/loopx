@@ -3081,6 +3081,57 @@ def test_open_completion_todo_accepts_only_matching_in_flight_writeback(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unterminated_prior_guard_is_not_a_recovery_precondition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+
+    for case, committed in (("committed", True), ("unterminated", False)):
+        case_root = tmp_path / case
+        project, runtime, registry_path = _write_fixture(case_root)
+        _initialize_fixture_authority(project, runtime, provider=provider)
+        prior_turn_id = f"turn-{case}-prior"
+        rc, prior = _run_cli(
+            registry_path, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", prior_turn_id, "--todo-id", TODO_ID,
+        )
+        assert rc == 0, prior
+        assert prior["heartbeat_receipt"]["closeout_required"] is True
+        log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+        if not committed:
+            raw = log.read_bytes()
+            assert raw.endswith(b"\n")
+            log.write_bytes(raw[:-1])
+        # An unrelated append drops an unfinished tail before committing its
+        # own row.  The prior-turn decision must be the same before and after
+        # that append.
+        append_rollout_event(
+            log,
+            build_rollout_event(
+                goal_id=GOAL_ID,
+                event_kind="codex_session_observed",
+                agent_id=AGENT_ID,
+                run_id=f"turn-{case}-unrelated",
+                summary="unrelated append",
+            ),
+        )
+        admission_rc, admission = _run_cli(
+            registry_path, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--begin-turn",
+        )
+        assert admission_rc == 0, admission
+        if committed:
+            assert admission["effective_action"] == "unsettled_host_turn_recovery", admission
+        else:
+            assert admission["effective_action"] != "unsettled_host_turn_recovery", admission
+        assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
@@ -3695,7 +3746,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
-    original_ack_hint = guard["scheduler_hint"]["codex_app"]["ack_hint"]
+    original_ack_hint = guard["scheduler_hint"]["app_automation"]["ack_hint"]
 
     complete_args = (
         "todo",
@@ -3837,9 +3888,10 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert _spend_run_count(runtime) == 1
 
     # A historical settlement receipt cannot issue a new scheduler operation.
-    assert settled_replay["scheduler_hint"]["action"] == "preserve_current_schedule"
-    for surface in ("app_automation", "codex_app"):
-        assert "ack_hint" not in settled_replay["scheduler_hint"][surface]
+    settled_scheduler = settled_replay["scheduler_hint"]
+    assert settled_scheduler["action"] == "preserve_current_schedule"
+    assert "codex_app" not in settled_scheduler
+    assert "ack_hint" not in settled_scheduler["app_automation"]
     assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
     assert original_ack_hint["cli_args"][-3:] == [
         "--turn-instance-id",
@@ -6808,7 +6860,7 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     assert plan_identity["binding_id"] == identity["binding_id"]
     assert plan_identity["replan_obligation_id"] == obligation_id
     assert plan_identity["turn_instance_id"] == turn_instance_id
-    original_scheduler_ack_args = guard["scheduler_hint"]["codex_app"][
+    original_scheduler_ack_args = guard["scheduler_hint"]["app_automation"][
         "ack_hint"
     ]["cli_args"]
     original_scheduler_ack_args = original_scheduler_ack_args[
@@ -8413,15 +8465,14 @@ def test_completed_todo_reentry_preserves_original_settlement_commands(
     assert cli["spend_allowed_now"] is False
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert state_path.read_bytes() == completed_state
-    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
-    assert cli["next_cli_actions"] == [commands["durable_writeback"], commands["quota_spend"]]
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-    envelope = build_turn_envelope(resumed)
-    assert envelope["writeback"]["settlement_plan"] == plan
-    assert envelope["writeback"]["next_cli_actions"] == cli["next_cli_actions"]
-    assert envelope["writeback"]["spend_allowed_now"] is False
-    refresh = commands["durable_writeback"].replace(
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    steps = {step["kind"]: step for step in plan["ordered_steps"]}
+    assert steps["quota_spend"]["owner"] == "runtime"
+    assert "command_template" not in steps["quota_spend"]
+    writeback = steps["durable_writeback"]["command_template"]
+    assert cli["next_cli_actions"] == [writeback]
+    assert {"--settle-turn", "--settlement-receipt"} <= set(shlex.split(writeback))
+    refresh = writeback.replace(
         "<validated_progress>", "completed_read_only_result",
     ).replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
     refresh += (
@@ -8430,17 +8481,18 @@ def test_completed_todo_reentry_preserves_original_settlement_commands(
         " --no-global-sync --suppress-external-sinks"
     )
     rc, written = _run_generated_cli(refresh, registry_path=registry_path)
-    assert rc == 0, written
+    assert rc == 0 and written["settlement_identity"] == plan["identity"], written
+    receipts = written["settlement_result"]["receipts"]
+    assert [(row["step_kind"], row["effect_id"], row["status"]) for row in receipts] == [
+        (kind, plan["identity"]["effect_id"], "committed")
+        for kind in ("validation", "durable_writeback", "quota_spend")
+    ]
+    assert written["settlement_progress"]["state"] == "settled"
+    assert "settlement_owed" not in written
     rc, replayed = _run_generated_cli(refresh, registry_path=registry_path)
-    assert rc == 0, replayed
+    assert rc == 0 and replayed["idempotent_replay"] and not replayed["appended"], replayed
+    assert replayed["settlement_result"] == written["settlement_result"]
     assert _classification_count(runtime, "completed_read_only_result") == 1
-    rc, owed = _run_cli(registry_path, runtime, *guard_args)
-    assert rc == 0, owed
-    assert owed["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
-    assert owed["settlement_owed"]["todo_id"] == TODO_ID
-    for command in (owed["settlement_owed"]["command"], commands["quota_spend"]):
-        rc, spent = _run_generated_cli(command, registry_path=registry_path)
-        assert rc == 0, spent
     assert _spend_run_count(runtime) == 1
     rc, settled = _run_cli(registry_path, runtime, *guard_args)
     assert rc == 0, settled
@@ -9391,6 +9443,317 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     rc, spent = _run_generated_cli(spend, registry_path=registry)
     assert rc == 0 and spent["ok"] is True, spent
     assert _spend_run_count(runtime) == before + 1
+
+
+INSTANCE_A = "ginst_" + "a" * 32
+
+
+def test_retired_instance_writeback_cannot_drop_same_second_historical_ack(
+    tmp_path: Path,
+) -> None:
+    """A retired Goal instance's earlier refresh must not hide the current ACK.
+
+    Both instances share goals/<goal_id>/rollout-event-log.jsonl. This
+    should-run is the alias owner: its own refresh has no goal_ref. The
+    retired refresh reuses the ACK Turn and obligation and sits before
+    admission. The current generated_at falls in the admission second, so
+    acceptance depends on the alias owner's own refresh following admission.
+    """
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider="file")
+    original_turn = "turn-historical-same-second"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    recorded_at = admitted["heartbeat_receipt"]["recorded_at"]
+    recorded = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    later_turn = "later-accepted-same-second"
+    later_admitted = _bind_selected_replan_guard(registry, runtime, project, later_turn)
+    assert later_admitted["replan_action_packet"]["obligation_id"] == obligation
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
+        "todo_delta": [f"retain:{SELECTED_REPLAN_TODO_ID}"],
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Fixture work needs a verified next route.",
+            "observed_reality": "A fixture check supports continuing the existing work.",
+            "retained": ["Original requirements and the existing Todo."],
+            "evidence_refs": ["evidence:fixture-check"],
+        },
+    }), encoding="utf-8")
+    rc, refreshed = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-instance-id", later_turn,
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(project),
+        "--delivery-boundary", "semantic_closeout", "--agent-vision-json", str(vision),
+        "--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert rc == 0 and refreshed["appended"] is True, refreshed
+    assert refreshed["autonomous_replan_ack"]["semantic_delta"]["obligation_id"] == obligation
+    same_second = recorded.replace(microsecond=0).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    matched_runs = [row for row in rows if row.get("turn_instance_id") == later_turn]
+    assert matched_runs
+    for row in matched_runs:
+        row["generated_at"] = same_second
+        source = Path(row["json_path"])
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload["generated_at"] = same_second
+        source.write_text(json.dumps(payload), encoding="utf-8")
+    index_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    written_at = (recorded + timedelta(microseconds=1)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    retired_at = (recorded - timedelta(seconds=1)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    event = next(item for item in events
+        if item.get("event_kind") == "refresh_state" and item.get("run_id") == later_turn)
+    assert not str((event.get("details") or {}).get("replan_obligation_id") or "").strip()
+    assert event["details"]["autonomous_replan_recorded"] is True
+    assert "goal_ref" not in event
+    events.remove(event)
+    event["recorded_at"] = written_at
+    admission_index = next(index for index, item in enumerate(events)
+        if item.get("event_kind") == "quota_should_run" and item.get("run_id") == original_turn
+        and item.get("recorded_at") == recorded_at)
+    retired = json.loads(json.dumps(event))
+    retired["goal_ref"] = {"goal_id": GOAL_ID, "goal_instance_id": INSTANCE_A}
+    retired["recorded_at"] = retired_at
+    retired["event_id"] = "retired-instance-writeback"
+    retired["details"] = {
+        **retired["details"],
+        "autonomous_replan_recorded": True,
+        "replan_obligation_id": obligation,
+    }
+    events.insert(admission_index, retired)
+    events.append(event)
+    log_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID)
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    decision = (recovery.get("replan_action_packet") or {}).get("decision")
+    assert rc == 0, recovery
+    assert decision == "historical_ack_recorded", recovery.get("replan_action_packet")
+
+
+def _decision_summary(rc: int, payload: dict[str, Any]) -> dict[str, Any]:
+    packet = payload.get("replan_action_packet")
+    packet = packet if isinstance(packet, dict) else {}
+    return {
+        "rc": rc,
+        "decision": payload.get("decision"),
+        "error_code": payload.get("error_code"),
+        "packet_decision": packet.get("decision"),
+        "effective_action": payload.get("effective_action"),
+        "should_run": payload.get("should_run"),
+    }
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_only_retired_instance_ack_keeps_the_original_replan(
+    tmp_path: Path, provider: str,
+) -> None:
+    """A newer ACK from a retired instance must not stop the current recovery.
+
+    With no owned historical ACK, the admitted Turn keeps its replan. The
+    same decision remains when the shared run index contains only the retired
+    instance's later confirmation.
+    """
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    original_turn = "turn-retired-ack-only"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    recorded = datetime.fromisoformat(
+        admitted["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00"))
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID)
+    baseline_rc, baseline = _run_cli(registry, runtime, *guard_args)
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    generated_at = (recorded + timedelta(seconds=5)).isoformat()
+    run = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "turn_instance_id": "retired-later-ack", "generated_at": generated_at,
+        "goal_ref": {"goal_id": GOAL_ID, "goal_instance_id": INSTANCE_A},
+        "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "source": "refresh_state",
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0", "accepted": True,
+                "obligation_id": obligation,
+                "outcomes": ["fresh_vision_path_outcome"],
+                "satisfying_outcomes": ["fresh_vision_path_outcome"],
+            },
+        },
+    }
+    source = runs_dir / "retired-later-ack.json"
+    source.write_text(json.dumps(run), encoding="utf-8")
+    markdown = source.with_suffix(".md")
+    markdown.write_text("# Retired instance confirmation\n", encoding="utf-8")
+    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            **run, "json_path": str(source), "markdown_path": str(markdown),
+        }) + "\n")
+    retired_rc, retired = _run_cli(registry, runtime, *guard_args)
+    assert _decision_summary(retired_rc, retired) == _decision_summary(baseline_rc, baseline)
+    assert retired_rc == 0
+    assert retired.get("error_code") != "heartbeat_receipt_identity_conflict"
+    assert (retired.get("replan_action_packet") or {}).get("decision") != "historical_ack_recorded"
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
+        "todo_delta": [f"retain:{SELECTED_REPLAN_TODO_ID}"],
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Fixture work needs a verified next route.",
+            "observed_reality": "A fixture check supports continuing the existing work.",
+            "retained": ["Original requirements and the existing Todo."],
+            "evidence_refs": ["evidence:fixture-check"],
+        },
+    }), encoding="utf-8")
+    refresh_rc, refreshed = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-instance-id", original_turn,
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(project),
+        "--delivery-boundary", "semantic_closeout", "--agent-vision-json", str(vision),
+        "--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refreshed
+    assert refreshed.get("appended") is True
+    assert refreshed.get("error_code") != "heartbeat_receipt_identity_conflict"
+
+
+def test_progress_review_reentry_keeps_the_admitted_obligation_beside_a_retired_ack(
+    tmp_path: Path,
+) -> None:
+    """Recomputing the review must keep the assist context status already used.
+
+    A retired instance ACK forces that recompute. The admitted progress-review
+    obligation stays the same on the next should-run for this Turn.
+    """
+    from loopx.capabilities.progress_review.receipt import write_progress_review_receipt
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    pin = hashlib.sha256(b"contract-1").hexdigest()
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    goal = registry["goals"][0]
+    goal["status"] = "active"
+    goal["control_plane"] = {
+        "progress_review": {
+            "mode": "assist",
+            "signal": "noul",
+            "drift_threshold": 2,
+            "contract_revision": pin,
+        },
+    }
+    registry_path.write_text(json.dumps(registry, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="file")
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    for sequence, turn in ((2, "review-turn-2"), (1, "review-turn-1")):
+        row = {
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "turn_instance_id": turn,
+            "generated_at": f"2026-09-21T00:00:{sequence:02d}Z",
+            "classification": "bounded_delivery",
+            "progress_observation": {
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "advanced",
+                "hypothesis_id": f"hypothesis-{sequence}",
+            },
+        }
+        source = runs_dir / f"{turn}.json"
+        source.write_text(json.dumps(row), encoding="utf-8")
+        with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({**row, "json_path": str(source), "markdown_path": str(source.with_suffix(".md"))}) + "\n")
+        source.with_suffix(".md").write_text("# Reviewed delivery\n", encoding="utf-8")
+        write_progress_review_receipt(runtime, GOAL_ID, {
+            "receipt_id": hashlib.sha256(f"event-{sequence}".encode()).hexdigest(),
+            "event_id": hashlib.sha256(f"event-{sequence}".encode()).hexdigest(),
+            "evidence_id": hashlib.sha256(f"evidence-{sequence}".encode()).hexdigest(),
+            "contract_revision": pin,
+            "sequence": sequence,
+            "status": "completed",
+            "goal_id": GOAL_ID,
+            "schema_version": "progress_review_receipt_v0",
+            "signal_rule_version": "progress_review_signal_rule_v1",
+            "question_version": "scoped-progress-sentinel-v2",
+            "model": "fixture-v1",
+            "run": {
+                "turn_instance_id": turn,
+                "generated_at": f"2026-09-21T00:00:{sequence:02d}Z",
+                "agent_id": AGENT_ID,
+            },
+            "judgments": {
+                "choice": {"relation": "off_goal", "increment": "no_new_evidence"},
+                "noul": {"behavior_change": 0.05, "serves_acceptance": 0.04, "evidence_increment": 0.1},
+            },
+            "drift_signal": {"noul": True, "choice": True},
+            "label_probability_threshold": 0.6,
+            "recorded_at": float(sequence),
+        })
+    turn = "turn-progress-review-reentry"
+    guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--todo-id", TODO_ID,
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard)
+    assert first_rc == 0, first
+    assert first["decision"] == "autonomous_replan_required", first.get("decision")
+    kinds = [
+        trigger.get("kind")
+        for trigger in (first.get("autonomous_replan_obligation") or {}).get("triggers") or []
+        if isinstance(trigger, dict)
+    ]
+    assert kinds == ["external_progress_review_drift"], kinds
+    obligation = first["replan_action_packet"]["obligation_id"]
+    retired = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "turn_instance_id": "retired-review-ack",
+        "generated_at": "2026-09-21T00:00:05Z",
+        "classification": "bounded_replan_progress",
+        "goal_ref": {"goal_id": GOAL_ID, "goal_instance_id": INSTANCE_A},
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0", "accepted": True,
+                "obligation_id": obligation,
+                "outcomes": ["fresh_vision_path_outcome"],
+                "satisfying_outcomes": ["fresh_vision_path_outcome"],
+            },
+        },
+    }
+    source = runs_dir / "retired-review-ack.json"
+    source.write_text(json.dumps(retired), encoding="utf-8")
+    source.with_suffix(".md").write_text("# Retired review\n", encoding="utf-8")
+    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            **retired, "json_path": str(source), "markdown_path": str(source.with_suffix(".md")),
+        }) + "\n")
+    second_rc, second = _run_cli(registry_path, runtime, *guard)
+    assert second_rc == 0, second
+    assert second["decision"] == "autonomous_replan_required"
+    assert second["replan_action_packet"]["obligation_id"] == obligation
+    assert second.get("error_code") != "heartbeat_receipt_identity_conflict"
+
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

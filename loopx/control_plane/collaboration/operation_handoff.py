@@ -180,7 +180,7 @@ def agent_operation_action(
     outcome: Mapping[str, Any] | None = None,
     turn_key: str | None = None,
 ) -> dict[str, Any]:
-    """Internal locked IO seam, not a public caller-authentication endpoint.
+    """Internal locked IO seam.
 
     `actor` must be supplied by a qualified host transport, never by CLI flags,
     environment variables or an arbitrary model tool argument. Fixture calls

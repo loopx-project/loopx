@@ -66,8 +66,7 @@ contributors by anchored rows.
 
 For first-review contacts, accepted subsystem owners and voluntary scope
 confirmation, use the [governance review roster](../../.github/GOVERNANCE.md#first-review-responsibilities).
-Request the closest contact before escalating to the lead maintainer. A
-preferred review contact is not an exclusive task claim or new merge authority.
+Request the closest contact before escalating to the lead maintainer.
 
 1. Prefer a linked GitHub issue. If there is no issue yet, open one with the
    contributor task template; it asks for the anchor and the gap.
@@ -81,8 +80,7 @@ preferred review contact is not an exclusive task claim or new merge authority.
    there is a public helper slice instead.
 
 Before claiming a row, reconcile its anchor with latest main, related PRs and
-the roadmap. Historical rows are not proof that a missing feature remains
-unimplemented or a proposed slice is still useful. The
+the roadmap. The
 [Technical Directions map](../project/technical-directions.md) owns contributor
 routing and current maturity; this board does not keep a second copy.
 

@@ -119,8 +119,7 @@ def restore_receipt_bound_todo_source(
     """Complete a display snapshot from the original binding's provider reader.
 
     Display lane caps cannot decide whether a committed Todo still exists.
-    This only transports provider facts to the existing decision owner; it
-    neither changes lifecycle nor substitutes a new settlement binding.
+    This only transports provider facts to the existing decision owner.
     """
     from ..todos.quota_summary import select_planning_inventory_source_items
 
@@ -497,8 +496,8 @@ def apply_receipt_bound_wait_recovery(
         current_turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context)
     if verdict["recovery"].get("repair") == "durable_writeback":
-        # Transport the typed recovery through the existing command owner. A
-        # waiting or completed Todo is not executable work or a new grant.
+        # Resume the original effect through the same composed command as
+        # ordinary C1 delivery. Recovery never grants new task execution.
         from ..work_items.action_selection_contract import render_cli_command_prefix
 
         assert settlement_progress is not None
@@ -514,14 +513,12 @@ def apply_receipt_bound_wait_recovery(
             lifecycle_actor_args="",
             quota_spend_source=settlement_progress["quota_spend_source"],
             goal_ref=payload.get("goal_ref"),
+            composed_settlement=True,
         ).as_dict()
         cli = payload["interaction_contract"]["cli_channel"]
         cli.update({
             "settlement_plan": plan,
-            "next_cli_actions": [
-                settlement_step_command(plan, kind)
-                for kind in (SettlementStepKind.DURABLE_WRITEBACK, SettlementStepKind.QUOTA_SPEND)
-            ],
+            "next_cli_actions": [settlement_step_command(plan, SettlementStepKind.DURABLE_WRITEBACK)],
             "spend_after_validation": True,
             "quota_spend_source": settlement_progress["quota_spend_source"],
         })

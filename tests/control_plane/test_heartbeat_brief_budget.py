@@ -100,7 +100,7 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
     assert markdown.count(payload["quota_guard_command"]) == 1
     for obligation in (
         "true=work+writeback; only false permits no-op",
-        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "Read agent_channel.work_context and required_reads before work",
         "retain original and cumulative outcome requirements",
         "reuse inline goal_acceptance, inspect only if absent, then refine",
         "Known new-Turn choice: add `--todo-id <id>` to first guard; otherwise",

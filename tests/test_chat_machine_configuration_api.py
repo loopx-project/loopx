@@ -235,6 +235,24 @@ def test_real_chat_http_catalog_and_machine_write_boundary(tmp_path: Path) -> No
             },
             "private-invalid-endpoint",
         ),
+        (
+            "steward_memory",
+            {
+                "schema_version": "steward_memory_machine_defaults_v0",
+                "enabled": True,
+                "user_space": "private/invalid/space",
+                "auto_recall": True,
+                "recall_timeout_seconds": 3,
+            },
+            {
+                "schema_version": "steward_memory_machine_defaults_v0",
+                "enabled": False,
+                "user_space": "steward",
+                "auto_recall": True,
+                "recall_timeout_seconds": 3,
+            },
+            "private/invalid/space",
+        ),
     ],
 )
 def test_real_chat_http_invalid_namespace_has_safe_repair_path(
@@ -348,6 +366,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "periodic_report",
         "pull_request_review",
         "steward_executor",
+        "steward_memory",
         "todo_replan_cadence",
     ]
     namespace_catalog = {
@@ -447,7 +466,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     )
     # Machine-only capabilities are the ones a Goal cannot override: the
     # manager profile, native host defaults, steward executor and storage target.
-    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage", "codex_chat", "context_delivery"} == {
+    assert set(machine) - {"manager_runtime", "steward_executor", "steward_memory", "goal_storage", "codex_chat", "context_delivery"} == {
         feature["feature_id"] for feature in goal["features"]
     }
     assert machine["pull_request_review"]["available_scopes"] == ["machine", "goal"]
@@ -463,7 +482,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     for capability_id, item in machine.items():
         assert "current" not in item
         assert "commands" not in item
-        if capability_id in {"manager_runtime", "steward_executor", "goal_storage", "codex_chat", "context_delivery"}:
+        if capability_id in {"manager_runtime", "steward_executor", "steward_memory", "goal_storage", "codex_chat", "context_delivery"}:
             assert item["available_scopes"] == ["machine"]
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]

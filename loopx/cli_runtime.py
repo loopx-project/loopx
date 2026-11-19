@@ -192,7 +192,7 @@ def resolve_cli_registry(
 	)
 	if args.command == "update" and getattr(args, "update_action", None) == "activate":
 		# Service activation reads its route from the loaded original manager.
-		# It neither opens Goal authority nor guesses a default Chat store.
+
 		return registry_path, registry_was_configured
 	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "context-project", "replan-view"}:
 		from .cli_commands.context_machine import has_explicit_context_read_source
@@ -560,6 +560,7 @@ def _dispatch_common_command(
 	*,
 	registry_path: Path,
 	allow_missing_registry: bool,
+	registry_was_configured: bool | None = None,
 ) -> int | None:
 	if args.command == "start-goal":
 		from .cli_commands.start_goal import handle_start_goal_command
@@ -706,7 +707,11 @@ def _dispatch_common_command(
 		from .cli_commands.slash_commands import handle_slash_commands_command
 
 		return handle_slash_commands_command(
-			args, output_format=output_format, print_payload=print_payload,
+			args,
+			output_format=output_format,
+			print_payload=print_payload,
+			registry_path=registry_path,
+			registry_was_configured=registry_was_configured,
 		)
 	if args.command == "doctor":
 		from .cli_commands.doctor import handle_doctor_command
@@ -864,6 +869,7 @@ def dispatch_common_command(
 	*,
 	registry_path: Path,
 	allow_missing_registry: bool,
+	registry_was_configured: bool | None = None,
 ) -> int | None:
 	from .control_plane.effect_runtime import effect_runtime_request_scope
 
@@ -872,6 +878,7 @@ def dispatch_common_command(
 			args,
 			registry_path=registry_path,
 			allow_missing_registry=allow_missing_registry,
+			registry_was_configured=registry_was_configured,
 		)
 
 
@@ -882,7 +889,7 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	guard_result = enforce_native_controller_guard(args)
 	if guard_result is not None:
 		return guard_result
-	registry_path, _registry_was_configured = resolve_cli_registry(args, raw_argv)
+	registry_path, registry_was_configured = resolve_cli_registry(args, raw_argv)
 	if args.command in _REGISTRY_INSPECTION_COMMANDS:
 		from .registry import (
 			inspect_registry, inspect_registry_boundary,
@@ -930,6 +937,7 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args,
 			registry_path=registry_path,
 			allow_missing_registry=not user_supplied_registry(raw_argv),
+			registry_was_configured=registry_was_configured,
 		)
 	if result is None:  # pragma: no cover - caller guards the private interface
 		raise AssertionError(f"selected command was not dispatched: {args.command}")

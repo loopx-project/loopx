@@ -98,8 +98,7 @@ the CLI and future agents cannot read.
 
 ### 7. Over-claiming benchmark uplift
 
-Benchmarks are evidence, not the whole product. One case or one project-level
-review does not prove general model uplift. LoopX should claim the narrower
+Benchmarks are evidence, not the whole product. LoopX should claim the narrower
 value it can show: long-running agent work becomes easier to inspect, steer,
 recover, and compare.
 

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {
   atomicWriteJson,
   withFileMutationLock,
@@ -142,6 +143,7 @@ interface CommitMetadata {
   effect_id: string;
   request_digest: string;
   operation: SchedulerHeartbeatCommitOperation;
+  goal_instance_id: string | null;
 }
 
 export interface SchedulerHeartbeatCommitResult extends JsonObject {
@@ -171,6 +173,9 @@ export interface SchedulerHeartbeatCommitResult extends JsonObject {
 
 export interface SchedulerHeartbeatCommitOptions {
   readonly heartbeatReceiptTurnInstanceId?: string | null;
+  readonly heartbeatReceiptGoalRef?: JsonObject | null;
+  /** Project registry; supplies the current authoritative Goal lifetime. */
+  readonly registryPath?: string | null;
 }
 
 function stableValue(value: unknown): unknown {
@@ -472,6 +477,83 @@ function hostFactsRequest(value: unknown): {
   return { request, operation_id: operationId };
 }
 
+interface CurrentGoalInstance {
+  readonly kind: "legacy" | "absent" | "instance" | "ambiguous" | "unverifiable";
+  readonly goalInstanceId?: string;
+  readonly active?: boolean;
+  readonly issue?: string;
+}
+
+/**
+ * The registered Goal lifetime that owns scheduler writes right now.
+ *
+ * Only the registry declares a current instance; a legacy registry keeps the
+ * established goal-scoped path.  A registry that cannot be read is reported as
+ * legacy so an unreadable local file does not invent an instance.
+ */
+async function readCurrentGoalInstance(
+  registryPath: string,
+  goalId: string,
+): Promise<CurrentGoalInstance> {
+  let text: string;
+  try {
+    text = await readFile(registryPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { kind: "absent" };
+    }
+    return {
+      kind: "unverifiable",
+      issue: "the project registry could not be read at commit time",
+    };
+  }
+  let root: unknown;
+  try {
+    root = JSON.parse(text);
+  } catch {
+    return {
+      kind: "unverifiable",
+      issue: "the project registry is not valid JSON at commit time",
+    };
+  }
+  const envelope = Array.isArray(root) && root.length === 2 ? root : null;
+  const header = envelope === null ? null : envelope[0];
+  const payload = envelope === null ? root : envelope[1];
+  if (header !== null && (
+    typeof header !== "object" || header === null ||
+    typeof (header as JsonObject).schema_version !== "string" ||
+    !String((header as JsonObject).schema_version)
+      .startsWith("loopx_project_registry_envelope_")
+  )) return { kind: "legacy" };
+  if (typeof payload !== "object" || payload === null) return { kind: "legacy" };
+  const goals = (payload as JsonObject).goals;
+  if (!Array.isArray(goals)) return { kind: "legacy" };
+  const matching = goals.filter((item) => (
+    typeof item === "object" && item !== null &&
+    (item as JsonObject).id === goalId
+  ));
+  if (matching.length === 0) return { kind: "absent" };
+  // One registry entry names one current lifetime.  Duplicate entries are not
+  // resolved by position: an arbitrary pick could authorize a superseded
+  // lifetime or silently switch the owner mid-commit.
+  if (matching.length > 1) {
+    return {
+      kind: "ambiguous",
+      issue: "the project registry lists the Goal more than once",
+    };
+  }
+  const goal = matching[0] as JsonObject;
+  const instanceId = goal.goal_instance_id;
+  if (typeof instanceId !== "string" || !/^ginst_[0-9a-f]{32}$/.test(instanceId)) {
+    return { kind: "legacy" };
+  }
+  return {
+    kind: "instance",
+    goalInstanceId: instanceId,
+    active: (goal as JsonObject).status === "active",
+  };
+}
+
 function commitMetadata(state: JsonObject | null): CommitMetadata | null {
   if (!state) return null;
   const value = state.heartbeat_commit;
@@ -490,6 +572,9 @@ function commitMetadata(state: JsonObject | null): CommitMetadata | null {
     effect_id: metadata.effect_id,
     request_digest: metadata.request_digest,
     operation: metadata.operation,
+    goal_instance_id: typeof metadata.goal_instance_id === "string"
+      ? metadata.goal_instance_id
+      : null,
   };
 }
 
@@ -497,6 +582,7 @@ function withCommitMetadata(
   state: JsonObject,
   request: SchedulerHeartbeatCommitRequest,
   digest: string,
+  goalInstanceId: string | null,
 ): JsonObject {
   return {
     ...state,
@@ -505,6 +591,7 @@ function withCommitMetadata(
       effect_id: request.effect_id,
       request_digest: digest,
       operation: request.operation,
+      ...(goalInstanceId === null ? {} : { goal_instance_id: goalInstanceId }),
     },
   };
 }
@@ -635,6 +722,7 @@ function buildAckState(
   existing: JsonObject | null,
   path: string,
   fingerprint: string,
+  goalInstanceId: string | null,
 ): { state: JsonObject; extra: Partial<SchedulerHeartbeatCommitResult> } |
   SchedulerHeartbeatCommitResult {
   if (request.ack_needed === false && request.apply_needed === false) {
@@ -725,7 +813,7 @@ function buildAckState(
     source: request.source,
     host_update_failures: priorFailures.length ? priorFailures : null,
   });
-  state = withCommitMetadata(state, request, fingerprint);
+  state = withCommitMetadata(state, request, fingerprint, goalInstanceId);
   return {
     state,
     extra: {
@@ -742,6 +830,7 @@ function buildHostFailureState(
   existing: JsonObject | null,
   path: string,
   fingerprint: string,
+  goalInstanceId: string | null,
 ): { state: JsonObject; extra: Partial<SchedulerHeartbeatCommitResult> } |
   SchedulerHeartbeatCommitResult {
   if (request.apply_needed !== true) {
@@ -808,7 +897,7 @@ function buildHostFailureState(
     host_update_failure: failure,
     host_update_failures: failures,
   });
-  state = withCommitMetadata(state, request, fingerprint);
+  state = withCommitMetadata(state, request, fingerprint, goalInstanceId);
   return {
     state,
     extra: {
@@ -817,6 +906,133 @@ function buildHostFailureState(
       failure_count: priorCount + 1,
     },
   };
+}
+
+interface GoalLifetimeRejection {
+  readonly kind: "reject";
+  readonly message: string;
+  readonly reasonCode: string;
+}
+
+type GoalLifetimeDecision =
+  | { readonly kind: "accept"; readonly goalInstanceId: string | null }
+  | GoalLifetimeRejection;
+
+/**
+ * Which Goal lifetime the project registry lets this commit write.
+ *
+ * A Goal that declares a lifetime cannot be written by a receipt that names
+ * none: an older host's report would otherwise land on whichever instance is
+ * current now.  A registry without instance identity keeps the established
+ * goal-scoped path.
+ */
+function decideGoalLifetime(
+  current: CurrentGoalInstance,
+  receiptGoalRef: JsonObject | null,
+): GoalLifetimeDecision {
+  if (receiptGoalRef === null) {
+    return current.kind === "instance"
+      ? {
+        kind: "reject",
+        message:
+          "scheduler writeback from this Goal lifetime must name the current Goal reference",
+        reasonCode: "heartbeat_receipt_goal_ref_missing",
+      }
+      : { kind: "accept", goalInstanceId: null };
+  }
+  switch (current.kind) {
+    case "absent":
+      return {
+        kind: "reject",
+        message:
+          "scheduler writeback requires the registered Goal; it is not in the project registry",
+        reasonCode: "goal_instance_absent",
+      };
+    case "unverifiable":
+      return {
+        kind: "reject",
+        message: `the current Goal lifetime is not verifiable from the project registry: ${
+          current.issue ?? "unknown registry state"
+        }`,
+        reasonCode: "goal_instance_unverifiable",
+      };
+    case "ambiguous":
+      return {
+        kind: "reject",
+        message: `the current Goal lifetime is not verifiable from the project registry: ${
+          current.issue ?? "duplicate entries"
+        }`,
+        reasonCode: "goal_instance_ambiguous",
+      };
+    case "instance":
+      if (current.active !== true) {
+        return {
+          kind: "reject",
+          message:
+            "the Goal is not active in the project registry; refusing scheduler writeback from its previous lifetime",
+          reasonCode: "goal_instance_inactive",
+        };
+      }
+      if (receiptGoalRef.goal_instance_id !== current.goalInstanceId) {
+        return {
+          kind: "reject",
+          message:
+            "heartbeat receipt belongs to a superseded Goal instance; refusing scheduler writeback",
+          reasonCode: "heartbeat_receipt_goal_instance_superseded",
+        };
+      }
+      // An `instance` row without an id cannot be matched against the receipt's
+      // Goal reference; the null keeps the state field absent rather than
+      // writing a lifetime the registry did not name.
+      return { kind: "accept", goalInstanceId: current.goalInstanceId ?? null };
+    case "legacy":
+      return { kind: "accept", goalInstanceId: null };
+  }
+}
+
+/** Registry transactions hold this marker across their whole read-modify-write. */
+const GOAL_REGISTRY_FENCE_TIMEOUT_MS = 60_000;
+
+/**
+ * Rename scheduler state only while the registry still names its lifetime.
+ *
+ * The read above is a fast rejection; this fence is the authoritative one.
+ * Python registry transactions take the same cross-runtime mutation marker
+ * (`<registry>.ts-effect.lock`), so a Goal recreation either publishes its new
+ * lifetime before this read or waits for the state rename to finish.  Without
+ * the marker a recreation could land between the two and let a superseded
+ * lifetime overwrite the state its replacement already wrote.
+ */
+async function writeStateUnderRegistryFence(params: {
+  registryPath: string | null;
+  goalId: string;
+  receiptGoalRef: JsonObject | null;
+  goalInstanceId: string | null;
+  write: () => Promise<void>;
+}): Promise<GoalLifetimeRejection | null> {
+  const fenced = async (): Promise<GoalLifetimeRejection | null> => {
+    if (params.registryPath !== null) {
+      const current = await readCurrentGoalInstance(
+        params.registryPath, params.goalId,
+      );
+      const lifetime = decideGoalLifetime(current, params.receiptGoalRef);
+      if (lifetime.kind === "reject") return lifetime;
+      if (lifetime.goalInstanceId !== params.goalInstanceId) {
+        return {
+          kind: "reject",
+          message:
+            "the Goal lifetime changed before the scheduler commit was written; refusing scheduler writeback",
+          reasonCode: "heartbeat_receipt_goal_instance_superseded",
+        };
+      }
+    }
+    await params.write();
+    return null;
+  };
+  if (params.registryPath === null) return await fenced();
+  return await withFileMutationLock(
+    params.registryPath, fenced, GOAL_REGISTRY_FENCE_TIMEOUT_MS,
+  );
 }
 
 export async function evaluateSchedulerHeartbeatCommit(
@@ -831,6 +1047,30 @@ export async function evaluateSchedulerHeartbeatCommit(
       options.heartbeatReceiptTurnInstanceId,
       "heartbeatReceiptTurnInstanceId",
     ).trim();
+  let receiptGoalRef: JsonObject | null = null;
+  if (options.heartbeatReceiptGoalRef !== undefined &&
+      options.heartbeatReceiptGoalRef !== null) {
+    const parsed = parseExactGoalRef(options.heartbeatReceiptGoalRef);
+    if (parsed.kind === "invalid") {
+      throw new EffectRuntimeRequestError(
+        `heartbeat receipt goal_ref is invalid: ${parsed.issue}`,
+        "heartbeat_receipt_goal_ref_invalid",
+      );
+    }
+    receiptGoalRef = {
+      goal_id: parsed.value.goalId.value,
+      goal_instance_id: parsed.value.goalInstanceId.value,
+    };
+    if (receiptGoalRef.goal_id !== request.scope.goalId) {
+      throw new EffectRuntimeRequestError(
+        "heartbeat receipt goal_ref does not match the scheduler scope",
+        "heartbeat_receipt_goal_ref_mismatch",
+      );
+    }
+  }
+  const registryPath = options.registryPath === null || options.registryPath === undefined
+    ? null
+    : requiredString(options.registryPath, "registryPath").trim();
   const path = schedulerStatePath(request.runtime_root, request.scope);
   const fingerprint = requestDigest(request);
   // Legacy state stays read-only until the commit holds every applicable
@@ -847,12 +1087,38 @@ export async function evaluateSchedulerHeartbeatCommit(
   const commit = async (): Promise<SchedulerHeartbeatCommitResult> => {
     const canonical = await readStateUnderLock(path, request.scope);
     let existing = canonical ?? loaded.state;
+    // One owner decides which Goal lifetime may still write scheduler state.
+    // The registry is read under the state lock, before any receipt or replay
+    // read, so an replaced or cancelled lifetime cannot overwrite or replay a
+    // newer instance's commit with the same Goal/Agent/surface/state key.
+    let goalInstanceId: string | null = null;
+    if (registryPath !== null) {
+      // One owner decides which Goal lifetime may still write scheduler state.
+      // The registry is read under the state lock, before any receipt or
+      // replay read, so an replaced or cancelled lifetime cannot overwrite or
+      // replay a newer instance's commit with the same Goal/Agent/surface/state
+      // key.  The rename repeats the same decision under the registry marker
+      // lock, because a Goal recreation can publish a new lifetime while this
+      // commit is still preparing.
+      const current = await readCurrentGoalInstance(
+        registryPath, request.scope.goalId,
+      );
+      const lifetime = decideGoalLifetime(current, receiptGoalRef);
+      if (lifetime.kind === "reject") {
+        return result(
+          request, path, "conflict", existing, lifetime.message,
+          { reason_code: lifetime.reasonCode },
+        );
+      }
+      goalInstanceId = lifetime.goalInstanceId;
+    }
     if (receiptTurnInstanceId !== null) {
       const status = await heartbeatReceiptStatus({
         runtimeRoot: request.runtime_root,
         goalId: request.scope.goalId,
         agentId: request.scope.agentId,
         turnInstanceId: receiptTurnInstanceId,
+        goalRef: receiptGoalRef,
       });
       if (status !== "fresh") {
         return result(
@@ -890,6 +1156,16 @@ export async function evaluateSchedulerHeartbeatCommit(
     const existingDigest = schedulerHeartbeatCommitStateDigest(existing);
     const metadata = commitMetadata(existing);
     if (metadata?.effect_id === request.effect_id) {
+      const committedInstance = typeof metadata.goal_instance_id === "string"
+        ? metadata.goal_instance_id
+        : null;
+      if (committedInstance !== goalInstanceId) {
+        return result(
+          request, path, "conflict", existing,
+          "effect_id is already bound to a scheduler commit from another Goal instance",
+          { reason_code: "goal_instance_replay_conflict" },
+        );
+      }
       if (
         metadata.operation === request.operation &&
         metadata.request_digest === fingerprint
@@ -990,8 +1266,8 @@ export async function evaluateSchedulerHeartbeatCommit(
       );
     }
     const built = request.operation === "ack"
-      ? buildAckState(request, existing, path, fingerprint)
-      : buildHostFailureState(request, existing, path, fingerprint);
+      ? buildAckState(request, existing, path, fingerprint, goalInstanceId)
+      : buildHostFailureState(request, existing, path, fingerprint, goalInstanceId);
     if ("status" in built) return built;
     if (!request.execute) {
       return result(
@@ -1003,7 +1279,25 @@ export async function evaluateSchedulerHeartbeatCommit(
         built.extra,
       );
     }
-    await atomicWriteJson(path, stableValue(built.state) as JsonObject);
+    const fence = await writeStateUnderRegistryFence({
+      registryPath,
+      goalId: request.scope.goalId,
+      receiptGoalRef,
+      goalInstanceId,
+      write: async () => {
+        await atomicWriteJson(path, stableValue(built.state) as JsonObject);
+      },
+    });
+    if (fence !== null) {
+      return result(
+        request,
+        path,
+        "conflict",
+        existing,
+        fence.message,
+        { reason_code: fence.reasonCode },
+      );
+    }
     return result(
       request,
       path,

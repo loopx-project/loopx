@@ -92,7 +92,7 @@ the origin of a `python_module`, and any view validator the extension declares. 
 invalidates the old doctor proof. LoopX's own built-in validators are deliberately excluded, so upgrading
 LoopX does not invalidate every extension with it.
 
-Doctor status is a ladder rather than a boolean:
+Doctor status is a ladder:
 
 ```text
 entrypoint_missing              -> identity cannot be resolved
@@ -200,7 +200,7 @@ code keeps running. Install the package that matches the target revision around 
 actual behavior back with `run`. Activation state retains a bounded number of validated
 revision snapshots (five today).
 
-`rollback_available=false` means no rollback revision is recorded, as after a first install. It is not a diagnosis of a damaged environment.
+`rollback_available=false` means no rollback revision is recorded, as after a first install.
 
 If a target exists but its doctor fails, inspect or reinstall the matching package before rollback and doctor readback; when doctor passes, still confirm that the matching version is installed. Without a historical target, choose an explicit version and prepare an installation/upgrade path; repairing the environment cannot create history.
 

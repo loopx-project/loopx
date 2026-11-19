@@ -116,6 +116,7 @@ from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
 from .control_plane.projects.registry_codec import load_registry
 from .registry import registry_goals, resolve_state_file
+from .thread_agent_binding import list_attached_session_bindings
 from .state_projection import build_active_state_structured_projection
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
@@ -1642,6 +1643,15 @@ class ChatRequestHandler(
         if path == "/healthz":
             self._send_json({"ok": True})
             return
+        if path == "/api/attached-sessions":
+            # Read-only list of the external-session bindings the registry
+            # accepts (host, session id, Goal, Agent); it opens nothing.
+            try:
+                goals = registry_goals(load_registry(self.server.registry_path))
+            except (OSError, ValueError):
+                goals = []
+            self._send_json({"ok": True, "bindings": list_attached_session_bindings(goals)})
+            return
         if path == CHAT_READINESS_PATH:
             # Readiness pairs the frontend with this loaded service artifact.
             # Model/provider availability and original-conversation grants are
@@ -1871,8 +1881,11 @@ def serve_chat(
         raise ValueError("loopx chat requires a loopback --host such as 127.0.0.1")
     resolved_assets = (assets_dir or default_chat_assets_dir()).expanduser().resolve()
     if assets_dir is None:
-        from .presentation.chat_bundle import validate_bundle
-        validate_bundle(resolved_assets, source_root=Path(__file__).resolve().parents[1])
+        from .presentation.chat_bundle import runtime_source_root, validate_bundle
+        validate_bundle(
+            resolved_assets,
+            source_root=runtime_source_root(Path(__file__).resolve().parents[1]),
+        )
     if not (resolved_assets / "index.html").is_file():
         raise FileNotFoundError("LoopX Chat web assets are unavailable; reinstall LoopX or rebuild the chat bundle")
     resolved_registry_path = registry_path or (Path.home() / ".loopx" / "registry.json")

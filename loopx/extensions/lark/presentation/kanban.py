@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -30,9 +31,56 @@ from ....public_safe_text import (
     SECRET_LIKE_SURFACE_PATTERN,
     SINK_COMPOUND_CREDENTIAL_ASSIGNMENT_PATTERN,
 )
-from .. import cli_transport
+from .. import cli_transport as cli_transport
 from ..private_json import write_private_json_atomic
-from . import issue_fix_surface
+from . import issue_fix_surface as issue_fix_surface
+from .kanban_board import (
+    CLAIM_AGENT as CLAIM_AGENT,
+    CLAIM_HUMAN as CLAIM_HUMAN,
+    CLAIM_UNCLAIMED as CLAIM_UNCLAIMED,
+    DEFAULT_STATUS_QUEUE_VIEW as DEFAULT_STATUS_QUEUE_VIEW,
+    DEFAULT_TABLE_NAME as DEFAULT_TABLE_NAME,
+    LARK_KANBAN_SCHEMA_VERSION as LARK_KANBAN_SCHEMA_VERSION,
+    OPERATOR_CARD_FIELDS as OPERATOR_CARD_FIELDS,
+    STATUS_BLOCKED as STATUS_BLOCKED,
+    STATUS_CLAIMED as STATUS_CLAIMED,
+    STATUS_DONE as STATUS_DONE,
+    STATUS_REVIEW as STATUS_REVIEW,
+    STATUS_RUNNING as STATUS_RUNNING,
+    STATUS_TODO as STATUS_TODO,
+    STATUS_USER_GATE as STATUS_USER_GATE,
+    _base_cmd,
+    _board_payload as _board_payload,
+    _extract_base_token as _extract_base_token,
+    _extract_created_record_id as _extract_created_record_id,
+    _extract_list_from_payload as _extract_list_from_payload,
+    _extract_table_id as _extract_table_id,
+    _extract_table_id_from_blocks as _extract_table_id_from_blocks,
+    _extract_view_ids as _extract_view_ids,
+    _find_first_record_id as _find_first_record_id,
+    _find_first_string as _find_first_string,
+    _identity_available as _identity_available,
+    _identity_error as _identity_error,
+    _inspect_lark_kanban_schema as _inspect_lark_kanban_schema,
+    _lark_kanban_preflight as _lark_kanban_preflight,
+    _lark_kanban_schema_check as _lark_kanban_schema_check,
+    _refresh_view_ids as _refresh_view_ids,
+    _schema_check_error as _schema_check_error,
+    _select_options as _select_options,
+    _setup_payload as _setup_payload,
+    _string_id_from_dict as _string_id_from_dict,
+    _version_tuple as _version_tuple,
+    _view_configuration_commands as _view_configuration_commands,
+    build_create_board_plan as build_create_board_plan,
+    create_lark_kanban_board as create_lark_kanban_board,
+    lark_kanban_doctor as lark_kanban_doctor,
+    lark_kanban_field_definitions as lark_kanban_field_definitions,
+    lark_kanban_operator_card_fields as lark_kanban_operator_card_fields,
+    lark_kanban_schema_payload as lark_kanban_schema_payload,
+    lark_kanban_views as lark_kanban_views,
+    setup_lark_kanban_board as setup_lark_kanban_board,
+    use_lark_kanban_board as use_lark_kanban_board,
+)
 from .projection_rows import (
     projection_lifecycle_parts as _projection_lifecycle_parts,
     projection_lifecycle_state as _projection_lifecycle_state,
@@ -44,220 +92,51 @@ from .projection_rows import (
 )
 from .record_io import (
     build_record_delete_command,
-    lark_record_rows,
+    lark_record_rows as lark_record_rows,
     record_list_is_complete,
-    todo_record_list_is_authoritative,
     todo_record_entries,
+    todo_record_list_is_authoritative,
 )
-from .sink_visibility import SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITY_SHARED, SINK_VISIBILITIES
+from .sink_visibility import (
+    SINK_VISIBILITIES,
+    SINK_VISIBILITY_OWNER_ONLY,
+    SINK_VISIBILITY_SHARED,
+)
 from .sync_receipt import (
     compact_lark_kanban_sync_receipt as compact_lark_kanban_sync_receipt,
     render_lark_kanban_markdown as render_lark_kanban_markdown,
 )
 
-LARK_KANBAN_SCHEMA_VERSION = "loopx_lark_kanban_control_plane_v0"
 LARK_KANBAN_HEARTBEAT_VERSION = "loopx_lark_kanban_heartbeat_v0"
 LARK_KANBAN_LOCAL_CONFIG_VERSION = "loopx_lark_kanban_local_config_v0"
 LARK_KANBAN_SYNC_PROJECTION_VERSION = "loopx_lark_kanban_sync_projection_v0"
-DEFAULT_TABLE_NAME = "LoopX Control Plane"
 DEFAULT_AGENT_ID = "codex-kanban-worker"
-DEFAULT_STATUS_QUEUE_VIEW = "Worker Queue"
-OPERATOR_CARD_FIELDS = ["Task", "Claim", "Priority", "User Gate", "Evidence", "Status"]
-
-STATUS_TODO = "Todo"
-STATUS_CLAIMED = "Claimed"
-STATUS_RUNNING = "Running"
-STATUS_USER_GATE = "User Gate"
-STATUS_BLOCKED = "Blocked"
-STATUS_REVIEW = "Review"
-STATUS_DONE = "Done"
-CLAIM_UNCLAIMED = "Unclaimed"
-CLAIM_HUMAN = "Human"
-CLAIM_AGENT = "Agent"
-
 TEXT_LIMIT = 4000
 
 
-def _select_options(names: list[str]) -> list[dict[str, str]]:
-    hues = {
-        STATUS_TODO: "Gray",
-        STATUS_CLAIMED: "Blue",
-        STATUS_RUNNING: "Orange",
-        STATUS_USER_GATE: "Purple",
-        STATUS_BLOCKED: "Red",
-        STATUS_REVIEW: "Wathet",
-        STATUS_DONE: "Green",
-        CLAIM_UNCLAIMED: "Gray",
-        CLAIM_HUMAN: "Green",
-        CLAIM_AGENT: "Blue",
-        "P0": "Red",
-        "P1": "Orange",
-        "P2": "Blue",
-        "P3": "Gray",
-        "advancement_task": "Blue",
-        "continuous_monitor": "Wathet",
-        "user_gate": "Purple",
-        "blocker": "Red",
+def _task_record(overrides: Mapping[str, object]) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "Task": "",
+        "Status": STATUS_TODO,
+        "Claim": CLAIM_UNCLAIMED,
+        "Claimed By": "",
+        "Priority": "P1",
+        "Task Class": "advancement_task",
+        "Action Kind": "",
+        "LoopX Goal ID": "",
+        "LoopX Todo ID": "",
+        "Scope": "",
+        "User Gate": "",
+        "Handoff": "",
+        "Evidence": "",
+        "Run History": "",
+        "Worker Command": "",
+        "Workdir": "",
+        "Last Error": "",
+        "Last Result Code": None,
     }
-    return [
-        {
-            "name": name,
-            "hue": hues.get(name, "Blue"),
-            "lightness": "Light",
-        }
-        for name in names
-    ]
-
-
-def lark_kanban_field_definitions() -> list[dict[str, Any]]:
-    return [
-        {"name": "Task", "type": "text", "style": {"type": "plain"}},
-        {
-            "name": "Status",
-            "type": "select",
-            "multiple": False,
-            "options": _select_options(
-                [
-                    STATUS_TODO,
-                    STATUS_CLAIMED,
-                    STATUS_RUNNING,
-                    STATUS_USER_GATE,
-                    STATUS_BLOCKED,
-                    STATUS_REVIEW,
-                    STATUS_DONE,
-                ]
-            ),
-        },
-        {
-            "name": "Claim",
-            "type": "select",
-            "multiple": False,
-            "options": _select_options([CLAIM_UNCLAIMED, CLAIM_HUMAN, CLAIM_AGENT]),
-        },
-        {"name": "Claimed By", "type": "text", "style": {"type": "plain"}},
-        {
-            "name": "Priority",
-            "type": "select",
-            "multiple": False,
-            "options": _select_options(["P0", "P1", "P2", "P3"]),
-        },
-        {
-            "name": "Task Class",
-            "type": "select",
-            "multiple": False,
-            "options": _select_options(
-                ["advancement_task", "continuous_monitor", "user_gate", "blocker"]
-            ),
-        },
-        {"name": "Action Kind", "type": "text", "style": {"type": "plain"}},
-        {"name": "LoopX Goal ID", "type": "text", "style": {"type": "plain"}},
-        {"name": "LoopX Todo ID", "type": "text", "style": {"type": "plain"}},
-        *issue_fix_surface.issue_fix_field_definitions(_select_options),
-        {"name": "Scope", "type": "text", "style": {"type": "plain"}},
-        {"name": "User Gate", "type": "text", "style": {"type": "plain"}},
-        {"name": "Handoff", "type": "text", "style": {"type": "plain"}},
-        {"name": "Evidence", "type": "text", "style": {"type": "plain"}},
-        {"name": "Run History", "type": "text", "style": {"type": "plain"}},
-        {"name": "Worker Command", "type": "text", "style": {"type": "plain"}},
-        {"name": "Workdir", "type": "text", "style": {"type": "plain"}},
-        {"name": "Last Error", "type": "text", "style": {"type": "plain"}},
-        {
-            "name": "Last Result Code",
-            "type": "number",
-            "style": {
-                "type": "plain",
-                "precision": 0,
-                "percentage": False,
-                "thousands_separator": False,
-            },
-        },
-        {
-            "name": "Last Heartbeat",
-            "type": "datetime",
-            "style": {"format": "yyyy-MM-dd HH:mm"},
-        },
-        {
-            "name": "Created At",
-            "type": "created_at",
-            "style": {"format": "yyyy-MM-dd HH:mm"},
-        },
-        {
-            "name": "Updated At",
-            "type": "updated_at",
-            "style": {"format": "yyyy-MM-dd HH:mm"},
-        },
-    ]
-
-
-def lark_kanban_views() -> list[dict[str, str]]:
-    return [
-        {"name": "All Tasks", "type": "grid"},
-        {"name": DEFAULT_STATUS_QUEUE_VIEW, "type": "grid"},
-        {"name": "User Gates", "type": "grid"},
-        {"name": "Kanban", "type": "kanban"},
-        *issue_fix_surface.issue_fix_views(),
-    ]
-
-
-def lark_kanban_schema_payload(*, table_name: str = DEFAULT_TABLE_NAME) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "schema_version": LARK_KANBAN_SCHEMA_VERSION,
-        "table_name": table_name,
-        "source_of_truth": "loopx_todos_projected_to_lark_base",
-        "adapter_role": "status_tracker_claim_surface",
-        "loopx_mapping": {
-            "todo": "Task row with Status=Todo and Claim=Unclaimed",
-            "claim": "Claim single-selection plus Claimed By text",
-            "user_gate": "Status=User Gate and concrete question in User Gate",
-            "handoff": "Handoff text field",
-            "evidence": "Evidence text field",
-            "run_history": "Run History append-style compact text field",
-            "quota": "omitted in v0 prototype; assume no quota limit",
-            "scope": "Scope text field; advisory in v0 prototype",
-            "issue_fix_outcome": "First-class issue row with repository, issue, PR, route, stage, validation, and outcome dimensions.",
-            "issue_fix_metric": "Monthly Impact row with repository baseline, current value, delta, ratio lineage, source link, freshness, and explicit missing data.",
-        },
-        "fields": lark_kanban_field_definitions(),
-        "views": lark_kanban_views(),
-        "operator_view": {
-            "kanban_card_fields": OPERATOR_CARD_FIELDS,
-            "issue_fix_card_fields": issue_fix_surface.ISSUE_FIX_CARD_FIELDS,
-            "issue_fix_views": [issue_fix_surface.DEFAULT_ISSUE_FIX_GRID_VIEW, issue_fix_surface.DEFAULT_ISSUE_FIX_KANBAN_VIEW],
-            "issue_fix_metrics_view": issue_fix_surface.DEFAULT_ISSUE_FIX_METRICS_VIEW,
-            "issue_fix_metric_fields": issue_fix_surface.ISSUE_FIX_METRIC_FIELDS,
-            "reason": (
-                "Keep the human-facing Kanban card small; retain the full task "
-                "context in the record detail and All Tasks grid."
-            ),
-            "configuration_note": (
-                "lark-cli 1.0.56 exposes +view-set-visible-fields, so setup can "
-                "write the compact Kanban card field list directly."
-            ),
-        },
-        "heartbeat_model": {
-            "direct_lark_trigger": False,
-            "trigger_reason": (
-                "Feishu Base workflow cannot reach this local edge worker without "
-                "a reachable callback or daemon bridge in the current environment."
-            ),
-            "fallback": "agent heartbeat polls Worker Queue, soft-claims one task, runs worker command, writes evidence",
-        },
-        "task_spawning_model": {
-            "board_creates_tasks": False,
-            "rule": (
-                "Long-running Codex sessions may claim visible Kanban rows, but "
-                "new, split, successor, or superseding work must be written through "
-                "LoopX todo lifecycle/intake commands and then synced back to Lark."
-            ),
-            "commands": [
-                "loopx todo add",
-                "loopx todo complete --next-agent-todo",
-                "loopx todo supersede --next-agent-todo",
-                "complex_request_intake_v0",
-            ],
-        },
-    }
+    base.update(overrides)
+    return base
 
 
 def sample_lark_kanban_task(
@@ -266,30 +145,18 @@ def sample_lark_kanban_task(
     worker_command: str = "",
     workdir: str = "",
 ) -> dict[str, Any]:
-    return {
-        "Task": "POC: triage a public issue and produce a reviewable handoff",
-        "Status": STATUS_TODO,
-        "Claim": CLAIM_UNCLAIMED,
-        "Claimed By": "",
-        "Priority": "P1",
-        "Task Class": "advancement_task",
-        "Action Kind": "analyze",
-        "LoopX Goal ID": goal_id,
-        "LoopX Todo ID": "todo_lark_kanban_poc",
-        "Scope": "public repo read/write prototype; no credentials, no private logs",
-        "User Gate": "",
-        "Handoff": "Start from the Worker Command. Return compact evidence and next review step.",
-        "Evidence": "",
-        "Run History": "",
-        "Worker Command": worker_command,
-        "Workdir": workdir,
-        "Last Error": "",
-        "Last Result Code": None,
-    }
-
-
-def lark_kanban_operator_card_fields() -> list[str]:
-    return list(OPERATOR_CARD_FIELDS)
+    return _task_record(
+        {
+            "Task": "POC: triage a public issue and produce a reviewable handoff",
+            "Action Kind": "analyze",
+            "LoopX Goal ID": goal_id,
+            "LoopX Todo ID": "todo_lark_kanban_poc",
+            "Scope": "public repo read/write prototype; no credentials, no private logs",
+            "Handoff": "Start from the Worker Command. Return compact evidence and next review step.",
+            "Worker Command": worker_command,
+            "Workdir": workdir,
+        }
+    )
 
 
 def lark_kanban_ux_task(
@@ -298,35 +165,80 @@ def lark_kanban_ux_task(
     worker_command: str = "",
     workdir: str = "",
 ) -> dict[str, Any]:
-    return {
-        "Task": "Optimize LoopX Kanban control-plane UX",
-        "Status": STATUS_USER_GATE,
-        "Claim": CLAIM_HUMAN,
-        "Claimed By": "",
-        "Priority": "P1",
-        "Task Class": "user_gate",
-        "Action Kind": "decide",
-        "LoopX Goal ID": goal_id,
-        "LoopX Todo ID": "todo_lark_kanban_ux",
-        "Scope": (
-            "Use LoopX itself to reduce operator attention cost while preserving "
-            "complete structured context in Lark Base."
-        ),
-        "User Gate": (
-            "Approve the simplified Kanban card profile and heartbeat/subagent "
-            "worker model for this prototype."
-        ),
-        "Handoff": (
-            "After approval, move this row to Todo/Unclaimed and let an agent "
-            "claim it, produce evidence, and leave the row in Review."
-        ),
-        "Evidence": "Awaiting human gate pass.",
-        "Run History": "",
-        "Worker Command": worker_command,
-        "Workdir": workdir,
-        "Last Error": "",
-        "Last Result Code": None,
-    }
+    return _task_record(
+        {
+            "Task": "Optimize LoopX Kanban control-plane UX",
+            "Status": STATUS_USER_GATE,
+            "Claim": CLAIM_HUMAN,
+            "Task Class": "user_gate",
+            "Action Kind": "decide",
+            "LoopX Goal ID": goal_id,
+            "LoopX Todo ID": "todo_lark_kanban_ux",
+            "Scope": (
+                "Use LoopX itself to reduce operator attention cost while preserving "
+                "complete structured context in Lark Base."
+            ),
+            "User Gate": (
+                "Approve the simplified Kanban card profile and heartbeat/subagent "
+                "worker model for this prototype."
+            ),
+            "Handoff": (
+                "After approval, move this row to Todo/Unclaimed and let an agent "
+                "claim it, produce evidence, and leave the row in Review."
+            ),
+            "Evidence": "Awaiting human gate pass.",
+            "Worker Command": worker_command,
+            "Workdir": workdir,
+        }
+    )
+
+
+_FEASIBILITY_CASE_SPECS = (
+    (
+        "Case: notes.zaynjarvis.com LoopX architecture decision",
+        "advancement_task",
+        "publish_decision_note",
+        "todo_case_notes_arch_decision",
+        "Publish a public-safe decision note describing LoopX axioms, control-plane shape, and Lark Kanban adapter tradeoffs.",
+        "Human approves final wording before publishing.",
+        "Draft the architecture/decision note, keep source-of-truth fields in the board, and publish only a concise public version.",
+        "Feasible: the board row captures task, gate, scope, handoff, and public evidence pointer for a notes.zaynjarvis.com publish lane.",
+        "case seeded: public decision note lane is representable",
+    ),
+    (
+        "Case: P1/P2 human gate timeout with default fallback",
+        "user_gate",
+        "decide_with_timeout",
+        "todo_case_gate_timeout_fallback",
+        "Model a human decision that should not block the loop forever; P1/P2 gates can fall back to a default after timeout.",
+        "Choose explicit decision, or allow the default fallback to fire after the configured timeout.",
+        "Record the gate question in User Gate; record fallback policy in Handoff; apply only via loop state transition.",
+        "Feasible: User Gate plus Handoff can separate human choice from the structured state transition that actually changes memory.",
+        "case seeded: gate timeout/fallback lane is representable",
+    ),
+    (
+        "Case: cross-session compact memory through OV",
+        "continuous_monitor",
+        "memory_handoff",
+        "todo_case_ov_compact_memory",
+        "Carry loop context across sessions through an external compact memory surface instead of relying on raw transcript recall.",
+        "Confirm which facts are durable enough to enter compact memory.",
+        "Store concise decisions and state deltas externally; keep raw session details out of the Kanban card.",
+        "Feasible: the Kanban row can point to compact memory writes while remaining a simple operator control surface.",
+        "case seeded: OV compact-memory lane is representable",
+    ),
+    (
+        "Case: output quality vs token and attention cost eval",
+        "advancement_task",
+        "define_eval",
+        "todo_case_quality_cost_eval",
+        "Define a loop benchmark that scores delivered output against token spend and human attention cost.",
+        "Approve the cost dimensions before using the eval as a gate.",
+        "Use Evidence for results, Run History for compact attempts, and Priority to decide whether a rerun is worth more attention.",
+        "Feasible: Base fields support an eval lane that keeps quality, token cost, and attention cost visible without bloating the card.",
+        "case seeded: quality/cost eval lane is representable",
+    ),
+)
 
 
 def lark_kanban_feasibility_cases(
@@ -334,127 +246,44 @@ def lark_kanban_feasibility_cases(
     goal_id: str = "loopx-lark-kanban-feasibility",
     workdir: str = "",
 ) -> list[dict[str, Any]]:
-    common = {
-        "Status": STATUS_REVIEW,
-        "Claim": CLAIM_AGENT,
-        "Claimed By": DEFAULT_AGENT_ID,
-        "Priority": "P1",
-        "LoopX Goal ID": goal_id,
-        "Workdir": workdir,
-        "Last Error": "",
-        "Last Result Code": 0,
-    }
     return [
-        {
-            **common,
-            "Task": "Case: notes.zaynjarvis.com LoopX architecture decision",
-            "Task Class": "advancement_task",
-            "Action Kind": "publish_decision_note",
-            "LoopX Todo ID": "todo_case_notes_arch_decision",
-            "Scope": (
-                "Publish a public-safe decision note describing LoopX axioms, "
-                "control-plane shape, and Lark Kanban adapter tradeoffs."
-            ),
-            "User Gate": "Human approves final wording before publishing.",
-            "Handoff": (
-                "Draft the architecture/decision note, keep source-of-truth "
-                "fields in the board, and publish only a concise public version."
-            ),
-            "Evidence": (
-                "Feasible: the board row captures task, gate, scope, handoff, "
-                "and public evidence pointer for a notes.zaynjarvis.com publish lane."
-            ),
-            "Run History": "case seeded: public decision note lane is representable",
-            "Worker Command": "",
-        },
-        {
-            **common,
-            "Task": "Case: P1/P2 human gate timeout with default fallback",
-            "Task Class": "user_gate",
-            "Action Kind": "decide_with_timeout",
-            "LoopX Todo ID": "todo_case_gate_timeout_fallback",
-            "Scope": (
-                "Model a human decision that should not block the loop forever; "
-                "P1/P2 gates can fall back to a default after timeout."
-            ),
-            "User Gate": (
-                "Choose explicit decision, or allow the default fallback to fire "
-                "after the configured timeout."
-            ),
-            "Handoff": (
-                "Record the gate question in User Gate; record fallback policy "
-                "in Handoff; apply only via loop state transition."
-            ),
-            "Evidence": (
-                "Feasible: User Gate plus Handoff can separate human choice from "
-                "the structured state transition that actually changes memory."
-            ),
-            "Run History": "case seeded: gate timeout/fallback lane is representable",
-            "Worker Command": "",
-        },
-        {
-            **common,
-            "Task": "Case: cross-session compact memory through OV",
-            "Task Class": "continuous_monitor",
-            "Action Kind": "memory_handoff",
-            "LoopX Todo ID": "todo_case_ov_compact_memory",
-            "Scope": (
-                "Carry loop context across sessions through an external compact "
-                "memory surface instead of relying on raw transcript recall."
-            ),
-            "User Gate": "Confirm which facts are durable enough to enter compact memory.",
-            "Handoff": (
-                "Store concise decisions and state deltas externally; keep raw "
-                "session details out of the Kanban card."
-            ),
-            "Evidence": (
-                "Feasible: the Kanban row can point to compact memory writes while "
-                "remaining a simple operator control surface."
-            ),
-            "Run History": "case seeded: OV compact-memory lane is representable",
-            "Worker Command": "",
-        },
-        {
-            **common,
-            "Task": "Case: output quality vs token and attention cost eval",
-            "Task Class": "advancement_task",
-            "Action Kind": "define_eval",
-            "LoopX Todo ID": "todo_case_quality_cost_eval",
-            "Scope": (
-                "Define a loop benchmark that scores delivered output against "
-                "token spend and human attention cost."
-            ),
-            "User Gate": "Approve the cost dimensions before using the eval as a gate.",
-            "Handoff": (
-                "Use Evidence for results, Run History for compact attempts, and "
-                "Priority to decide whether a rerun is worth more attention."
-            ),
-            "Evidence": (
-                "Feasible: Base fields support an eval lane that keeps quality, "
-                "token cost, and attention cost visible without bloating the card."
-            ),
-            "Run History": "case seeded: quality/cost eval lane is representable",
-            "Worker Command": "",
-        },
+        _task_record(
+            {
+                "Status": STATUS_REVIEW,
+                "Claim": CLAIM_AGENT,
+                "Claimed By": DEFAULT_AGENT_ID,
+                "LoopX Goal ID": goal_id,
+                "Workdir": workdir,
+                "Last Result Code": 0,
+                "Task": task,
+                "Task Class": task_class,
+                "Action Kind": action_kind,
+                "LoopX Todo ID": todo_id,
+                "Scope": scope,
+                "User Gate": user_gate,
+                "Handoff": handoff,
+                "Evidence": evidence,
+                "Run History": run_history,
+            }
+        )
+        for task, task_class, action_kind, todo_id, scope, user_gate, handoff, evidence, run_history in _FEASIBILITY_CASE_SPECS
     ]
 
 
-def _compact_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
+def _compact_text(value: object, *, limit: int = TEXT_LIMIT) -> str:
     text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 1)].rstrip() + "..."
+    return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "..."
 
 
 _ANSI_CONTROL_SEQUENCE_PATTERN = re.compile(
     r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)?)"
 )
-def _redact_credential_shapes(value: Any) -> str:
+
+
+def _redact_credential_shapes(value: object) -> str:
     text = _ANSI_CONTROL_SEQUENCE_PATTERN.sub("", str(value or ""))
     text = SECRET_LIKE_SURFACE_PATTERN.sub("[credential-redacted]", text)
-    return SINK_COMPOUND_CREDENTIAL_ASSIGNMENT_PATTERN.sub(
-        "[credential-redacted]", text
-    )
+    return SINK_COMPOUND_CREDENTIAL_ASSIGNMENT_PATTERN.sub("[credential-redacted]", text)
 
 
 _SHARED_REDACTION_PATTERNS = (
@@ -485,17 +314,17 @@ def _redact_non_credential_shapes(text: str) -> str:
     return text
 
 
-def _redact_public_safe_shapes(value: Any) -> str:
+def _redact_public_safe_shapes(value: object) -> str:
     """Apply the shared boundary without collapsing whitespace or truncating."""
 
     return _redact_non_credential_shapes(_redact_credential_shapes(value))
 
 
-def _credential_safe_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
+def _credential_safe_text(value: object, *, limit: int = TEXT_LIMIT) -> str:
     return _compact_text(_redact_credential_shapes(value), limit=limit)
 
 
-def _public_safe_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
+def _public_safe_text(value: object, *, limit: int = TEXT_LIMIT) -> str:
     text = _compact_text(_redact_credential_shapes(value), limit=limit)
     return _compact_text(_redact_non_credential_shapes(text), limit=limit)
 
@@ -504,30 +333,49 @@ _STRUCTURAL_ID_KEYS = frozenset({"id", "record_id", "record_ids"})
 _STRUCTURAL_RECORD_ID_PATTERN = re.compile(r"^rec[A-Za-z0-9_-]{6,}$")
 
 
-def _public_safe_value(value: Any, *, preserve_external_id: bool = False) -> Any:
+def _transform_lark_value(
+    value: object,
+    *,
+    text_fn: Callable[[object], str],
+    key_fn: Callable[[object], str],
+    check_structural_id: bool = False,
+    preserve_external_id: bool = False,
+) -> object:
     if isinstance(value, str):
-        if preserve_external_id and _STRUCTURAL_RECORD_ID_PATTERN.fullmatch(value):
+        if check_structural_id and preserve_external_id and _STRUCTURAL_RECORD_ID_PATTERN.fullmatch(value):
             return value
-        return _public_safe_text(value)
+        return text_fn(value)
     if isinstance(value, dict):
         return {
-            _public_safe_text(str(key)): _public_safe_value(
+            key_fn(key): _transform_lark_value(
                 item,
+                text_fn=text_fn,
+                key_fn=key_fn,
+                check_structural_id=check_structural_id,
                 preserve_external_id=str(key).lower() in _STRUCTURAL_ID_KEYS,
             )
             for key, item in value.items()
         }
-    if isinstance(value, list):
-        return [
-            _public_safe_value(item, preserve_external_id=preserve_external_id)
+    if isinstance(value, (list, tuple)):
+        items = [
+            _transform_lark_value(
+                item,
+                text_fn=text_fn,
+                key_fn=key_fn,
+                check_structural_id=check_structural_id,
+                preserve_external_id=preserve_external_id,
+            )
             for item in value
         ]
-    if isinstance(value, tuple):
-        return tuple(
-            _public_safe_value(item, preserve_external_id=preserve_external_id)
-            for item in value
-        )
+        return tuple(items) if isinstance(value, tuple) else items
     return value
+
+
+def _public_safe_value(value: object, *, preserve_external_id: bool = False) -> object:
+    return _transform_lark_value(
+        value, text_fn=_public_safe_text, key_fn=lambda k: _public_safe_text(str(k)),
+        check_structural_id=True, preserve_external_id=preserve_external_id,
+    )
 
 
 def _public_safe_lark_values(values: dict[str, Any]) -> dict[str, Any]:
@@ -535,19 +383,10 @@ def _public_safe_lark_values(values: dict[str, Any]) -> dict[str, Any]:
     return {key: _public_safe_value(value) for key, value in credential_safe.items()}
 
 
-def _credential_safe_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return _redact_credential_shapes(value)
-    if isinstance(value, dict):
-        return {
-            _redact_credential_shapes(key): _credential_safe_value(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_credential_safe_value(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_credential_safe_value(item) for item in value)
-    return value
+def _credential_safe_value(value: object) -> object:
+    return _transform_lark_value(
+        value, text_fn=_redact_credential_shapes, key_fn=_redact_credential_shapes
+    )
 
 
 def _credential_safe_lark_values(values: dict[str, Any]) -> dict[str, Any]:
@@ -559,28 +398,28 @@ def _sink_safe_lark_values(values: dict[str, Any], *, public_safe: bool) -> dict
     return _public_safe_lark_values(values) if public_safe else values
 
 
+def _validate_sink_visibility(sink_visibility: str) -> bool:
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
+    return sink_visibility == SINK_VISIBILITY_SHARED
+
+
 def now_lark_datetime(now: datetime | None = None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def append_history(existing: Any, entry: str, *, limit: int = TEXT_LIMIT) -> str:
+def append_history(existing: object, entry: str, *, limit: int = TEXT_LIMIT) -> str:
     prior = str(existing or "").strip()
     combined = f"{prior}\n{entry}".strip() if prior else entry
-    if len(combined) <= limit:
-        return combined
-    return combined[-limit:]
+    return combined if len(combined) <= limit else combined[-limit:]
 
 
-def normalize_select_value(value: Any) -> str:
-    if isinstance(value, list) and value:
-        return str(value[0] or "")
-    return str(value or "")
+def normalize_select_value(value: object) -> str:
+    return str(value[0] or "") if isinstance(value, list) and value else str(value or "")
 
 
 def choose_heartbeat_task(
-    records: list[dict[str, Any]],
-    *,
-    agent_id: str,
+    records: list[dict[str, Any]], *, agent_id: str
 ) -> dict[str, Any] | None:
     own_claim: dict[str, Any] | None = None
     unclaimed: dict[str, Any] | None = None
@@ -600,14 +439,12 @@ def choose_heartbeat_task(
 
 def allowed_worker_command(command: str, prefixes: list[str]) -> bool:
     stripped = command.strip()
-    if not stripped:
-        return False
-    if not prefixes:
-        return False
-    return any(stripped == prefix or stripped.startswith(prefix + " ") for prefix in prefixes)
+    return bool(stripped and prefixes) and any(
+        stripped == prefix or stripped.startswith(prefix + " ") for prefix in prefixes
+    )
 
 
-def _record_json_args(values: dict[str, Any]) -> str:
+def _record_json_args(values: Mapping[str, object]) -> str:
     return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -628,36 +465,31 @@ def default_lark_kanban_config_path(registry_path: Path | None = None) -> Path:
     return Path.cwd() / ".loopx" / "lark-kanban.json"
 
 
+def _local_config_stub(
+    config_path: Path, *, exists: bool, error: str | None = None
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": error is None,
+        "exists": exists,
+        "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
+        "path": str(config_path),
+        "board": None,
+    }
+    if error is not None:
+        payload["error"] = error
+    return payload
+
+
 def read_lark_kanban_local_config(path: Path) -> dict[str, Any]:
     config_path = path.expanduser()
     if not config_path.exists():
-        return {
-            "ok": True,
-            "exists": False,
-            "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
-            "path": str(config_path),
-            "board": None,
-        }
+        return _local_config_stub(config_path, exists=False)
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        return {
-            "ok": False,
-            "exists": True,
-            "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
-            "path": str(config_path),
-            "error": f"invalid JSON: {exc}",
-            "board": None,
-        }
+        return _local_config_stub(config_path, exists=True, error=f"invalid JSON: {exc}")
     if not isinstance(payload, dict):
-        return {
-            "ok": False,
-            "exists": True,
-            "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
-            "path": str(config_path),
-            "error": "config root must be a JSON object",
-            "board": None,
-        }
+        return _local_config_stub(config_path, exists=True, error="config root must be a JSON object")
     payload.setdefault("schema_version", LARK_KANBAN_LOCAL_CONFIG_VERSION)
     payload["ok"] = True
     payload["exists"] = True
@@ -665,7 +497,7 @@ def read_lark_kanban_local_config(path: Path) -> dict[str, Any]:
     return payload
 
 
-def write_lark_kanban_local_config(path: Path, payload: dict[str, Any]) -> None:
+def write_lark_kanban_local_config(path: Path, payload: Mapping[str, object]) -> None:
     config_path = path.expanduser()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     to_write = dict(payload)
@@ -679,8 +511,7 @@ def write_lark_kanban_local_config(path: Path, payload: dict[str, Any]) -> None:
 def parse_lark_base_url(base_url: str) -> dict[str, str]:
     parsed = urlparse(base_url.strip())
     query = parse_qs(parsed.query)
-    path = parsed.path.strip("/")
-    parts = [part for part in path.split("/") if part]
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
     base_token = ""
     for index, part in enumerate(parts):
         if part in {"base", "bitable"} and index + 1 < len(parts):
@@ -688,12 +519,10 @@ def parse_lark_base_url(base_url: str) -> dict[str, str]:
             break
     if not base_token and parts:
         base_token = parts[-1]
-    table_id = _first_query_value(query, "table") or _first_query_value(query, "table_id")
-    view_id = _first_query_value(query, "view") or _first_query_value(query, "view_id")
     return {
         "base_token": base_token,
-        "table_id": table_id,
-        "view_id": view_id,
+        "table_id": _first_query_value(query, "table") or _first_query_value(query, "table_id"),
+        "view_id": _first_query_value(query, "view") or _first_query_value(query, "view_id"),
     }
 
 
@@ -723,7 +552,9 @@ def save_lark_kanban_board_config(
     config_path = path.expanduser()
     existing = read_lark_kanban_local_config(config_path) if merge_existing else {}
     payload = existing if isinstance(existing, dict) and existing.get("ok") else {}
-    board = dict(payload.get("board") or {})
+    raw_board = payload.get("board")
+    board: dict[str, Any] = dict(raw_board) if isinstance(raw_board, dict) else {}
+    existing_views = board.get("view_ids")
     board.update(
         {
             "base_token": base_token,
@@ -735,17 +566,20 @@ def save_lark_kanban_board_config(
             "cli_bin": cli_bin,
             "identity": identity,
             "view_ids": {
-                **(board.get("view_ids") if isinstance(board.get("view_ids"), dict) else {}),
+                **(existing_views if isinstance(existing_views, dict) else {}),
                 **(view_ids or {}),
             },
         }
     )
-    payload = {
-        "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
-        "board": board,
-        "todo_records": payload.get("todo_records") if isinstance(payload.get("todo_records"), dict) else {},
-    }
-    write_lark_kanban_local_config(config_path, payload)
+    raw_records = payload.get("todo_records")
+    write_lark_kanban_local_config(
+        config_path,
+        {
+            "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
+            "board": board,
+            "todo_records": raw_records if isinstance(raw_records, dict) else {},
+        },
+    )
     return {
         "ok": True,
         "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
@@ -755,7 +589,7 @@ def save_lark_kanban_board_config(
     }
 
 
-def lark_kanban_config_from_payload(payload: dict[str, Any]) -> LarkKanbanConfig | None:
+def lark_kanban_config_from_payload(payload: Mapping[str, object]) -> LarkKanbanConfig | None:
     board = payload.get("board")
     if not isinstance(board, dict):
         return None
@@ -764,7 +598,7 @@ def lark_kanban_config_from_payload(payload: dict[str, Any]) -> LarkKanbanConfig
     if not base_token or not table_id:
         return None
     return LarkKanbanConfig(
-        **{"base_" + "token": base_token},
+        base_token=base_token,
         table_id=table_id,
         view_id=str(board.get("view_id") or DEFAULT_STATUS_QUEUE_VIEW),
         cli_bin=str(board.get("cli_bin") or cli_transport.DEFAULT_CLI_BIN),
@@ -772,7 +606,7 @@ def lark_kanban_config_from_payload(payload: dict[str, Any]) -> LarkKanbanConfig
     )
 
 
-def _next_lark_kanban_commands(board: dict[str, Any]) -> list[str]:
+def _next_lark_kanban_commands(board: Mapping[str, object]) -> list[str]:
     return [
         "loopx lark-kanban doctor",
         "loopx lark-kanban sync-loopx-todos --goal-id <goal-id> --execute",
@@ -784,1090 +618,34 @@ def _next_lark_kanban_commands(board: dict[str, Any]) -> list[str]:
 
 
 def build_record_upsert_command(
-    config: LarkKanbanConfig,
-    *,
-    record_id: str | None,
-    values: dict[str, Any],
+    config: LarkKanbanConfig, *, record_id: str | None, values: dict[str, Any]
 ) -> list[str]:
     safe_values = _credential_safe_lark_values(values)
-    args = [
-        config.cli_bin,
-        "base",
-        "+record-upsert",
-        "--as",
-        config.identity,
-        "--base-token",
-        config.base_token,
-        "--table-id",
-        config.table_id,
+    extra = (["--record-id", record_id] if record_id else []) + [
+        "--json", _record_json_args(safe_values)
     ]
-    if record_id:
-        args.extend(["--record-id", record_id])
-    args.extend(["--json", _record_json_args(safe_values)])
-    return args
+    return _base_cmd(
+        config.cli_bin, "+record-upsert", config.identity, *extra,
+        base_token=config.base_token, table_id=config.table_id,
+    )
 
 
 def build_record_list_command(config: LarkKanbanConfig) -> list[str]:
-    args = [
-        config.cli_bin,
-        "base",
-        "+record-list",
-        "--as",
-        config.identity,
-        "--base-token",
-        config.base_token,
-        "--table-id",
-        config.table_id,
-        "--format",
-        "json",
-        "--offset",
-        "0",
-        "--limit",
-        "200",
-    ]
+    extra = ["--format", "json", "--offset", "0", "--limit", "200"]
     if config.view_id:
-        args.extend(["--view-id", config.view_id])
-    return args
-
-
-def build_create_board_plan(
-    *,
-    base_name: str,
-    table_name: str,
-    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
-    identity: str = "bot",
-    base_token: str | None = None,
-    user_open_id: str | None = None,
-) -> list[list[str]]:
-    commands: list[list[str]] = []
-    if not base_token:
-        commands.append(
-            [
-                cli_bin,
-                "base",
-                "+base-create",
-                "--as",
-                identity,
-                "--name",
-                base_name,
-                "--table-name",
-                table_name,
-                "--fields",
-                json.dumps(lark_kanban_field_definitions(), ensure_ascii=False),
-            ]
-        )
-        commands.append(
-            [
-                cli_bin,
-                "base",
-                "+base-block-list",
-                "--as",
-                identity,
-                "--base-token",
-                "<base-token-from-create>",
-                "--type",
-                "table",
-            ]
-        )
-    token = base_token or "<base-token-from-create>"
-    table_ref = "<table-id-from-create>"
-    if base_token:
-        commands.append(
-            [
-                cli_bin,
-                "base",
-                "+table-create",
-                "--as",
-                identity,
-                "--base-token",
-                token,
-                "--name",
-                table_name,
-                "--fields",
-                json.dumps(lark_kanban_field_definitions(), ensure_ascii=False),
-                "--view",
-                json.dumps(lark_kanban_views(), ensure_ascii=False),
-            ]
-        )
-    else:
-        commands.extend(
-            [
-                [
-                    cli_bin,
-                    "base",
-                    "+view-create",
-                    "--as",
-                    identity,
-                    "--base-token",
-                    token,
-                    "--table-id",
-                    table_ref,
-                    "--json",
-                    json.dumps(lark_kanban_views(), ensure_ascii=False),
-                ],
-                [
-                    cli_bin,
-                    "base",
-                    "+view-list",
-                    "--as",
-                    identity,
-                    "--base-token",
-                    token,
-                    "--table-id",
-                    table_ref,
-                ],
-            ]
-        )
-    if user_open_id:
-        commands.append(
-            [
-                cli_bin,
-                "drive",
-                "permission.members",
-                "create",
-                "--as",
-                "bot",
-                "--params",
-                json.dumps(
-                    {
-                        "token": token,
-                        "type": "bitable",
-                        "need_notification": False,
-                    },
-                    ensure_ascii=False,
-                ),
-                "--data",
-                json.dumps(
-                    {
-                        "member_id": user_open_id,
-                        "member_type": "openid",
-                        "perm": "full_access",
-                        "perm_type": "container",
-                        "type": "user",
-                    },
-                    ensure_ascii=False,
-                ),
-            ]
-        )
-    commands.extend(_view_configuration_commands(cli_bin=cli_bin, identity=identity, base_token=token, table_id=table_ref, view_ids={view["name"]: view["name"] for view in lark_kanban_views()}))
-    return commands
-
-
-def create_lark_kanban_board(
-    *,
-    base_name: str,
-    table_name: str = DEFAULT_TABLE_NAME,
-    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
-    identity: str = "bot",
-    base_token: str | None = None,
-    user_open_id: str | None = None,
-    execute: bool = False,
-    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
-) -> dict[str, Any]:
-    commands: list[dict[str, Any]] = []
-    effective_base_token = base_token
-    table_id: str | None = None
-    if not effective_base_token:
-        create = cli_transport.run_command(
-            [cli_bin, "base", "+base-create", "--as", identity, "--name", base_name],
-            execute=execute,
-            runner=runner,
-        )
-        commands.append(create)
-        if create.get("executed"):
-            if not create.get("ok"):
-                return _board_payload(False, commands, effective_base_token, table_id)
-            effective_base_token = _extract_base_token(create.get("json"))
-            if not effective_base_token:
-                commands.append(
-                    {
-                        "command": "extract Base token from base-create result",
-                        "executed": True,
-                        "ok": False,
-                        "returncode": None,
-                        "stdout": "",
-                        "stderr": "base-create did not return a usable Base token",
-                        "json": None,
-                    }
-                )
-                return _board_payload(False, commands, effective_base_token, table_id)
-    token = effective_base_token or "<base-token-from-create>"
-    table_create = cli_transport.run_command(
-        [
-            cli_bin,
-            "base",
-            "+table-create",
-            "--as",
-            identity,
-            "--base-token",
-            token,
-            "--name",
-            table_name,
-            "--fields",
-            json.dumps(lark_kanban_field_definitions(), ensure_ascii=False),
-            "--view",
-            json.dumps(lark_kanban_views(), ensure_ascii=False),
-        ],
-        execute=execute,
-        runner=runner,
+        extra.extend(["--view-id", config.view_id])
+    return _base_cmd(
+        config.cli_bin, "+record-list", config.identity, *extra,
+        base_token=config.base_token, table_id=config.table_id,
     )
-    commands.append(table_create)
-    if table_create.get("executed"):
-        if not table_create.get("ok"):
-            return _board_payload(False, commands, effective_base_token, table_id)
-        table_id = _extract_table_id(table_create.get("json")) or table_name
-    table_ref = table_id or table_name
-    if user_open_id:
-        grant = cli_transport.run_command(
-            [
-                cli_bin,
-                "drive",
-                "permission.members",
-                "create",
-                "--as",
-                "bot",
-                "--params",
-                json.dumps(
-                    {
-                        "token": token,
-                        "type": "bitable",
-                        "need_notification": False,
-                    },
-                    ensure_ascii=False,
-                ),
-                "--data",
-                json.dumps(
-                    {
-                        "member_id": user_open_id,
-                        "member_type": "openid",
-                        "perm": "full_access",
-                        "perm_type": "container",
-                        "type": "user",
-                    },
-                    ensure_ascii=False,
-                ),
-            ],
-            execute=execute,
-            runner=runner,
-        )
-        commands.append(grant)
-        if grant.get("executed") and not grant.get("ok"):
-            return _board_payload(False, commands, effective_base_token, table_id)
-    for command in _view_configuration_commands(cli_bin=cli_bin, identity=identity, base_token=token, table_id=table_ref, view_ids={view["name"]: view["name"] for view in lark_kanban_views()}):
-        result = cli_transport.run_command(command, execute=execute, runner=runner)
-        commands.append(result)
-        if result.get("executed") and not result.get("ok"):
-            return _board_payload(False, commands, effective_base_token, table_id)
-    return _board_payload(True, commands, effective_base_token, table_id)
-
-
-def _board_payload(
-    ok: bool,
-    commands: list[dict[str, Any]],
-    base_token: str | None,
-    table_id: str | None,
-) -> dict[str, Any]:
-    return {
-        "ok": ok,
-        "schema_version": LARK_KANBAN_SCHEMA_VERSION,
-        "base_token": base_token,
-        "table_id": table_id,
-        "commands": commands,
-        "error": None if ok else next((cli_transport.command_error(item) for item in commands if not item.get("ok")), "unknown"),
-    }
-
-
-def _extract_base_token(parsed: Any) -> str | None:
-    return _find_first_string(parsed, ("base_token", "app_token"))
-
-
-def _extract_table_id(parsed: Any) -> str | None:
-    return _find_first_string(parsed, ("table_id", "id"), required_prefix="tbl")
-
-
-def _find_first_string(payload: Any, keys: tuple[str, ...], required_prefix: str | None = None) -> str | None:
-    if isinstance(payload, dict):
-        for key in keys:
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                candidate = value.strip()
-                if required_prefix is None or candidate.startswith(required_prefix):
-                    return candidate
-        for value in payload.values():
-            found = _find_first_string(value, keys, required_prefix=required_prefix)
-            if found:
-                return found
-    if isinstance(payload, list):
-        for value in payload:
-            found = _find_first_string(value, keys, required_prefix=required_prefix)
-            if found:
-                return found
-    return None
-
-
-def _extract_created_record_id(parsed: Any) -> str | None:
-    return _find_first_record_id(parsed)
-
-
-def _find_first_record_id(payload: Any) -> str | None:
-    if isinstance(payload, dict):
-        ids = payload.get("record_id_list")
-        if isinstance(ids, list) and ids:
-            return str(ids[0])
-        for key in ("record_id", "id"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip().startswith("rec"):
-                return value.strip()
-        for value in payload.values():
-            found = _find_first_record_id(value)
-            if found:
-                return found
-    if isinstance(payload, list):
-        for value in payload:
-            found = _find_first_record_id(value)
-            if found:
-                return found
-    return None
-
-
-def _extract_table_id_from_blocks(parsed: Any, *, table_name: str | None = None) -> str | None:
-    blocks = _extract_list_from_payload(parsed, ("blocks", "items", "data"))
-    table_blocks = [
-        item
-        for item in blocks
-        if isinstance(item, dict)
-        and str(item.get("type") or item.get("resource_type") or "").lower() in {"table", "bitable_table", ""}
-    ]
-    if table_name:
-        for item in table_blocks:
-            if str(item.get("name") or item.get("block_name") or "").strip() == table_name:
-                return _string_id_from_dict(item, ("id", "block_id", "table_id"), prefix="tbl")
-    for item in table_blocks:
-        table_id = _string_id_from_dict(item, ("id", "block_id", "table_id"), prefix="tbl")
-        if table_id:
-            return table_id
-    return _extract_table_id(parsed)
-
-
-def _extract_view_ids(parsed: Any) -> dict[str, str]:
-    views = _extract_list_from_payload(parsed, ("views", "items", "data"))
-    result: dict[str, str] = {}
-    for item in views:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or item.get("view_name") or "").strip()
-        view_id = _string_id_from_dict(item, ("view_id", "id"), prefix="vew") or _string_id_from_dict(
-            item,
-            ("view_id", "id"),
-            prefix=None,
-        )
-        if name and view_id:
-            result[name] = view_id
-    return result
-
-
-def _extract_list_from_payload(payload: Any, keys: tuple[str, ...]) -> list[Any]:
-    if isinstance(payload, list):
-        return payload
-    if not isinstance(payload, dict):
-        return []
-    for key in keys:
-        value = payload.get(key)
-        if isinstance(value, list):
-            return value
-    data = payload.get("data")
-    if isinstance(data, dict):
-        for key in keys:
-            value = data.get(key)
-            if isinstance(value, list):
-                return value
-    return []
-
-
-def _string_id_from_dict(item: dict[str, Any], keys: tuple[str, ...], *, prefix: str | None) -> str | None:
-    for key in keys:
-        value = item.get(key)
-        if not isinstance(value, str):
-            continue
-        candidate = value.strip()
-        if candidate and (prefix is None or candidate.startswith(prefix)):
-            return candidate
-    return None
-
-
-def use_lark_kanban_board(
-    *,
-    config_path: Path,
-    base_url: str | None = None,
-    base_token: str | None = None,
-    table_id: str | None = None,
-    view_id: str | None = None,
-    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
-    identity: str = "user",
-) -> dict[str, Any]:
-    parsed = parse_lark_base_url(base_url) if base_url else {}
-    effective_base_token = str(base_token or parsed.get("base_token") or "").strip()
-    effective_table_id = str(table_id or parsed.get("table_id") or "").strip()
-    effective_view_id = str(view_id or parsed.get("view_id") or DEFAULT_STATUS_QUEUE_VIEW).strip()
-    return save_lark_kanban_board_config(
-        config_path,
-        **{"base_" + "token": effective_base_token},
-        table_id=effective_table_id,
-        view_id=effective_view_id,
-        base_url=base_url,
-        cli_bin=cli_bin,
-        identity=identity,
-    )
-
-
-def setup_lark_kanban_board(
-    *,
-    config_path: Path,
-    base_name: str,
-    table_name: str = DEFAULT_TABLE_NAME,
-    base_url: str | None = None,
-    base_token: str | None = None,
-    table_id: str | None = None,
-    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
-    identity: str = "user",
-    execute: bool = False,
-    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
-) -> dict[str, Any]:
-    commands: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    existing = read_lark_kanban_local_config(config_path)
-    existing_board = existing.get("board") if isinstance(existing.get("board"), dict) else {}
-    parsed_url = parse_lark_base_url(base_url) if base_url else {}
-    effective_base_token = str(
-        base_token or parsed_url.get("base_token") or existing_board.get("base_token") or ""
-    ).strip()
-    effective_table_id = str(table_id or parsed_url.get("table_id") or existing_board.get("table_id") or "").strip()
-    view_ids = existing_board.get("view_ids") if isinstance(existing_board.get("view_ids"), dict) else {}
-
-    preflight = _lark_kanban_preflight(cli_bin=cli_bin, identity=identity, runner=runner)
-    commands.extend(preflight["commands"])
-    if execute and not preflight["identity_available"]:
-        return {
-            "ok": False,
-            "schema_version": LARK_KANBAN_SCHEMA_VERSION,
-            "execute": execute,
-            "config_path": str(config_path),
-            "base_token": effective_base_token or None,
-            "table_id": effective_table_id or None,
-            "commands": commands,
-            "warnings": preflight["warnings"],
-            "error": _identity_error(identity),
-        }
-    warnings.extend(preflight["warnings"])
-
-    created_base = False
-    created_table = False
-    created_field_names: list[str] = []
-    updated_field_names: list[str] = []
-    config_payload: dict[str, Any] | None = None
-
-    def save_usable_config() -> None:
-        nonlocal config_payload
-        if not execute or not effective_base_token or not effective_table_id:
-            return
-        config_payload = save_lark_kanban_board_config(
-            config_path,
-            **{"base_" + "token": effective_base_token},
-            table_id=effective_table_id,
-            view_id=view_ids.get(DEFAULT_STATUS_QUEUE_VIEW) or DEFAULT_STATUS_QUEUE_VIEW,
-            base_url=base_url,
-            base_name=base_name,
-            table_name=table_name,
-            cli_bin=cli_bin,
-            identity=identity,
-            view_ids=view_ids,
-        )
-
-    def partial_enrichment_payload(command_result: dict[str, Any]) -> dict[str, Any]:
-        error = cli_transport.command_error(command_result)
-        warnings.append(f"usable board config saved; view enrichment skipped: {error}")
-        return _setup_payload(
-            True,
-            execute,
-            config_path,
-            commands,
-            warnings,
-            effective_base_token,
-            effective_table_id,
-            config=config_payload,
-            partial=True,
-            enrichment_error=error,
-        )
-
-    if not effective_base_token:
-        created_base = True
-        create = cli_transport.run_command(
-            [
-                cli_bin,
-                "base",
-                "+base-create",
-                "--as",
-                identity,
-                "--name",
-                base_name,
-                "--table-name",
-                table_name,
-                "--fields",
-                json.dumps(lark_kanban_field_definitions(), ensure_ascii=False),
-            ],
-            execute=execute,
-            runner=runner,
-        )
-        commands.append(create)
-        if execute:
-            if not create.get("ok"):
-                return _setup_payload(False, execute, config_path, commands, warnings, effective_base_token, effective_table_id)
-            effective_base_token = _extract_base_token(create.get("json")) or ""
-            effective_table_id = _extract_table_id(create.get("json")) or effective_table_id
-            if not effective_base_token:
-                return _setup_payload(
-                    False,
-                    execute,
-                    config_path,
-                    commands,
-                    warnings,
-                    effective_base_token,
-                    effective_table_id,
-                    error="base-create did not return a usable Base token",
-                )
-        else:
-            effective_base_token = "<base-token-from-create>"
-    if not effective_table_id:
-        if created_base:
-            blocks = cli_transport.run_command(
-                [
-                    cli_bin,
-                    "base",
-                    "+base-block-list",
-                    "--as",
-                    identity,
-                    "--base-token",
-                    effective_base_token,
-                    "--type",
-                    "table",
-                ],
-                execute=execute,
-                runner=runner,
-            )
-            commands.append(blocks)
-            if execute:
-                if not blocks.get("ok"):
-                    return _setup_payload(False, execute, config_path, commands, warnings, effective_base_token, effective_table_id)
-                effective_table_id = _extract_table_id_from_blocks(blocks.get("json"), table_name=table_name) or ""
-                if not effective_table_id:
-                    return _setup_payload(
-                        False,
-                        execute,
-                        config_path,
-                        commands,
-                        warnings,
-                        effective_base_token,
-                        effective_table_id,
-                        error="base-block-list did not return a usable table id",
-                    )
-            else:
-                effective_table_id = "<table-id-from-base-block-list>"
-        else:
-            created_table = True
-            table_create = cli_transport.run_command(
-                [
-                    cli_bin,
-                    "base",
-                    "+table-create",
-                    "--as",
-                    identity,
-                    "--base-token",
-                    effective_base_token,
-                    "--name",
-                    table_name,
-                    "--fields",
-                    json.dumps(lark_kanban_field_definitions(), ensure_ascii=False),
-                    "--view",
-                    json.dumps(lark_kanban_views(), ensure_ascii=False),
-                ],
-                execute=execute,
-                runner=runner,
-            )
-            commands.append(table_create)
-            if execute:
-                if not table_create.get("ok"):
-                    return _setup_payload(False, execute, config_path, commands, warnings, effective_base_token, effective_table_id)
-                effective_table_id = _extract_table_id(table_create.get("json")) or ""
-                if not effective_table_id:
-                    return _setup_payload(
-                        False,
-                        execute,
-                        config_path,
-                        commands,
-                        warnings,
-                        effective_base_token,
-                        effective_table_id,
-                        error="table-create did not return a usable table id",
-                    )
-            else:
-                effective_table_id = "<table-id-from-table-create>"
-
-    save_usable_config()
-
-    if execute and not created_base and not created_table:
-        field_list = cli_transport.run_command(
-            [cli_bin, "base", "+field-list", "--as", identity, "--base-token", effective_base_token, "--table-id", effective_table_id, "--format", "json", "--limit", "200"],
-            execute=True,
-            runner=runner,
-        )
-        commands.append(field_list)
-        if not field_list.get("ok"):
-            return partial_enrichment_payload(field_list)
-        for definition in issue_fix_surface.missing_field_definitions(field_list.get("json"), lark_kanban_field_definitions()):
-            field_create = cli_transport.run_command(
-                [cli_bin, "base", "+field-create", "--as", identity, "--base-token", effective_base_token, "--table-id", effective_table_id, "--json", json.dumps(definition, ensure_ascii=False)],
-                execute=True,
-                runner=runner,
-            )
-            commands.append(field_create)
-            if not field_create.get("ok"):
-                return partial_enrichment_payload(field_create)
-            created_field_names.append(str(definition.get("name") or ""))
-        for migration in issue_fix_surface.field_definition_migrations(
-            field_list.get("json"), lark_kanban_field_definitions()
-        ):
-            field_update = cli_transport.run_command(
-                [
-                    cli_bin,
-                    "base",
-                    "+field-update",
-                    "--as",
-                    identity,
-                    "--base-token",
-                    effective_base_token,
-                    "--table-id",
-                    effective_table_id,
-                    "--field-id",
-                    str(migration["field_id"]),
-                    "--json",
-                    json.dumps(migration["definition"], ensure_ascii=False),
-                    "--yes",
-                ],
-                execute=True,
-                runner=runner,
-            )
-            commands.append(field_update)
-            if not field_update.get("ok"):
-                return partial_enrichment_payload(field_update)
-            updated_field_names.append(str(migration["name"]))
-
-    if execute:
-        view_ids = _refresh_view_ids(
-            cli_bin=cli_bin,
-            identity=identity,
-            **{"base_" + "token": effective_base_token},
-            table_id=effective_table_id,
-            commands=commands,
-            runner=runner,
-        )
-        save_usable_config()
-    else:
-        view_ids = {str(name): str(value) for name, value in view_ids.items()}
-
-    missing_view_names = [view["name"] for view in lark_kanban_views() if view["name"] not in view_ids]
-    should_create_views = bool(missing_view_names) and (created_base or not created_table)
-    if should_create_views:
-        view_create = cli_transport.run_command(
-            [
-                cli_bin,
-                "base",
-                "+view-create",
-                "--as",
-                identity,
-                "--base-token",
-                effective_base_token,
-                "--table-id",
-                effective_table_id,
-                "--json",
-                json.dumps(
-                    [view for view in lark_kanban_views() if view["name"] in missing_view_names],
-                    ensure_ascii=False,
-                ),
-            ],
-            execute=execute,
-            runner=runner,
-        )
-        commands.append(view_create)
-        if execute and not view_create.get("ok"):
-            if config_payload:
-                return partial_enrichment_payload(view_create)
-            return _setup_payload(False, execute, config_path, commands, warnings, effective_base_token, effective_table_id)
-        if execute:
-            view_ids = _refresh_view_ids(
-                cli_bin=cli_bin,
-                identity=identity,
-                **{"base_" + "token": effective_base_token},
-                table_id=effective_table_id,
-                commands=commands,
-                runner=runner,
-            )
-            save_usable_config()
-
-    if not view_ids:
-        view_ids = {view["name"]: view["name"] for view in lark_kanban_views()}
-    for command in _view_configuration_commands(
-        cli_bin=cli_bin,
-        identity=identity,
-        **{"base_" + "token": effective_base_token},
-        table_id=effective_table_id,
-        view_ids=view_ids,
-    ):
-        result = cli_transport.run_command(command, execute=execute, runner=runner)
-        commands.append(result)
-        if execute and not result.get("ok"):
-            if config_payload:
-                return partial_enrichment_payload(result)
-            return _setup_payload(False, execute, config_path, commands, warnings, effective_base_token, effective_table_id)
-
-    save_usable_config()
-    return {
-        "ok": True,
-        "schema_version": LARK_KANBAN_SCHEMA_VERSION,
-        "execute": execute,
-        "config_path": str(config_path),
-        "created_base": created_base,
-        "created_table": created_table,
-        "created_fields": created_field_names,
-        "updated_fields": updated_field_names,
-        "base_token": effective_base_token,
-        "table_id": effective_table_id,
-        "view_ids": view_ids,
-        "operator_card_fields": OPERATOR_CARD_FIELDS,
-        "commands": commands,
-        "warnings": warnings,
-        "config": config_payload,
-        "next_commands": _next_lark_kanban_commands(config_payload.get("board", {}) if config_payload else {}),
-    }
-
-
-def _setup_payload(
-    ok: bool,
-    execute: bool,
-    config_path: Path,
-    commands: list[dict[str, Any]],
-    warnings: list[str],
-    base_token: str | None,
-    table_id: str | None,
-    *,
-    error: str | None = None,
-    config: dict[str, Any] | None = None,
-    partial: bool = False,
-    enrichment_error: str | None = None,
-) -> dict[str, Any]:
-    payload = {
-        "ok": ok,
-        "schema_version": LARK_KANBAN_SCHEMA_VERSION,
-        "execute": execute,
-        "config_path": str(config_path),
-        "base_token": base_token,
-        "table_id": table_id,
-        "commands": commands,
-        "warnings": warnings,
-    }
-    if config:
-        payload["config"] = config
-        payload["next_commands"] = _next_lark_kanban_commands(config.get("board", {}))
-    if partial:
-        payload["partial"] = True
-        payload["enrichment_ok"] = False
-        payload["enrichment_error"] = enrichment_error or next(
-            (cli_transport.command_error(item) for item in commands if not item.get("ok")),
-            "unknown",
-        )
-    elif not ok:
-        payload["error"] = error or next((cli_transport.command_error(item) for item in commands if not item.get("ok")), "unknown")
-    return payload
-
-
-def _refresh_view_ids(
-    *,
-    cli_bin: str,
-    identity: str,
-    base_token: str,
-    table_id: str,
-    commands: list[dict[str, Any]],
-    runner: cli_transport.CommandRunner,
-) -> dict[str, str]:
-    view_list = cli_transport.run_command(
-        [
-            cli_bin,
-            "base",
-            "+view-list",
-            "--as",
-            identity,
-            "--base-token",
-            base_token,
-            "--table-id",
-            table_id,
-        ],
-        execute=True,
-        runner=runner,
-    )
-    commands.append(view_list)
-    if not view_list.get("ok"):
-        return {}
-    return _extract_view_ids(view_list.get("json"))
-
-
-def _view_configuration_commands(
-    *,
-    cli_bin: str,
-    identity: str,
-    base_token: str,
-    table_id: str,
-    view_ids: dict[str, str],
-) -> list[list[str]]:
-    return issue_fix_surface.view_configuration_commands(cli_bin=cli_bin, identity=identity, base_token=base_token, table_id=table_id, view_ids=view_ids, worker_view_name=DEFAULT_STATUS_QUEUE_VIEW, todo_statuses=[STATUS_TODO, STATUS_CLAIMED], user_gate_status=STATUS_USER_GATE, operator_card_fields=OPERATOR_CARD_FIELDS)
-
-
-def _lark_kanban_schema_check(parsed: Any) -> dict[str, Any]:
-    definitions = lark_kanban_field_definitions()
-    missing = issue_fix_surface.missing_field_definitions(parsed, definitions)
-    migrations = issue_fix_surface.field_definition_migrations(parsed, definitions)
-    missing_names = [str(item.get("name") or "") for item in missing]
-    incompatible_names = [str(item.get("name") or "") for item in migrations]
-    migration_required = bool(missing_names or incompatible_names)
-    return {
-        "ok": not migration_required,
-        "status": "stale" if migration_required else "ready",
-        "expected_field_count": len(definitions),
-        "observed_field_count": len(issue_fix_surface.extract_field_names(parsed)),
-        "missing_fields": missing_names,
-        "incompatible_fields": incompatible_names,
-        "migration_required": migration_required,
-        "remediation_command": (
-            "loopx lark-kanban setup --execute" if migration_required else None
-        ),
-    }
-
-
-def _inspect_lark_kanban_schema(
-    config: LarkKanbanConfig,
-    *,
-    commands: list[dict[str, Any]],
-    runner: cli_transport.CommandRunner,
-) -> dict[str, Any]:
-    field_list = cli_transport.run_command(
-        [
-            config.cli_bin,
-            "base",
-            "+field-list",
-            "--as",
-            config.identity,
-            "--base-token",
-            config.base_token,
-            "--table-id",
-            config.table_id,
-            "--format",
-            "json",
-            "--limit",
-            "200",
-        ],
-        execute=True,
-        runner=runner,
-    )
-    commands.append(field_list)
-    if not field_list.get("ok"):
-        return {
-            "ok": False,
-            "status": "unavailable",
-            "migration_required": None,
-            "missing_fields": [],
-            "incompatible_fields": [],
-            "remediation_command": "loopx lark-kanban doctor --require-board",
-            "error": cli_transport.command_error(field_list),
-        }
-    return _lark_kanban_schema_check(field_list.get("json"))
-
-
-def _schema_check_error(schema_check: dict[str, Any]) -> str:
-    if schema_check.get("status") == "stale":
-        missing = ", ".join(schema_check.get("missing_fields") or []) or "none"
-        incompatible = (
-            ", ".join(schema_check.get("incompatible_fields") or []) or "none"
-        )
-        return (
-            "Lark Kanban schema is stale "
-            f"(missing: {missing}; incompatible: {incompatible}); run "
-            f"`{schema_check['remediation_command']}` before sync"
-        )
-    return (
-        "Lark Kanban schema could not be inspected before sync: "
-        f"{schema_check.get('error') or 'unknown error'}"
-    )
-
-
-def lark_kanban_doctor(
-    *,
-    config_path: Path,
-    cli_bin: str = cli_transport.DEFAULT_CLI_BIN,
-    identity: str = "user",
-    check_board: bool = True,
-    require_board: bool = False,
-    runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
-) -> dict[str, Any]:
-    commands: list[dict[str, Any]] = []
-    issues: list[dict[str, str]] = []
-    schema_check: dict[str, Any] | None = None
-    preflight = _lark_kanban_preflight(cli_bin=cli_bin, identity=identity, runner=runner)
-    commands.extend(preflight["commands"])
-    for warning in preflight["warnings"]:
-        issues.append({"severity": "warning", "message": warning})
-    if not preflight["cli_ok"]:
-        issues.append({"severity": "error", "message": f"{cli_bin} is not runnable"})
-    if not preflight["identity_available"]:
-        issues.append({"severity": "error", "message": _identity_error(identity)})
-
-    config_payload = read_lark_kanban_local_config(config_path)
-    board_config = lark_kanban_config_from_payload(config_payload)
-    if not config_payload.get("exists"):
-        issues.append(
-            {
-                "severity": "error" if require_board else "warning",
-                "message": f"no local board config at {config_path}; run lark-kanban setup or use",
-            }
-        )
-    elif not board_config:
-        issues.append({"severity": "error", "message": f"local board config is incomplete: {config_path}"})
-
-    if check_board and board_config and preflight["identity_available"]:
-        for command in (
-            [
-                board_config.cli_bin,
-                "base",
-                "+base-get",
-                "--as",
-                board_config.identity,
-                "--base-token",
-                board_config.base_token,
-            ],
-            [
-                board_config.cli_bin,
-                "base",
-                "+view-list",
-                "--as",
-                board_config.identity,
-                "--base-token",
-                board_config.base_token,
-                "--table-id",
-                board_config.table_id,
-            ],
-        ):
-            result = cli_transport.run_command(command, execute=True, runner=runner)
-            commands.append(result)
-            if not result.get("ok"):
-                issues.append({"severity": "error", "message": cli_transport.command_error(result)})
-        if not any(issue["severity"] == "error" for issue in issues):
-            schema_check = _inspect_lark_kanban_schema(
-                board_config,
-                commands=commands,
-                runner=runner,
-            )
-            if not schema_check.get("ok"):
-                issues.append(
-                    {
-                        "severity": "error",
-                        "message": _schema_check_error(schema_check),
-                    }
-                )
-
-    return {
-        "ok": not any(issue["severity"] == "error" for issue in issues),
-        "schema_version": "loopx_lark_kanban_doctor_v0",
-        "config_path": str(config_path),
-        "identity": identity,
-        "issues": issues,
-        "schema_check": schema_check,
-        "config": config_payload,
-        "commands": commands,
-    }
-
-
-def _lark_kanban_preflight(
-    *,
-    cli_bin: str,
-    identity: str,
-    runner: cli_transport.CommandRunner,
-) -> dict[str, Any]:
-    commands: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    version = cli_transport.run_command([cli_bin, "--version"], execute=True, runner=runner)
-    commands.append(version)
-    cli_ok = bool(version.get("ok"))
-    version_tuple = _version_tuple(str(version.get("stdout") or ""))
-    if cli_ok and version_tuple and version_tuple < (1, 0, 56):
-        warnings.append("lark-cli should be upgraded to at least 1.0.56 for setup visible-field support")
-    auth = cli_transport.run_command([cli_bin, "auth", "status"], execute=True, runner=runner)
-    commands.append(auth)
-    identity_available = _identity_available(auth.get("json"), identity)
-    for help_command in (
-        [cli_bin, "base", "+base-create", "--help"],
-        [cli_bin, "base", "+base-block-list", "--help"],
-        [cli_bin, "base", "+view-list", "--help"],
-        [cli_bin, "base", "+view-set-group", "--help"],
-        [cli_bin, "base", "+view-set-visible-fields", "--help"],
-    ):
-        result = cli_transport.run_command(help_command, execute=True, runner=runner)
-        commands.append(result)
-        if not result.get("ok"):
-            warnings.append(f"missing lark-cli shortcut: {shlex.join(help_command[2:-1])}")
-    return {
-        "commands": commands,
-        "warnings": warnings,
-        "cli_ok": cli_ok,
-        "identity_available": identity_available,
-    }
-
-
-def _version_tuple(text: str) -> tuple[int, ...] | None:
-    match = re.search(r"\d+(?:\.\d+)+", text)
-    if not match:
-        return None
-    return tuple(int(part) for part in match.group(0).split("."))
-
-
-def _identity_available(parsed: Any, identity: str) -> bool:
-    if not isinstance(parsed, dict):
-        return False
-    identities = parsed.get("identities") if isinstance(parsed.get("identities"), dict) else {}
-    if identity == "auto":
-        active = str(parsed.get("identity") or "").strip()
-        if active and isinstance(identities.get(active), dict):
-            return bool(identities[active].get("available"))
-        return any(isinstance(item, dict) and bool(item.get("available")) for item in identities.values())
-    status = identities.get(identity)
-    return isinstance(status, dict) and bool(status.get("available"))
-
-
-def _identity_error(identity: str) -> str:
-    if identity == "user":
-        return "lark-cli user identity is unavailable; run `lark-cli auth login --domain base --recommend`"
-    return f"lark-cli identity {identity!r} is unavailable; run `lark-cli auth status`"
 
 
 def _lark_record_from_projection_block(
-    block: dict[str, Any],
-    *,
-    goal_id: str,
-    source_id: str,
-    public_safe: bool = False,
+    block: dict[str, Any], *, goal_id: str, source_id: str, public_safe: bool = False
 ) -> dict[str, Any]:
-    priority = str(block.get("priority") or "P2")
     values = _lark_record_from_todo_block(
-        block,
-        goal_id=goal_id,
-        state_file=Path(f"{source_id}.projection"),
-        priority=priority,
+        block, goal_id=goal_id, state_file=Path(f"{source_id}.projection"),
+        priority=str(block.get("priority") or "P2"),
     )
     original_id = str(block.get("original_todo_id") or "")
     evidence_parts = [
@@ -1881,30 +659,78 @@ def _lark_record_from_projection_block(
     lifecycle_state = _projection_lifecycle_state(block)
     default_handoff = f"Synced from LoopX projection source={source_id}"
     if lifecycle_state in {"superseded", "migrated", "retired"}:
-        superseded_by = ", ".join(_as_text_list(_projection_lifecycle_value(block, "superseded_by"))) or "current projection row"
+        superseded_by = (
+            ", ".join(_as_text_list(_projection_lifecycle_value(block, "superseded_by")))
+            or "current projection row"
+        )
         default_handoff = f"Row lifecycle {lifecycle_state}; continue with {superseded_by}."
     values.update(
         {
             "LoopX Goal ID": goal_id,
             "LoopX Todo ID": str(block.get("todo_id") or ""),
-            "Scope": _compact_text(block.get("scope") or block.get("source_section") or f"projection_source={source_id}"),
+            "Scope": _compact_text(
+                block.get("scope") or block.get("source_section") or f"projection_source={source_id}"
+            ),
             "Handoff": _compact_text(block.get("handoff") or default_handoff),
             "Evidence": _compact_text("; ".join(evidence_parts)),
             "Run History": _compact_text(
                 "; ".join(
                     part
-                    for part in [
+                    for part in (
                         f"synced from LoopX projection source={source_id} status={block.get('status') or 'open'}",
                         f"row_lifecycle={lifecycle_state}" if lifecycle_state else "",
-                    ]
+                    )
                     if part
                 )
             ),
         }
     )
     values.update(issue_fix_surface.issue_fix_record_values(block, compact_text=_compact_text))
-    values = _credential_safe_lark_values(values)
-    return _public_safe_lark_values(values) if public_safe else values
+    return _sink_safe_lark_values(values, public_safe=public_safe)
+
+
+def _projection_upsert_items(
+    rows: list[dict[str, Any]], *, default_goal_id: str, source_id: str, public_safe: bool
+) -> list[tuple[str, str, dict[str, Any]]]:
+    items: list[tuple[str, str, dict[str, Any]]] = []
+    for row in rows:
+        row_goal_id = str(row.get("goal_id") or default_goal_id)
+        todo_id = str(row.get("todo_id") or "").strip()
+        values = _lark_record_from_projection_block(
+            row, goal_id=row_goal_id, source_id=source_id, public_safe=public_safe
+        )
+        items.append((f"{row_goal_id}:{todo_id}", todo_id, values))
+    return items
+
+
+def _upsert_record_batch(
+    config: LarkKanbanConfig,
+    items: list[tuple[str, str, dict[str, Any]]],
+    *,
+    record_map: dict[str, str],
+    commands: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    execute: bool,
+    runner: cli_transport.CommandRunner,
+) -> tuple[bool, int]:
+    ok = True
+    successful_write_count = 0
+    for key, todo_id, values in items:
+        result = cli_transport.run_command(
+            build_record_upsert_command(config, record_id=record_map.get(key), values=values),
+            execute=execute, runner=runner,
+        )
+        commands.append(result)
+        record_id = _extract_created_record_id(result.get("json")) or record_map.get(key)
+        if execute and result.get("executed") and result.get("ok"):
+            successful_write_count += 1
+        if execute and result.get("ok") and record_id:
+            record_map[key] = record_id
+        results.append({"todo_id": todo_id, "record_id": record_id, "command": result, "values": values})
+        ok = ok and bool(result.get("ok"))
+        if execute and not result.get("ok"):
+            break
+    return ok, successful_write_count
 
 
 def sync_loopx_projection_to_lark_kanban(
@@ -1925,80 +751,57 @@ def sync_loopx_projection_to_lark_kanban(
 ) -> dict[str, Any]:
     if not isinstance(projection, dict):
         raise ValueError("projection must be a JSON object")
-    if sink_visibility not in SINK_VISIBILITIES:
-        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
-    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
+    public_safe = _validate_sink_visibility(sink_visibility)
     resolved_source_id, namespace_warnings = _projection_namespace(projection, source_id)
     resolved_goal_id, rows, warnings = _projection_rows_from_payload(
-        projection,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        source_id=resolved_source_id,
-        include_done=include_done,
-        limit=limit,
+        projection, goal_id=goal_id, agent_id=agent_id,
+        source_id=resolved_source_id, include_done=include_done, limit=limit,
     )
     warnings = [*namespace_warnings, *warnings]
 
-    complete_rows, complete_warnings = rows, []
+    complete_rows = rows
+    complete_warnings: list[str] = []
     if reconcile_source:
         _, complete_rows, complete_warnings = _projection_rows_from_payload(
-            projection,
-            goal_id=goal_id,
-            agent_id=None,
-            source_id=resolved_source_id,
-            include_done=True,
-            limit=2**31 - 1,
+            projection, goal_id=goal_id, agent_id=None,
+            source_id=resolved_source_id, include_done=True, limit=2**31 - 1,
         )
     validate_projection_source_reconcile_request(
-        requested=reconcile_source,
-        source_snapshot_complete=source_snapshot_complete,
-        agent_id=agent_id,
-        include_done=include_done,
-        namespace_warnings=namespace_warnings,
-        selected_row_count=len(rows),
-        complete_row_count=len(complete_rows),
+        requested=reconcile_source, source_snapshot_complete=source_snapshot_complete,
+        agent_id=agent_id, include_done=include_done, namespace_warnings=namespace_warnings,
+        selected_row_count=len(rows), complete_row_count=len(complete_rows),
         complete_warnings=complete_warnings,
     )
 
     commands: list[dict[str, Any]] = []
     schema_check: dict[str, Any] | None = None
+    base_payload: dict[str, Any] = {
+        "schema_version": LARK_KANBAN_SYNC_PROJECTION_VERSION,
+        "execute": execute,
+        "goal_id": resolved_goal_id,
+        "agent_id": agent_id,
+        "source_id": resolved_source_id,
+        "sink_visibility": sink_visibility,
+        "public_safe_redaction": public_safe,
+        "projection_schema_version": projection.get("schema_version"),
+        "row_count": len(rows),
+        "warnings": warnings,
+        "config_path": str(config_path) if config_path else None,
+    }
     if execute:
-        schema_check = _inspect_lark_kanban_schema(
-            config,
-            commands=commands,
-            runner=runner,
-        )
+        schema_check = _inspect_lark_kanban_schema(config, commands=commands, runner=runner)
         if not schema_check.get("ok"):
             return {
-                "ok": False,
-                "schema_version": LARK_KANBAN_SYNC_PROJECTION_VERSION,
-                "execute": execute,
-                "goal_id": resolved_goal_id,
-                "agent_id": agent_id,
-                "source_id": resolved_source_id,
-                "sink_visibility": sink_visibility,
-                "public_safe_redaction": public_safe,
-                "projection_schema_version": projection.get("schema_version"),
-                "row_count": len(rows),
-                "records": [],
-                "commands": commands,
-                "warnings": warnings,
-                "config_path": str(config_path) if config_path else None,
-                "schema_check": schema_check,
-                "error": _schema_check_error(schema_check),
+                **base_payload, "ok": False, "records": [], "commands": commands,
+                "schema_check": schema_check, "error": _schema_check_error(schema_check),
             }
+
     local, record_map, remote_records, remote_list_complete = _load_lark_todo_record_map(
-        config,
-        config_path=config_path,
-        execute=execute,
-        inspect_remote=reconcile_source,
-        commands=commands,
-        runner=runner,
+        config, config_path=config_path, execute=execute,
+        inspect_remote=reconcile_source, commands=commands, runner=runner,
     )
     if reconcile_source and not remote_list_complete:
-        raise ValueError(
-            "source reconcile requires a complete remote record list"
-        )
+        raise ValueError("source reconcile requires a complete remote record list")
 
     desired_keys = {
         f"{str(row.get('goal_id') or resolved_goal_id)}:{str(row.get('todo_id') or '').strip()}"
@@ -2006,10 +809,8 @@ def sync_loopx_projection_to_lark_kanban(
     }
     reconcile_plan = (
         plan_projection_source_reconcile(
-            goal_id=resolved_goal_id,
-            source_id=resolved_source_id,
-            desired_keys=sorted(desired_keys),
-            local_record_map=record_map,
+            goal_id=resolved_goal_id, source_id=resolved_source_id,
+            desired_keys=sorted(desired_keys), local_record_map=record_map,
             remote_records=remote_records,
         )
         if reconcile_source
@@ -2027,89 +828,52 @@ def sync_loopx_projection_to_lark_kanban(
     )
 
     results: list[dict[str, Any]] = []
-    ok = True
-    for row in rows:
-        row_goal_id = str(row.get("goal_id") or resolved_goal_id)
-        todo_id = str(row.get("todo_id") or "").strip()
-        key = f"{row_goal_id}:{todo_id}"
-        values = _lark_record_from_projection_block(
-            row,
-            goal_id=row_goal_id,
-            source_id=resolved_source_id,
-            public_safe=public_safe,
-        )
-        result = cli_transport.run_command(
-            build_record_upsert_command(config, record_id=record_map.get(key), values=values),
-            execute=execute,
-            runner=runner,
-        )
-        commands.append(result)
-        record_id = _extract_created_record_id(result.get("json")) or record_map.get(key)
-        if execute and result.get("ok") and record_id:
-            record_map[key] = record_id
-        results.append(
-            {
-                "todo_id": todo_id,
-                "record_id": record_id,
-                "command": result,
-                "values": values,
-            }
-        )
-        ok = ok and bool(result.get("ok"))
-        if execute and not result.get("ok"):
-            break
+    ok, _ = _upsert_record_batch(
+        config,
+        _projection_upsert_items(
+            rows, default_goal_id=resolved_goal_id, source_id=resolved_source_id, public_safe=public_safe
+        ),
+        record_map=record_map, commands=commands, results=results, execute=execute, runner=runner,
+    )
 
     executed_remote_delete_count = 0
-    if ok and reconcile_source and reconcile_plan["remote_delete_record_ids"]:
+    delete_ids = reconcile_plan.get("remote_delete_record_ids")
+    if ok and reconcile_source and isinstance(delete_ids, list) and delete_ids:
         delete_result = cli_transport.run_command(
-            build_record_delete_command(
-                config,
-                record_ids=reconcile_plan["remote_delete_record_ids"],
-            ),
-            execute=execute,
-            runner=runner,
+            build_record_delete_command(config, record_ids=[str(item) for item in delete_ids]),  # type: ignore[arg-type]
+            execute=execute, runner=runner,
         )
         commands.append(delete_result)
         ok = ok and bool(delete_result.get("ok"))
         if execute and delete_result.get("ok"):
-            executed_remote_delete_count = reconcile_plan["remote_delete_count"]
+            raw_delete_count = reconcile_plan.get("remote_delete_count")
+            executed_remote_delete_count = raw_delete_count if isinstance(raw_delete_count, int) else 0
 
     removed_local_mapping_count = 0
-    if execute and ok and reconcile_source:
-        for key in reconcile_plan["local_mapping_keys_to_remove"]:
-            if key in record_map:
+    local_keys = reconcile_plan.get("local_mapping_keys_to_remove")
+    if execute and ok and reconcile_source and isinstance(local_keys, list):
+        for key in local_keys:
+            if str(key) in record_map:
                 removed_local_mapping_count += 1
-                record_map.pop(key, None)
+                record_map.pop(str(key), None)
 
     if execute and ok:
         _persist_lark_todo_record_map(config, config_path=config_path, local=local, record_map=record_map)
 
     return {
+        **base_payload,
         "ok": ok,
-        "schema_version": LARK_KANBAN_SYNC_PROJECTION_VERSION,
-        "execute": execute,
-        "goal_id": resolved_goal_id,
-        "agent_id": agent_id,
-        "source_id": resolved_source_id,
-        "sink_visibility": sink_visibility,
-        "public_safe_redaction": public_safe,
-        "projection_schema_version": projection.get("schema_version"),
         "schema_check": schema_check,
-        "row_count": len(rows),
         "source_reconcile": {
             **reconcile_plan,
             "requested": reconcile_source,
             "source_snapshot_complete": source_snapshot_complete,
-            "mode": "execute" if reconcile_source and execute else (
-                "preview" if reconcile_source else "disabled"
-            ),
+            "mode": "execute" if reconcile_source and execute else ("preview" if reconcile_source else "disabled"),
             "executed_remote_delete_count": executed_remote_delete_count,
             "removed_local_mapping_count": removed_local_mapping_count,
         },
         "records": results,
         "commands": commands,
-        "warnings": warnings,
-        "config_path": str(config_path) if config_path else None,
     }
 
 
@@ -2131,19 +895,13 @@ def sync_loopx_todos_to_lark_kanban(
     from ....capabilities.issue_fix.outcome_projection import (
         build_issue_fix_outcome_collection_from_domain_state,
     )
-    from ....control_plane.todos.todo_semantics import todo_priority_label
-    from ....control_plane.todos.path_resolution import resolve_todo_state_path
     from ....control_plane.todos.active_state_editing import section_bounds, todo_blocks
+    from ....control_plane.todos.path_resolution import resolve_todo_state_path
+    from ....control_plane.todos.todo_semantics import todo_priority_label
 
-    if sink_visibility not in SINK_VISIBILITIES:
-        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
-    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
-
+    public_safe = _validate_sink_visibility(sink_visibility)
     resolved_project, resolved_state_file = resolve_todo_state_path(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        project=project,
-        state_file=state_file,
+        registry_path=registry_path, goal_id=goal_id, project=project, state_file=state_file
     )
     lines = resolved_state_file.read_text(encoding="utf-8").splitlines()
     todos: list[dict[str, Any]] = []
@@ -2153,32 +911,22 @@ def sync_loopx_todos_to_lark_kanban(
             continue
         start, end, heading = bounds
         for block in todo_blocks(lines, start, end, role=role, source_section=heading):
-            raw_status = str(block.get("status") or "").strip()
-            status = normalize_todo_status(raw_status)
+            status = normalize_todo_status(str(block.get("status") or "").strip())
             if (block.get("done") or status == TODO_STATUS_DONE) and not include_done:
                 continue
             candidate = {**block, "role": role, "source_section": heading}
-            if not todo_matches_agent_scope(candidate, agent_id):
-                continue
-            todos.append(candidate)
+            if todo_matches_agent_scope(candidate, agent_id):
+                todos.append(candidate)
     todos = todos[:limit]
 
     outcome_projection = build_issue_fix_outcome_collection_from_domain_state(
-        goal_id=goal_id,
-        project=resolved_project or project or Path("."),
+        goal_id=goal_id, project=resolved_project or project or Path(".")
     )
-    outcome_source_id, outcome_namespace_warnings = _projection_namespace(
-        outcome_projection,
-        None,
-    )
+    outcome_source_id, outcome_namespace_warnings = _projection_namespace(outcome_projection, None)
     outcome_source_count = len(outcome_projection.get("issue_fix_outcomes") or [])
     _, outcome_rows, outcome_row_warnings = _projection_rows_from_payload(
-        outcome_projection,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        source_id=outcome_source_id,
-        include_done=True,
-        limit=outcome_source_count,
+        outcome_projection, goal_id=goal_id, agent_id=agent_id,
+        source_id=outcome_source_id, include_done=True, limit=outcome_source_count,
     )
     outcome_warnings = [
         *outcome_namespace_warnings,
@@ -2188,139 +936,7 @@ def sync_loopx_todos_to_lark_kanban(
 
     commands: list[dict[str, Any]] = []
     schema_check: dict[str, Any] | None = None
-    if execute:
-        schema_check = _inspect_lark_kanban_schema(
-            config,
-            commands=commands,
-            runner=runner,
-        )
-        if not schema_check.get("ok"):
-            return {
-                "ok": False,
-                "schema_version": "loopx_lark_kanban_sync_todos_v0",
-                "execute": execute,
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "sink_visibility": sink_visibility,
-                "public_safe_redaction": public_safe,
-                "base_token": config.base_token,
-                "table_id": config.table_id,
-                "view_id": config.view_id,
-                "project": str(resolved_project) if resolved_project else None,
-                "state_file": str(resolved_state_file),
-                "todo_count": len(todos),
-                "issue_fix_outcome_count": len(outcome_rows),
-                "limit_policy": {
-                    "todo_rows": limit,
-                    "issue_fix_outcomes": "complete_source_projection",
-                },
-                "issue_fix_source_counts": outcome_projection.get("source_counts"),
-                "warnings": outcome_warnings,
-                "records": [],
-                "commands": commands,
-                "config_path": str(config_path) if config_path else None,
-                "schema_check": schema_check,
-                "successful_write_count": 0,
-                "external_write_performed": False,
-                "error": _schema_check_error(schema_check),
-            }
-    local, record_map, _, _ = _load_lark_todo_record_map(
-        config,
-        config_path=config_path,
-        execute=execute,
-        inspect_remote=False,
-        commands=commands,
-        runner=runner,
-    )
-
-    results: list[dict[str, Any]] = []
-    successful_write_count = 0
-    ok = True
-    for block in todos:
-        todo_id = str(block.get("todo_id") or "").strip()
-        key = f"{goal_id}:{todo_id}"
-        values = _lark_record_from_todo_block(
-            block,
-            goal_id=goal_id,
-            state_file=resolved_state_file,
-            priority=todo_priority_label(block, text_mode="prefix") or "P2",
-        )
-        if public_safe:
-            values = _public_safe_lark_values(values)
-        result = cli_transport.run_command(
-            build_record_upsert_command(config, record_id=record_map.get(key), values=values),
-            execute=execute,
-            runner=runner,
-        )
-        commands.append(result)
-        record_id = _extract_created_record_id(result.get("json")) or record_map.get(key)
-        write_succeeded = bool(
-            execute and result.get("executed") and result.get("ok")
-        )
-        if write_succeeded:
-            successful_write_count += 1
-        if execute and result.get("ok") and record_id:
-            record_map[key] = record_id
-        results.append(
-            {
-                "todo_id": todo_id,
-                "record_id": record_id,
-                "command": result,
-                "values": values,
-            }
-        )
-        ok = ok and bool(result.get("ok"))
-        if execute and not result.get("ok"):
-            break
-
-    if ok:
-        for row in outcome_rows:
-            row_goal_id = str(row.get("goal_id") or goal_id)
-            todo_id = str(row.get("todo_id") or "").strip()
-            key = f"{row_goal_id}:{todo_id}"
-            values = _lark_record_from_projection_block(
-                row,
-                goal_id=row_goal_id,
-                source_id=outcome_source_id,
-                public_safe=public_safe,
-            )
-            result = cli_transport.run_command(
-                build_record_upsert_command(
-                    config,
-                    record_id=record_map.get(key),
-                    values=values,
-                ),
-                execute=execute,
-                runner=runner,
-            )
-            commands.append(result)
-            record_id = (
-                _extract_created_record_id(result.get("json")) or record_map.get(key)
-            )
-            if execute and result.get("ok") and record_id:
-                record_map[key] = record_id
-            write_succeeded = bool(
-                execute and result.get("executed") and result.get("ok")
-            )
-            if write_succeeded:
-                successful_write_count += 1
-            results.append(
-                {
-                    "todo_id": todo_id,
-                    "record_id": record_id,
-                    "command": result,
-                    "values": values,
-                }
-            )
-            ok = ok and bool(result.get("ok"))
-            if execute and not result.get("ok"):
-                break
-
-    if execute and successful_write_count:
-        _persist_lark_todo_record_map(config, config_path=config_path, local=local, record_map=record_map)
-
-    return {
-        "ok": ok,
+    base_payload: dict[str, Any] = {
         "schema_version": "loopx_lark_kanban_sync_todos_v0",
         "execute": execute,
         "goal_id": goal_id,
@@ -2334,24 +950,73 @@ def sync_loopx_todos_to_lark_kanban(
         "state_file": str(resolved_state_file),
         "todo_count": len(todos),
         "issue_fix_outcome_count": len(outcome_rows),
-        "limit_policy": {
-            "todo_rows": limit, "issue_fix_outcomes": "complete_source_projection",
-        },
+        "limit_policy": {"todo_rows": limit, "issue_fix_outcomes": "complete_source_projection"},
         "issue_fix_source_counts": outcome_projection.get("source_counts"),
-        "schema_check": schema_check,
         "warnings": outcome_warnings,
+        "config_path": str(config_path) if config_path else None,
+    }
+    if execute:
+        schema_check = _inspect_lark_kanban_schema(config, commands=commands, runner=runner)
+        if not schema_check.get("ok"):
+            return {
+                **base_payload, "ok": False, "records": [], "commands": commands,
+                "schema_check": schema_check, "successful_write_count": 0,
+                "external_write_performed": False, "error": _schema_check_error(schema_check),
+            }
+
+    local, record_map, _, _ = _load_lark_todo_record_map(
+        config, config_path=config_path, execute=execute,
+        inspect_remote=False, commands=commands, runner=runner,
+    )
+
+    todo_items: list[tuple[str, str, dict[str, Any]]] = []
+    for block in todos:
+        todo_id = str(block.get("todo_id") or "").strip()
+        values = _lark_record_from_todo_block(
+            block, goal_id=goal_id, state_file=resolved_state_file,
+            priority=todo_priority_label(block, text_mode="prefix") or "P2",
+        )
+        if public_safe:
+            values = _public_safe_lark_values(values)
+        todo_items.append((f"{goal_id}:{todo_id}", todo_id, values))
+
+    results: list[dict[str, Any]] = []
+    ok, successful_write_count = _upsert_record_batch(
+        config, todo_items, record_map=record_map, commands=commands,
+        results=results, execute=execute, runner=runner,
+    )
+    if ok and outcome_rows:
+        ok, outcome_writes = _upsert_record_batch(
+            config,
+            _projection_upsert_items(
+                outcome_rows, default_goal_id=goal_id, source_id=outcome_source_id, public_safe=public_safe
+            ),
+            record_map=record_map, commands=commands, results=results, execute=execute, runner=runner,
+        )
+        successful_write_count += outcome_writes
+
+    if execute and successful_write_count:
+        _persist_lark_todo_record_map(config, config_path=config_path, local=local, record_map=record_map)
+
+    return {
+        **base_payload,
+        "ok": ok,
+        "schema_check": schema_check,
         "records": results,
         "commands": commands,
-        "config_path": str(config_path) if config_path else None,
         "successful_write_count": successful_write_count,
         "external_write_performed": bool(successful_write_count),
     }
 
 
 def _load_lark_todo_record_map(
-    config: LarkKanbanConfig, *, config_path: Path | None, execute: bool,
+    config: LarkKanbanConfig,
+    *,
+    config_path: Path | None,
+    execute: bool,
     inspect_remote: bool,
-    commands: list[dict[str, Any]], runner: cli_transport.CommandRunner,
+    commands: list[dict[str, Any]],
+    runner: cli_transport.CommandRunner,
 ) -> tuple[dict[str, Any], dict[str, str], list[dict[str, str]], bool | None]:
     local = read_lark_kanban_local_config(config_path) if config_path else {}
     record_map = _todo_record_map_from_local_config(local)
@@ -2359,13 +1024,12 @@ def _load_lark_todo_record_map(
         return local, record_map, [], None
 
     list_config = LarkKanbanConfig(
-        **{"base_" + "token": config.base_token},
-        table_id=config.table_id,
-        view_id=None,
-        cli_bin=config.cli_bin,
-        identity=config.identity,
+        base_token=config.base_token, table_id=config.table_id, view_id=None,
+        cli_bin=config.cli_bin, identity=config.identity,
     )
-    list_result = cli_transport.run_command(build_record_list_command(list_config), execute=True, runner=runner)
+    list_result = cli_transport.run_command(
+        build_record_list_command(list_config), execute=True, runner=runner
+    )
     commands.append(list_result)
     remote_records: list[dict[str, str]] = []
     remote_complete = False
@@ -2382,52 +1046,55 @@ def _load_lark_todo_record_map(
                 if record_id in remote_by_key.get(key, [])
             }
         for key, record_ids in remote_by_key.items():
-            preferred_record_id = record_map.get(key)
-            record_map[key] = (
-                preferred_record_id
-                if preferred_record_id in record_ids
-                else sorted(record_ids)[0]
-            )
+            preferred = record_map.get(key)
+            record_map[key] = preferred if preferred in record_ids else sorted(record_ids)[0]
         remote_complete = record_list_is_complete(parsed_records)
     return local, record_map, remote_records, remote_complete
 
 
-def _todo_record_map_from_local_config(local: dict[str, Any]) -> dict[str, str]:
-    records = local.get("todo_records") if isinstance(local, dict) else None
+def _todo_record_map_from_local_config(local: Mapping[str, object]) -> dict[str, str]:
+    records = local.get("todo_records") if isinstance(local, Mapping) else None
     if not isinstance(records, dict):
         return {}
-    return {str(key): str(value) for key, value in records.items() if str(key).strip() and str(value).strip()}
+    return {
+        str(key): str(value)
+        for key, value in records.items()
+        if str(key).strip() and str(value).strip()
+    }
 
 
 def _persist_lark_todo_record_map(
-    config: LarkKanbanConfig, *, config_path: Path | None,
-    local: dict[str, Any], record_map: dict[str, str],
+    config: LarkKanbanConfig,
+    *,
+    config_path: Path | None,
+    local: Mapping[str, object],
+    record_map: dict[str, str],
 ) -> None:
     if not config_path:
         return
-    board = local.get("board") if isinstance(local.get("board"), dict) else {}
-    if not board:
-        board = {
-            "base_token": config.base_token,
-            "table_id": config.table_id,
-            "view_id": config.view_id,
-            "cli_bin": config.cli_bin,
-            "identity": config.identity,
-        }
-    payload = {"schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION, "board": board, "todo_records": record_map}
-    write_lark_kanban_local_config(config_path, payload)
+    raw_board = local.get("board")
+    board = raw_board if isinstance(raw_board, dict) and raw_board else {
+        "base_token": config.base_token,
+        "table_id": config.table_id,
+        "view_id": config.view_id,
+        "cli_bin": config.cli_bin,
+        "identity": config.identity,
+    }
+    write_lark_kanban_local_config(
+        config_path,
+        {
+            "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
+            "board": board,
+            "todo_records": record_map,
+        },
+    )
 
 
 def _lark_record_from_todo_block(
-    block: dict[str, Any],
-    *,
-    goal_id: str,
-    state_file: Path,
-    priority: str,
+    block: dict[str, Any], *, goal_id: str, state_file: Path, priority: str
 ) -> dict[str, Any]:
     role = str(block.get("role") or "agent")
-    raw_status = str(block.get("status") or "").strip()
-    status = normalize_todo_status(raw_status) or TODO_STATUS_OPEN
+    status = normalize_todo_status(str(block.get("status") or "").strip()) or TODO_STATUS_OPEN
     task_class = normalize_explicit_todo_task_class(block.get("task_class")) or (
         TODO_TASK_CLASS_USER_GATE if role == "user" else TODO_TASK_CLASS_ADVANCEMENT
     )
@@ -2441,17 +1108,13 @@ def _lark_record_from_todo_block(
         lark_status = STATUS_USER_GATE
     elif claimed_by:
         lark_status = STATUS_CLAIMED
-    claim = CLAIM_UNCLAIMED
-    if lark_status == STATUS_USER_GATE:
-        claim = CLAIM_HUMAN
-    elif claimed_by:
-        claim = CLAIM_AGENT
+    claim = (
+        CLAIM_HUMAN
+        if lark_status == STATUS_USER_GATE
+        else (CLAIM_AGENT if claimed_by else CLAIM_UNCLAIMED)
+    )
     scope = block.get("required_write_scopes")
-    if isinstance(scope, list):
-        scope_text = ", ".join(str(item) for item in scope)
-    else:
-        scope_text = str(scope or "")
-    evidence = str(block.get("evidence") or block.get("reason") or block.get("note") or "")
+    scope_text = ", ".join(str(item) for item in scope) if isinstance(scope, list) else str(scope or "")
     text = str(block.get("text") or "")
     values = {
         "Task": text,
@@ -2467,7 +1130,7 @@ def _lark_record_from_todo_block(
         "Scope": scope_text,
         "User Gate": text if lark_status == STATUS_USER_GATE else "",
         "Handoff": f"Synced from LoopX active state: {state_file.name}",
-        "Evidence": evidence,
+        "Evidence": str(block.get("evidence") or block.get("reason") or block.get("note") or ""),
         "Run History": f"synced from LoopX todo status={status}",
         "Worker Command": "",
         "Workdir": "",
@@ -2485,20 +1148,16 @@ def seed_lark_kanban_task(
     execute: bool = False,
     runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
-    if sink_visibility not in SINK_VISIBILITIES:
-        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
-    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
+    public_safe = _validate_sink_visibility(sink_visibility)
     safe_task = _sink_safe_lark_values(task, public_safe=public_safe)
     result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=None, values=safe_task),
-        execute=execute,
-        runner=runner,
+        execute=execute, runner=runner,
     )
-    record_id = _extract_created_record_id(result.get("json"))
     return {
         "ok": bool(result.get("ok")),
         "schema_version": LARK_KANBAN_SCHEMA_VERSION,
-        "record_id": record_id,
+        "record_id": _extract_created_record_id(result.get("json")),
         "command": result,
         "sink_visibility": sink_visibility,
         "public_safe_redaction": public_safe,
@@ -2514,17 +1173,12 @@ def seed_lark_kanban_records(
     execute: bool = False,
     runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
-    if sink_visibility not in SINK_VISIBILITIES:
-        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
+    public_safe = _validate_sink_visibility(sink_visibility)
     results: list[dict[str, Any]] = []
     ok = True
     for record in records:
         result = seed_lark_kanban_task(
-            config,
-            task=record,
-            sink_visibility=sink_visibility,
-            execute=execute,
-            runner=runner,
+            config, task=record, sink_visibility=sink_visibility, execute=execute, runner=runner
         )
         results.append(result)
         ok = ok and bool(result.get("ok"))
@@ -2535,10 +1189,73 @@ def seed_lark_kanban_records(
         "schema_version": LARK_KANBAN_SCHEMA_VERSION,
         "record_count": len(records),
         "sink_visibility": sink_visibility,
-        "public_safe_redaction": sink_visibility == SINK_VISIBILITY_SHARED,
+        "public_safe_redaction": public_safe,
         "created_record_ids": [item.get("record_id") for item in results],
         "records": results,
     }
+
+
+def _run_heartbeat_worker(
+    task: Mapping[str, object],
+    *,
+    command: str,
+    execute_worker: bool,
+    complete_on_success: bool,
+    allowed_command_prefixes: list[str] | None,
+    runner: cli_transport.CommandRunner,
+    worker_timeout_seconds: float,
+) -> tuple[dict[str, Any], str, str, int | None]:
+    safe_command = _redact_credential_shapes(command)
+    if not command:
+        return (
+            {"attempted": False, "executed": False, "ok": False, "reason": "worker_command_missing", "command": ""},
+            STATUS_USER_GATE,
+            "worker command missing; user must provide Worker Command or heartbeat --worker-command",
+            None,
+        )
+    if not execute_worker:
+        return (
+            {"attempted": True, "executed": False, "ok": True, "reason": "execute_worker_not_set", "command": safe_command},
+            STATUS_CLAIMED,
+            f"dry-run worker command: {safe_command}",
+            None,
+        )
+    if not allowed_worker_command(command, allowed_command_prefixes or []):
+        return (
+            {
+                "attempted": True, "executed": False, "ok": False,
+                "reason": "worker_command_prefix_not_allowed", "command": safe_command,
+                "allowed_prefixes": allowed_command_prefixes or [],
+            },
+            STATUS_BLOCKED,
+            "worker command blocked by prefix allowlist",
+            None,
+        )
+    worker_result = cli_transport.run_command(
+        shlex.split(command),
+        execute=True,
+        runner=runner,
+        cwd=Path(str(task.get("Workdir") or ".")).expanduser(),
+        timeout_seconds=worker_timeout_seconds,
+    )
+    worker_ok = bool(worker_result.get("ok"))
+    worker: dict[str, Any] = {
+        "attempted": True,
+        "executed": True,
+        "ok": worker_ok,
+        "reason": "completed" if worker_ok else "failed",
+        "command": safe_command,
+        "returncode": worker_result.get("returncode"),
+        "stdout": _credential_safe_text(worker_result.get("stdout"), limit=cli_transport.OUTPUT_LIMIT),
+        "stderr": _credential_safe_text(worker_result.get("stderr"), limit=cli_transport.OUTPUT_LIMIT),
+    }
+    final_status = (STATUS_DONE if complete_on_success else STATUS_REVIEW) if worker_ok else STATUS_BLOCKED
+    evidence = _credential_safe_text(
+        worker.get("stdout") or worker.get("stderr") or worker.get("reason"),
+        limit=cli_transport.OUTPUT_LIMIT,
+    )
+    raw_code = worker_result.get("returncode")
+    return worker, final_status, evidence, raw_code if isinstance(raw_code, int) else None
 
 
 def lark_kanban_heartbeat(
@@ -2556,24 +1273,16 @@ def lark_kanban_heartbeat(
     now: datetime | None = None,
     worker_timeout_seconds: float = 600.0,
 ) -> dict[str, Any]:
-    if sink_visibility not in SINK_VISIBILITIES:
-        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
-    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
+    public_safe = _validate_sink_visibility(sink_visibility)
     commands: list[dict[str, Any]] = []
     if fixture is None:
         list_result = cli_transport.run_command(
-            build_record_list_command(config),
-            execute=execute_lark,
-            runner=runner,
+            build_record_list_command(config), execute=execute_lark, runner=runner
         )
         commands.append(list_result)
         if execute_lark and not list_result.get("ok"):
             return _heartbeat_payload(
-                ok=False,
-                decision="record_list_failed",
-                agent_id=agent_id,
-                commands=commands,
-                records=[],
+                ok=False, decision="record_list_failed", agent_id=agent_id, commands=commands, records=[]
             )
         parsed = list_result.get("json") if execute_lark else {"data": {"fields": [], "data": []}}
     else:
@@ -2582,155 +1291,78 @@ def lark_kanban_heartbeat(
     task = choose_heartbeat_task(records, agent_id=agent_id)
     if task is None:
         return _heartbeat_payload(
-            ok=True,
-            decision="no_claimable_task",
-            agent_id=agent_id,
-            commands=commands,
-            records=records,
+            ok=True, decision="no_claimable_task", agent_id=agent_id, commands=commands, records=records
         )
     record_id = str(task.get("_record_id") or "").strip()
     if not record_id:
         return _heartbeat_payload(
-            ok=False,
-            decision="selected_task_missing_record_id",
-            agent_id=agent_id,
-            commands=commands,
-            records=records,
-            selected_task=task,
+            ok=False, decision="selected_task_missing_record_id", agent_id=agent_id,
+            commands=commands, records=records, selected_task=task,
         )
     timestamp = now_lark_datetime(now)
-    claim_values = {
-        "Status": STATUS_CLAIMED,
-        "Claim": CLAIM_AGENT,
-        "Claimed By": agent_id,
-        "Last Heartbeat": timestamp,
-        "Run History": append_history(task.get("Run History"), f"{timestamp} {agent_id}: claimed"),
-    }
-    claim_values = _sink_safe_lark_values(claim_values, public_safe=public_safe)
+    claim_values = _sink_safe_lark_values(
+        {
+            "Status": STATUS_CLAIMED,
+            "Claim": CLAIM_AGENT,
+            "Claimed By": agent_id,
+            "Last Heartbeat": timestamp,
+            "Run History": append_history(task.get("Run History"), f"{timestamp} {agent_id}: claimed"),
+        },
+        public_safe=public_safe,
+    )
     claim_result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=record_id, values=claim_values),
-        execute=execute_lark,
-        runner=runner,
+        execute=execute_lark, runner=runner,
     )
     commands.append(claim_result)
     if execute_lark and not claim_result.get("ok"):
         return _heartbeat_payload(
-            ok=False,
-            decision="claim_failed",
-            agent_id=agent_id,
-            commands=commands,
-            records=records,
-            selected_task=task,
+            ok=False, decision="claim_failed", agent_id=agent_id,
+            commands=commands, records=records, selected_task=task,
         )
     command = (worker_command if worker_command is not None else str(task.get("Worker Command") or "")).strip()
-    safe_command = _redact_credential_shapes(command)
-    if not command:
-        worker = {
-            "attempted": False,
-            "executed": False,
-            "ok": False,
-            "reason": "worker_command_missing",
-            "command": "",
-        }
-        final_status = STATUS_USER_GATE
-        evidence = "worker command missing; user must provide Worker Command or heartbeat --worker-command"
-        result_code = None
-    elif not execute_worker:
-        worker = {
-            "attempted": True,
-            "executed": False,
-            "ok": True,
-            "reason": "execute_worker_not_set",
-            "command": safe_command,
-        }
-        final_status = STATUS_CLAIMED
-        evidence = f"dry-run worker command: {safe_command}"
-        result_code = None
-    elif not allowed_worker_command(command, allowed_command_prefixes or []):
-        worker = {
-            "attempted": True,
-            "executed": False,
-            "ok": False,
-            "reason": "worker_command_prefix_not_allowed",
-            "command": safe_command,
-            "allowed_prefixes": allowed_command_prefixes or [],
-        }
-        final_status = STATUS_BLOCKED
-        evidence = "worker command blocked by prefix allowlist"
-        result_code = None
-    else:
-        workdir = Path(str(task.get("Workdir") or ".")).expanduser()
-        worker_args = shlex.split(command)
-        worker_result = cli_transport.run_command(
-            worker_args,
-            execute=True,
-            runner=runner,
-            cwd=workdir,
-            timeout_seconds=worker_timeout_seconds,
-        )
-        worker = {
-            "attempted": True,
-            "executed": True,
-            "ok": bool(worker_result.get("ok")),
-            "reason": "completed" if worker_result.get("ok") else "failed",
-            "command": safe_command,
-            "returncode": worker_result.get("returncode"),
-            "stdout": _credential_safe_text(worker_result.get("stdout"), limit=cli_transport.OUTPUT_LIMIT),
-            "stderr": _credential_safe_text(worker_result.get("stderr"), limit=cli_transport.OUTPUT_LIMIT),
-        }
-        final_status = STATUS_DONE if worker_result.get("ok") and complete_on_success else STATUS_REVIEW
-        if not worker_result.get("ok"):
-            final_status = STATUS_BLOCKED
-        evidence = _credential_safe_text(
-            worker.get("stdout") or worker.get("stderr") or worker.get("reason"),
-            limit=cli_transport.OUTPUT_LIMIT,
-        )
-        result_code = worker_result.get("returncode")
-    finish_values = {
-        "Status": final_status,
-        "Claim": CLAIM_AGENT,
-        "Claimed By": agent_id,
-        "Last Heartbeat": timestamp,
-        "Evidence": evidence,
-        "Last Result Code": result_code,
-        "Last Error": "" if worker.get("ok") else _credential_safe_text(worker.get("stderr") or worker.get("reason")),
-        "Run History": append_history(
-            claim_values["Run History"],
-            f"{timestamp} {agent_id}: worker {worker.get('reason')} -> {final_status}",
-        ),
-        "Handoff": _handoff_for_status(final_status, agent_id=agent_id),
-    }
-    finish_values = _sink_safe_lark_values(finish_values, public_safe=public_safe)
+    worker, final_status, evidence, result_code = _run_heartbeat_worker(
+        task, command=command, execute_worker=execute_worker,
+        complete_on_success=complete_on_success, allowed_command_prefixes=allowed_command_prefixes,
+        runner=runner, worker_timeout_seconds=worker_timeout_seconds,
+    )
+    finish_values = _sink_safe_lark_values(
+        {
+            "Status": final_status,
+            "Claim": CLAIM_AGENT,
+            "Claimed By": agent_id,
+            "Last Heartbeat": timestamp,
+            "Evidence": evidence,
+            "Last Result Code": result_code,
+            "Last Error": "" if worker.get("ok") else _credential_safe_text(worker.get("stderr") or worker.get("reason")),
+            "Run History": append_history(
+                claim_values["Run History"],
+                f"{timestamp} {agent_id}: worker {worker.get('reason')} -> {final_status}",
+            ),
+            "Handoff": _handoff_for_status(final_status, agent_id=agent_id),
+        },
+        public_safe=public_safe,
+    )
     finish_result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=record_id, values=finish_values),
-        execute=execute_lark,
-        runner=runner,
+        execute=execute_lark, runner=runner,
     )
     commands.append(finish_result)
-    ok = bool(worker.get("ok")) and (not execute_lark or finish_result.get("ok"))
+    ok = bool(worker.get("ok")) and (not execute_lark or bool(finish_result.get("ok")))
     return _heartbeat_payload(
-        ok=ok,
-        decision="task_processed",
-        agent_id=agent_id,
-        commands=commands,
-        records=records,
-        selected_task=task,
-        worker=worker,
-        final_status=final_status,
-        writeback=finish_values,
+        ok=ok, decision="task_processed", agent_id=agent_id, commands=commands, records=records,
+        selected_task=task, worker=worker, final_status=final_status, writeback=finish_values,
     )
 
 
 def _handoff_for_status(status: str, *, agent_id: str) -> str:
-    if status == STATUS_DONE:
-        return f"{agent_id} completed the task; review evidence and close any external issue/PR bookkeeping."
-    if status == STATUS_REVIEW:
-        return f"{agent_id} produced evidence; human/controller review should decide merge or next todo."
-    if status == STATUS_USER_GATE:
-        return "User input is required before this task can proceed."
-    if status == STATUS_BLOCKED:
-        return f"{agent_id} hit a blocker; inspect Last Error and decide repair/retry/reassign."
-    return f"{agent_id} claimed the task; heartbeat can continue."
+    messages = {
+        STATUS_DONE: f"{agent_id} completed the task; review evidence and close any external issue/PR bookkeeping.",
+        STATUS_REVIEW: f"{agent_id} produced evidence; human/controller review should decide merge or next todo.",
+        STATUS_USER_GATE: "User input is required before this task can proceed.",
+        STATUS_BLOCKED: f"{agent_id} hit a blocker; inspect Last Error and decide repair/retry/reassign.",
+    }
+    return messages.get(status, f"{agent_id} claimed the task; heartbeat can continue.")
 
 
 def _heartbeat_payload(

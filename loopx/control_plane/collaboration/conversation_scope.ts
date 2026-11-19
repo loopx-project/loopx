@@ -178,7 +178,7 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
     // is different and must not be manufactured by an observation adapter.
     return {kind: "unavailable", goal_ids: [], private_conversation: false};
   }
-  if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external" || input.origin === "web")) {
+  if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external" || input.origin === "web" || input.origin === "native_loopx")) {
     try {
       const selected = stewardConversationIdentity({context: input.steward_context});
       if (channel === selected.channel_id) {

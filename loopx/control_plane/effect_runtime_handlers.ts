@@ -630,6 +630,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.source.original_conversation_grants", lazyHandler(() => import("./collaboration/source_grants.ts"), ({inspectOriginalConversationGrants}) => inspectOriginalConversationGrants)],
     ["collaboration.project.session_identity", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({projectConversationIdentity}) => projectConversationIdentity)],
     ["collaboration.steward.session_identity", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({stewardConversationIdentity}) => stewardConversationIdentity)],
+    ["collaboration.steward.memory_policy", lazyHandler(() => import("./collaboration/steward_memory.ts"), ({planStewardMemoryTurn}) => planStewardMemoryTurn)],
+    ["collaboration.steward.memory_preferences", lazyHandler(() => import("./collaboration/steward_memory.ts"), ({normalizeStewardMemoryPreferences}) => (params) => ({preferences: normalizeStewardMemoryPreferences(params?.memory_preferences)}))],
     ["collaboration.steward.command", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({stewardCommand}) => stewardCommand)],
     ["collaboration.steward.authorize_creation", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({authorizeStewardCreation}) => authorizeStewardCreation)],
     ["collaboration.steward.managed_mode.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardManagedMode}) => planStewardManagedMode)],
@@ -641,6 +643,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.steward.monitor.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardMonitor}) => planStewardMonitor)],
     ["collaboration.steward.report.plan", lazyHandler(() => import("./collaboration/steward_reports.ts"), ({planStewardReport}) => planStewardReport)],
     ["collaboration.steward.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardPortfolio}) => observeStewardPortfolio)],
+    ["collaboration.steward.monitor.signal_observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardSignalMonitor}) => observeStewardSignalMonitor)],
     ["collaboration.session.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeManagedWork}) => observeManagedWork)],
     ["collaboration.conversation.binding", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({planConversationBinding}) => planConversationBinding)],
     ["collaboration.conversation.bound_context", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({resolveBoundConversation}) => resolveBoundConversation)],
@@ -849,7 +852,15 @@ export function createEffectRuntimeHandlers(
     ["explore.measurements.normalize", lazyHandler(() => import("./capabilities/explore_measurements.ts"), ({normalizeExploreMeasurementsRequest}) => normalizeExploreMeasurementsRequest)],
     ["explore.result.evolution", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({planExploreQuestionEvolution}) => planExploreQuestionEvolution)],
     ["explore.result.intent", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({produceExploreResultIntent}) => produceExploreResultIntent)],
-    ["explore.turn_context", lazyHandler(() => import("./capabilities/explore_turn_context.ts"), ({projectExploreTurnContext}) => projectExploreTurnContext)],
+    ["explore.turn_context", lazyHandler(() => import("./capabilities/explore_context_delivery.ts"),
+      ({projectEmptyExploreTurnContext}) => async params => {
+        const empty = projectEmptyExploreTurnContext(params);
+        if (empty !== undefined) return empty;
+        const {projectExploreTurnContext} = await import("./capabilities/explore_turn_context.ts");
+        const yardstick = params.graph_enabled === true && params.yardstick_enabled === true
+          ? await import("./work_items/yardstick_decision.ts") : undefined;
+        return projectExploreTurnContext(params, yardstick);
+      })],
     ["explore.research.normalize", lazyHandler(() => import("./capabilities/explore_research.ts"), ({normalizeResearchObservation}) => normalizeResearchObservation)],
     ["explore.research.validate_attribution", lazyHandler(() => import("./capabilities/explore_research.ts"), ({validateResearchAttribution}) => validateResearchAttribution)],
     ["explore.research.validate_execution", lazyHandler(() => import("./capabilities/explore_research_execution.ts"), ({validateResearchExecution}) => validateResearchExecution)],

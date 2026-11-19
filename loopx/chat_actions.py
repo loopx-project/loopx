@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Mapping, Sequence
 
 from .agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
@@ -860,6 +861,8 @@ class ChatActionService(
 
         turn_result: dict[str, Any] | None = None
         session_id = ""
+        # A caller that owns its conversation layer opens the first Session itself.
+        open_session = parameters.get("open_session") is not False
         first_turn_message = (f"/goal start --tokens {parameters['native_token_budget']} {objective}"
             if parameters.get("native_token_budget") else (
             f"开始推进 Goal {goal_id}。先核对目标边界和现有 Todo，"
@@ -869,7 +872,7 @@ class ChatActionService(
         opening_session_id = _digest({"goal_create": proposal_id, "goal_id": goal_id})[:32]
         expected_managed_agent = (creation_plan.get("creationSession") or {}).get("managedAgentId")
         turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
-        if not progress.get("firstTurn") and not progress.get("sessionId") and turn_store is not None:
+        if open_session and not progress.get("firstTurn") and not progress.get("sessionId") and turn_store is not None:
             require_regular_session_paths(turn_store, opening_session_id)
             original = turn_store.load_session(opening_session_id)
             if original is not None:
@@ -884,7 +887,9 @@ class ChatActionService(
             if original is not None:
                 read_original_session(session_id=original["session_id"])
                 progress = {**progress, "sessionId": original["session_id"]}
-        if progress.get("firstTurn"):
+        if not open_session:
+            pass
+        elif progress.get("firstTurn"):
             session_id = progress["firstTurn"]["sessionId"]
             turn_id = progress["firstTurn"]["turnId"]
             turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
@@ -917,7 +922,7 @@ class ChatActionService(
                         "outcome": "first_turn_started", "session_id": session_id, "turn_id": turn["turn_id"],
                     })
         first_turn_gate: dict[str, Any] | None = None
-        if agent_id and self.runtime_controller is not None and turn_result is None:
+        if open_session and agent_id and self.runtime_controller is not None and turn_result is None:
             try:
                 from .status import collect_status
 
@@ -960,7 +965,7 @@ class ChatActionService(
                     )[:600],
                     "quota_state": str(guard.get("state") or "waiting"),
                 }
-        if agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
+        if open_session and agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
             if progress.get("sessionId"):
                 session = read_original_session(session_id=progress["sessionId"])
             else:
@@ -1054,6 +1059,7 @@ class ChatActionService(
                 step="heartbeat_gate_ready",
                 receipt={"outcome": "heartbeat_gate_ready", "gate": child_gate},
             )
+        managed_agent_id = (creation_plan.get("creationSession") or {}).get("managedAgentId")
         receipt = {
             "receipt_id": _digest({"proposal_id": proposal_id, "goal_id": goal_id})[
                 :32
@@ -1083,6 +1089,10 @@ class ChatActionService(
                     "goal_instance_id": session.get("goal_instance_id")}
                    if session_id and session.get("managed_agent_id") is not None else {}),
                 **({"turn_id": turn_result["turn_id"]} if turn_result else {}),
+                # Without an opened Session the caller still needs the managed Agent's address.
+                **({"managed_agent_id": managed_agent_id, "channel_id": f"agent.{managed_agent_id}",
+                    "goal_instance_id": projected.get("goal_instance_id")}
+                   if not session_id and not open_session and managed_agent_id else {}),
             },
             **({"child_gate": child_gate} if child_gate else {}),
             "step_receipts": (
@@ -1220,6 +1230,7 @@ class ChatActionService(
             text=_monitor_text(parameters) or str(parameters["target"]),
             task_class="continuous_monitor",
             action_kind="observe",
+            task_repository=parameters.get("task_repository"),
             claimed_by=agent_id,
             agent_id=agent_id,
             resume_when=resume_when,
@@ -1389,6 +1400,11 @@ class ChatActionService(
             evidence = ["The existing typed acceptance owner validated this plan without changing configuration or executing commands."]
             permission = "local_command_execution"
         elif action_kind == "operation.execute":
+            if (
+                context.get("kind") != "goal"
+                or context.get("goal_id") != normalized["goal_id"]
+            ):
+                raise ValueError("operation proposal context must match its Goal")
             fingerprint = _digest(normalized)
             evidence = [
                 "The provider-neutral operation envelope and immutable digests validated.",
@@ -1499,6 +1515,13 @@ class ChatActionService(
                 else self._goal_state_fingerprint(normalized["goal_id"]))
             evidence = ["Canonical LoopX User completion dry-run validated this decision."]
             permission = "durable_write"
+        elif action_kind == "pr.merge":
+            from .capabilities.native_chat.steward_pr_merge import pr_merge_preview
+
+            normalized, evidence, fingerprint = pr_merge_preview(
+                normalized, digest_fn=_digest, runner=subprocess.run
+            )
+            permission = "protected"
         elif action_kind == "agent.bind":
             binding = read_goal_agent_binding_with_source_route(
                 registry_path=self.registry_path,
@@ -1638,9 +1661,19 @@ class ChatActionService(
                 raise ProtectedActionGate(str(proposal["action_kind"]), gate={"kind": "authenticated_steward_confirmation_required",
                     "summary": "Confirm this proposal from its original owner private conversation.",
                     "next_action": "Use the exact /confirm command in the originating Bot before it expires."})
+            from .capabilities.native_chat.steward_pr_merge import steward_pr_merge_extra_auth
             from .control_plane.effect_runtime import effect_runtime_result
+            runtime_root = resolve_runtime_root(
+                self._registry(), self.runtime_root_override, registry_path=self.registry_path
+            ).resolve()
             effect_runtime_result("collaboration.steward.authorize_creation", {
-                "context": steward_context, "proposal": proposal, "now": steward_confirmed_at or now_utc().isoformat()})
+                "context": steward_context,
+                "proposal": proposal,
+                "now": steward_confirmed_at or now_utc().isoformat(),
+                **steward_pr_merge_extra_auth(
+                    self.registry_path, runtime_root, steward_context, proposal
+                ),
+            })
         if proposal.get("action_kind") == "operation.execute":
             raise ProtectedActionGate(
                 "operation.execute",
@@ -1689,6 +1722,12 @@ class ChatActionService(
             return self._apply_todo_update(proposal_id, proposal, parameters)
         if action_kind == "monitor.update":
             return self._apply_monitor_update(proposal_id, proposal, parameters)
+        if action_kind == "pr.merge":
+            from .capabilities.native_chat.steward_pr_merge import apply_pr_merge
+            return apply_pr_merge(
+                self, proposal_id, proposal, parameters,
+                digest_fn=_digest, gate_cls=ProtectedActionGate, runner=subprocess.run,
+            )
         if action_kind == "gate.resolve":
             raise ProtectedActionGate(
                 action_kind,

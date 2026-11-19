@@ -12,7 +12,7 @@ $loopx 任务
   → Dashboard 展示进度、等待和完成状态
 ```
 
-这不是让一个模型会话无限运行。每次 Heartbeat 都先读取当前 LoopX
+每次 Heartbeat 都先读取当前 LoopX
 状态；只有配额、Todo、能力和 Gate 都允许时，Codex Agent 才会执行一个
 有边界的工作片段。
 
@@ -28,7 +28,7 @@ $loopx 任务
 
 ## 开始前
 
-适用范围是 **Codex App**，不是 Codex CLI、Codex App over SSH 或其他宿主。
+适用范围是 **Codex App**。
 这些宿主的循环驱动不同；本路径依赖 Codex App 提供的
 `automation_update`。
 
@@ -93,8 +93,7 @@ $loopx --fine-grained 在当前试验仓库中完成一份 LoopX 自动续跑体
 - 此时 **不应** 有自动化已启动或业务文件已修改的结论。
 
 `$loopx` 是 Codex 中的显式 LoopX skill 入口。只运行
-`loopx start-goal --guided` 同样会得到启动方案，但它本身只是引导预览，
-不等于 Heartbeat 已安装。
+`loopx start-goal --guided` 同样会得到启动方案，但它本身只是引导预览。
 
 ## 第 3 步：确认受控启动并安装 Heartbeat
 
@@ -116,8 +115,7 @@ Heartbeat 后，回读 Goal、Agent、自动化绑定和 quota should-run，不�
 4. Codex App 用 `automation_update` 保存其中的
    `LoopX managed heartbeat bootstrap v2` `task_body`；
 5. 新 Heartbeat 建议从 3 分钟开始，并回读其 Goal、Agent、任务绑定和调度；
-6. 后续唤醒加载当前 thin contract，而不是把一份旧的 thin、compact 或 full
-   执行正文永久保存为自动化提示词。
+6. 后续唤醒加载当前 thin contract。
 
 这一步才是“启动 Codex Agent 自动续跑”的边界。若会话没有
 `automation_update`，正确结果是一个可粘贴的宿主激活 Gate；不要手改数据库、
@@ -148,7 +146,7 @@ loopx quota should-run \
 - `quota should-run` 返回当前机器契约，包括 `should_run`、`waiting_on`、
   下一条工作通道和 `scheduler_hint`；
 - `should_run=true` 表示下一次 Heartbeat 可以尝试有边界的工作；
-- `should_run=false` 不代表故障。先依据 `waiting_on`、Gate、缺失能力或配额
+先依据 `waiting_on`、Gate、缺失能力或配额
   原因处理，不要为了制造活动而绕过限制。
 
 这两个命令用于观察。真正的自动 Turn 由已安装的 Codex App Heartbeat 进入，
@@ -171,8 +169,7 @@ loopx dashboard --global-registry --goal-id "$GOAL_ID"
 - Tasks 展示“待确认”“待执行 / 进行中”“定时与持续”和“已完成”四类工作；
 - Goal 详情和 Run 抽屉展示公开安全的状态、进度、证据、产出和下一步。
 
-Dashboard 读取 LoopX 状态并轮询刷新。它不是 Heartbeat 的执行器：关闭浏览器
-不会停止已安装的 Codex App 自动化，打开浏览器也不会额外触发一次工作。
+Dashboard 读取 LoopX 状态并轮询刷新。
 
 ## 第 6 步：观察首次自动唤醒
 

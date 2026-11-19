@@ -89,6 +89,7 @@ def test_native_retry_requires_fresh_admission_and_is_bounded_per_input(
         if response:
             assert "heartbeat-prompt --thin" in response["reason"]
             assert "--agent-id worker" in response["reason"]
+            assert "schedule(DurationSeconds>=180" in response["reason"]
         clock[0] += 61
     assert (
         runtime.stop_hook(args, event(lastUserInput="A new authorized request"))[

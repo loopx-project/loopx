@@ -34,8 +34,7 @@ todo per change request.
 Resolve requirement shorthand, dates and aliases from the owner's accepted
 request and relevant Goal requirements, current Todos and recent deliveries.
 Then reconcile with the current implementation and source-control evidence.
-A title search is a discovery lead, not the requirement definition; an old
-Goal record is not proof that a PR remains open or its blocker still applies.
+A title search is a discovery lead, not the requirement definition.
 If multiple plausible requirement sources would change the ranking, state the
 uncertainty and ask only for that unresolved choice while assessing known work.
 
@@ -81,8 +80,7 @@ Acquire a compact complete inventory first: identity, title, head/base revision,
 lifecycle, requirement/dependency references and check/review summaries. Read
 the bodies, relevant reviews, changed-file evidence and failure details of
 candidates that could affect the decision. Do not fetch every full comment,
-check log or trajectory in the inventory call. A short row is not evidence that
-the underlying implementation was reviewed.
+check log or trajectory in the inventory call.
 
 Retain each response once with its exact revision, query scope, observation time
 and completeness; select further details from that capture instead of querying
@@ -91,7 +89,7 @@ budget. Preserve running-command handles and collect their completion rather
 than repeating the command. If output is truncated, recover the original
 capture or read the missing bounded section before relying on it. Refresh a
 candidate when its head or relevant external state changes, and recheck current
-authority before effects; retained evidence is not a durable authorization cache.
+authority before effects.
 
 ## Reconcile Material Changes
 
@@ -131,7 +129,7 @@ baseline/infrastructure failure, cancellation and a still-running check.
 Reuse a matching existing issue or work item; recommend a new one only for a
 remaining gap with a concrete owner, reproduction and acceptance condition.
 Link shared blockers to all affected candidates instead of creating a duplicate
-per PR. Creating a tracker neither repairs CI nor proves checks will pass.
+per PR.
 An assessment may propose follow-through, but performs writes only under the
 owner's existing authorization for that operation.
 

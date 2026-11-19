@@ -143,7 +143,12 @@ export function planMonitorSuccessor(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("monitor successor plan requires a stable todo_id and result_hash");
   }
   const sourceRepository = text(request.source_task_repository, "source_task_repository");
-  if (intent.next_agent_todo && sourceRepository && !intent.next_task_repository) {
+  if (
+    intent.next_agent_todo &&
+    sourceRepository &&
+    !intent.next_task_repository &&
+    intent.next_continuation_policy !== "same_agent_non_delivery"
+  ) {
     throw new EffectRuntimeRequestError("repository-bound monitor successors require explicit --next-task-repository so same-repository and cross-repository routing cannot be confused");
   }
   return {schema_version: MONITOR_SUCCESSOR_RESULT_SCHEMA, intent,
