@@ -117,7 +117,9 @@ redirected paths and a non-worktree root fail closed. Verified machine discovery
 currently supports macOS, Linux and Windows; other hosts retain ordinary
 leases. No workspace path or machine identifier is stored directly: only
 opaque digests and the existing public repository identity enter the private
-authority record.
+authority record. Worktree probes read the checkout named by the caller from
+disk. Parent Git commands, including hooks, cannot redirect these probes
+through inherited repository paths or temporary Git configuration.
 
 Renewal preserves this identity. Acquire retries must use the same worktree,
 scopes and execution key. For an active worktree-bound managed claim, the
@@ -179,7 +181,8 @@ checkout 或无法验证时返回 `lease_workspace_divergence`。有权限读取
 调用者可以在其他目录用 `todo receipt` 查询历史认领。换工作区时，按读回版本释放后，
 在新 checkout 用新 operation ID 认领。
 如需恢复普通独占，按读回版本释放自己的 lease，再用新的执行 key、不带
-`--write-worktree` 重新取得；无需修改其他角色的 lease。
+`--write-worktree` 重新取得；无需修改其他角色的 lease。工作区探测读取调用者
+指定目录的实际 Git 信息，父 Git 命令（包括 hook）的仓库路径和临时配置不会改变探测目标。
 
 ## Operate the current lease
 

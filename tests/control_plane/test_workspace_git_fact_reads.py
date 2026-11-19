@@ -66,6 +66,23 @@ def test_capture_resolves_nested_root_once_but_reads_all_original_facts(workspac
     assert owner.capture_delivery_workspace(canonical)["workspace_kind"] == "canonical_checkout"
 
 
+def test_delivery_snapshot_uses_requested_checkout_inside_git_hook(workspaces, monkeypatch):
+    canonical, peer, nested = workspaces
+    git(peer, "commit", "-q", "--allow-empty", "-m", "Peer delivery")
+    expected = owner.capture_delivery_workspace(nested)
+    assert expected["workspace_kind"] == "independent_git_worktree"
+    assert expected["workspace_revision_digest"] != owner.capture_delivery_workspace(canonical)["workspace_revision_digest"]
+
+    monkeypatch.setenv("GIT_DIR", str(canonical / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(canonical))
+    monkeypatch.setenv("GIT_COMMON_DIR", str(canonical / ".git"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "remote.origin.url")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/example/parent.git")
+
+    assert owner.capture_delivery_workspace(nested) == expected
+
+
 def test_single_agent_guidance_does_not_impose_multi_peer_workspace_gate(workspaces):
     canonical, peer, _ = workspaces
     todo = {"task_repository": "git:github.com/example/workspace", "required_write_scopes": ["src/**"]}

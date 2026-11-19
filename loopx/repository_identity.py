@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -52,6 +53,17 @@ def normalize_repository_identity(remote_url_or_identity: str) -> str:
     return f"git:{host}/{path}"
 
 
+def workspace_git_environment() -> dict[str, str]:
+    """Keep a parent Git command's checkout and config out of path-based probes."""
+    env = dict(os.environ)
+    for name in (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+        "GIT_IMPLICIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+    ):
+        env.pop(name, None)
+    return env
+
+
 def _origin_remote(project: Path, git_bin: str) -> str:
     try:
         completed = subprocess.run(
@@ -60,6 +72,7 @@ def _origin_remote(project: Path, git_bin: str) -> str:
             check=False,
             text=True, encoding="utf-8", errors="replace",
             timeout=10,
+            env=workspace_git_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError("project origin remote could not be read") from exc

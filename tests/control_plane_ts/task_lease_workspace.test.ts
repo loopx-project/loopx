@@ -48,6 +48,27 @@ test("observed Git origins use the Todo repository identity contract", {
       assert.equal(decision.outcome, "apply");
     });
   }
+  await t.test("observe the requested checkout in a parent Git environment", async t => {
+    git("-C", main, "config", "remote.origin.url", "https://github.com/example/project.git");
+    const expected = await observeLeaseWorktree(worktree, overlaps);
+    const parentEnvironment = {
+      GIT_DIR: join(main, ".git"),
+      GIT_WORK_TREE: main,
+      GIT_COMMON_DIR: join(main, ".git"),
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "remote.origin.url",
+      GIT_CONFIG_VALUE_0: "https://github.com/example/parent.git",
+    };
+    const previous = Object.keys(parentEnvironment).map(key => [key, process.env[key]] as const);
+    t.after(() => {
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+    Object.assign(process.env, parentEnvironment);
+    assert.deepEqual(await observeLeaseWorktree(worktree, overlaps), expected);
+  });
   for (const origin of [
     "https://fixture:fixture@github.com/example/project.git",
     "https://github.com/example/../project.git",

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .repository_identity import workspace_git_environment
+
 # Keep the historical exports and caller patch points, but select the OS
 # transport only when used. Decisions and deadlines remain with the caller.
 _PROCESS_RUNTIME_EXPORTS = ("terminate_process_tree",)
@@ -73,14 +75,6 @@ class GitRevisionRelation(str, Enum):
     UNKNOWN = "unknown"
 
 
-def _source_git_environment() -> dict[str, str]:
-    env = dict(os.environ)
-    # A caller (for example a Git hook) may target an unrelated checkout.
-    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
-        env.pop(key, None)
-    return env
-
-
 def _retire_owned_probe(process: subprocess.Popen[str]) -> None:
     """Stop the query's own process group, then drop its pipes unread.
 
@@ -130,7 +124,7 @@ def _run_git(
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=_source_git_environment(),
+            env=workspace_git_environment(),
             start_new_session=os.name == "posix",
         )
     except OSError:

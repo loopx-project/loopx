@@ -24,6 +24,11 @@ export const LEASE_WORKSPACE_DIVERGENCE = {
 };
 
 const run = promisify(execFile);
+// Git hooks can carry path and temporary config overrides for their parent checkout.
+const WORKSPACE_GIT_OVERRIDES = new Set([
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+  "GIT_IMPLICIT_WORK_TREE", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+]);
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 /** Only these locally authored, path-free diagnostics may cross the CLI boundary. */
@@ -149,8 +154,11 @@ async function requireLocalWorktreeScopes(root: string, overlaps: (path: string)
 export async function observeLeaseWorktree(path: string, overlaps?: (path: string) => boolean): Promise<LeaseWorkspace> {
   if (!isAbsolute(path)) throw new LeaseWorktreeObservationError("worktree observation requires an absolute caller path");
   const cwd = await realpath(path);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+    !WORKSPACE_GIT_OVERRIDES.has(name.toUpperCase())));
+  env.GIT_OPTIONAL_LOCKS = "0";
   const git = async (...args: string[]) => (await run("git", ["-C", cwd, ...args],
-    {timeout: 5000, maxBuffer: 4 * 1024 * 1024, env: {...process.env, GIT_OPTIONAL_LOCKS: "0"}})).stdout.trim();
+    {timeout: 5000, maxBuffer: 4 * 1024 * 1024, env})).stdout.trim();
   const root = await realpath(await git("rev-parse", "--show-toplevel"));
   const directory = await realpath(await git("rev-parse", "--absolute-git-dir"));
   const common = await realpath(resolve(cwd, await git("rev-parse", "--git-common-dir")));

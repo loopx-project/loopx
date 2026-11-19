@@ -228,7 +228,10 @@ def test_matching_active_lease_preserves_delivery(tmp_path, monkeypatch, provide
 
 @pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="independent worktree fixture requires POSIX Git")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_active_managed_claim_stays_with_its_original_worktree(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("inherit_git_context", [False, True], ids=["clean_git", "inherited_git"])
+def test_active_managed_claim_stays_with_its_original_worktree(
+    tmp_path, monkeypatch, provider, inherit_git_context,
+):
     project = tmp_path / "repo"
     project.mkdir()
 
@@ -244,6 +247,16 @@ def test_active_managed_claim_stays_with_its_original_worktree(tmp_path, monkeyp
     git("worktree", "add", "-b", "sibling", str(sibling))
     child = original / "nested"
     child.mkdir()
+    if inherit_git_context:
+        # A Git hook can launch LoopX in a different checkout while retaining
+        # the parent command's repository selection.
+        git_directory = subprocess.check_output(
+            ["git", "-C", str(sibling), "rev-parse", "--absolute-git-dir"], text=True,
+        ).strip()
+        monkeypatch.setenv("GIT_DIR", git_directory)
+        monkeypatch.setenv("GIT_WORK_TREE", str(sibling))
+        monkeypatch.setenv("GIT_COMMON_DIR", str(project / ".git"))
+
     todo = {**_todo(), "task_domain": "code", "task_repository": "git:github.com/example/project",
             "required_write_scopes": ["src/**"]}
     prepared = _run(tmp_path, monkeypatch, provider, [], todos=[todo], write_scopes=["src/**"], workspace=child)
