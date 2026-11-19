@@ -861,6 +861,53 @@ class ChatActionNormalizationMixin:
                     "monitor edit requires target, target_key, cadence, or stop_condition"
                 )
             return result
+        if action_kind == "pr.merge":
+            values = self._allowed_parameters(
+                parameters,
+                allowed={
+                    "repository",
+                    "pr_number",
+                    "merge_method",
+                    "admin_bypass",
+                    "head_oid",
+                    "base_ref",
+                    "pr_url",
+                    "approval_review",
+                    "bypassed_gates",
+                },
+            )
+            repository = str(values.get("repository") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+                raise ValueError("pr.merge repository must be <owner>/<repo>")
+            raw_num = values.get("pr_number")
+            if isinstance(raw_num, bool) or not isinstance(raw_num, int) or raw_num < 1:
+                raise ValueError("pr.merge pr_number must be a positive integer")
+            method = str(values.get("merge_method") or "squash").strip().lower()
+            if method not in {"squash", "merge", "rebase"}:
+                raise ValueError("pr.merge merge_method must be squash, merge, or rebase")
+            admin_bypass = values.get("admin_bypass", False)
+            if not isinstance(admin_bypass, bool):
+                raise ValueError("pr.merge admin_bypass must be true or false")
+            result: dict[str, Any] = {
+                "repository": repository,
+                "pr_number": raw_num,
+                "merge_method": method,
+                "admin_bypass": admin_bypass,
+            }
+            for optional_text, limit in (("head_oid", 80), ("base_ref", 160), ("pr_url", 300)):
+                if values.get(optional_text) is not None:
+                    result[optional_text] = _text(values[optional_text], field=optional_text, limit=limit)
+            if values.get("approval_review") is not None:
+                if not isinstance(values["approval_review"], Mapping):
+                    raise ValueError("pr.merge approval_review must be an object")
+                result["approval_review"] = dict(values["approval_review"])
+            if values.get("bypassed_gates") is not None:
+                if not isinstance(values["bypassed_gates"], list) or not all(
+                    isinstance(item, str) for item in values["bypassed_gates"]
+                ):
+                    raise ValueError("pr.merge bypassed_gates must be a list of gate labels")
+                result["bypassed_gates"] = [item.strip() for item in values["bypassed_gates"] if item.strip()]
+            return result
         if action_kind == "gate.resolve":
             values = self._allowed_parameters(
                 parameters,

@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ...chat_actions import goal_workspace_ref
+from ...chat_actions import ProtectedActionGate, goal_workspace_ref
 from ...chat_ingress import STEWARD_BINDING_ADOPTION_PENDING, ensure_external_admission_scope, resolve_external_admission_source
 from ...chat_store import _atomic_write_json, _read_json, RESUMABLE_SESSION_STATES
 from ...chat_attachments import normalize_chat_image_attachments
@@ -25,7 +25,7 @@ from ...control_plane.quota.automation_cadence_readback import (
     unavailable_automation_cadence_readback,
 )
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
-from . import result_review_evidence
+from . import result_review_evidence, steward_pr_merge
 from .codex_context import checked_session_home
 from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, recovery_journal_fields, source_control_fields
 
@@ -1859,17 +1859,18 @@ class ChatExternalConversations:
         return facts
 
     def todo_confirmation_reply(self, request_ref: str, response: dict[str, Any]) -> str:
-        """Project the completed reply and optional Todo preview through Core.
+        """Project the completed reply and optional Todo or PR-merge preview through Core.
 
         The original request journal freezes expiry and idempotency before IO.
         This creates an action preview only; the authenticated /confirm worker
-        remains the sole route to the canonical Todo writer.
+        remains the sole route to canonical writes and protected actions.
         """
         message = str(response.get("message") or "")
         if not message.strip():
             message = self.native_result_reply(request_ref) or ""
         proposals = [p for p in response.get("proposals") or [] if p.get("kind") == "todo"]
-        if not proposals:
+        protected = steward_pr_merge.merge_protected_action(response)
+        if not proposals and protected is None:
             return message
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="offer_external_todo_confirmation"):
@@ -1878,7 +1879,7 @@ class ChatExternalConversations:
             if selected["binding"]["context_kind"] != "steward":
                 return message
             if self.actions is None:
-                return message + "\n\n待办尚未写入：当前宿主的确认入口不可用。"
+                return message + ("\n\n受保护操作尚未执行：当前宿主的确认入口不可用。" if protected and not proposals else "\n\n待办尚未写入：当前宿主的确认入口不可用。")
             if row.get("todo_confirmation_reply") is not None:
                 return str(row["todo_confirmation_reply"])
             context = selected["context"]
@@ -1912,6 +1913,10 @@ class ChatExternalConversations:
                 lines.append(f"目标：{title}\n待记录：{todo['text']}\n尚未写入，也未启动执行。"
                     f"请在本私聊于预览生成后 15 分钟内发送 /confirm {proposal['proposal_id']}；"
                     f"取消：/cancel {proposal['proposal_id']}。")
+            if protected is not None:
+                lines.append(steward_pr_merge.preview_reply_block(
+                    self, request_ref=request_ref, context=context, audience=audience,
+                    created=created, expiry=expiry, protected=protected))
             row["todo_confirmation_reply"] = "\n\n".join(lines)
             _atomic_write_json(path, row)
             return row["todo_confirmation_reply"]
@@ -1965,6 +1970,11 @@ class ChatExternalConversations:
                     proposal = self.actions.load(argument)
                     if proposal is None:
                         raise ValueError("the exact commission preview is unavailable")
+                    if proposal.get("action_kind") == "pr.merge":
+                        steward_pr_merge.run_steward_pr_merge_command(
+                            self, path=path, row=row, context=context, proposal=proposal,
+                            write_json=_atomic_write_json, gate_cls=ProtectedActionGate)
+                        return
                     from ...control_plane.effect_runtime import effect_runtime_result
                     effect_runtime_result("collaboration.steward.authorize_creation", {
                         "context": context, "proposal": proposal, "now": row["created_at"],
