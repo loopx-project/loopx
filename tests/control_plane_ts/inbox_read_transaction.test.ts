@@ -287,6 +287,11 @@ for (const profile of ["legacy", "exact"] as const) {
     const original = sourceBytes(replies);
     const pending = (await f.call("pending")).result as JsonObject;
     assert.deepEqual((pending.items as JsonObject[])[0].remaining_work, remaining_work);
+    const attention = (await f.call("receiver_read", {attention_only: true})).result as JsonObject;
+    assert.deepEqual(attention.items, []);
+    assert.equal(attention.has_more, false);
+    assert.equal((attention.open_request_summaries as JsonObject[])[0].request_id, row.request_id);
+    assert.equal(readdirSync(f.base).includes("reads"), false);
     const agenda = (await f.call("turn_context")).unfinished_delegations as JsonObject;
     assert.equal(agenda.incoming_count, 1);
     assert.equal((agenda.items as JsonObject[])[0].step, "review_request_work");
@@ -296,7 +301,7 @@ for (const profile of ["legacy", "exact"] as const) {
     const corrupt = JSON.parse(bytes);
     corrupt.previous_result_key = "conclusion";
     writeFileSync(damaged, JSON.stringify(corrupt));
-    const failed = (await f.call("pending")).result as JsonObject;
+    const failed = (await f.call("pending", {attention_only: true})).result as JsonObject;
     assert.equal((failed.items as JsonObject[])[0].inbox_state, "receipt_unavailable");
     const unavailable = (await f.call("turn_context")).unfinished_delegations as JsonObject;
     assert.equal((unavailable.items as JsonObject[])[0].step, "recover_evidence");
@@ -309,5 +314,105 @@ for (const profile of ["legacy", "exact"] as const) {
     assert.equal((queued.items as JsonObject[])[0].step, "await_return_delivery");
     writeFileSync(join(replies, key(4) + ".delivery.json"), JSON.stringify({status: "delivered"}));
     assert.deepEqual(((await f.call("turn_context")).unfinished_delegations as JsonObject).items, []);
+    for (let n = 2; n <= 22; n++) f.publish(n);
+    const first = (await f.call("pending", {attention_only: true})).result as JsonObject;
+    assert.equal(first.has_more, true);
+    await assert.rejects(f.call("pending", {cursor: first.next_cursor}), /pending request cursor scope mismatch/);
+    const last = (await f.call("pending", {attention_only: true, cursor: first.next_cursor})).result as JsonObject;
+    assert.equal(last.has_more, false);
+    assert.equal((last.items as JsonObject[])[0].request_id, f.row(22).request_id);
   });
 }
+
+test("attention pagination retains a delivered remainder outside the compact agenda", async t => {
+  const f = fixture(t);
+  for (let n = 1; n <= 20; n++) f.publish(n);
+  const row = f.publish(21);
+  const identity = {goal_id: row.goal_id, goal_ref: ref, agent_id: row.agent_id,
+    request_id: row.request_id, source_id: row.source_id};
+  const replies = join(f.base, "replies", row.request_id);
+  for (const folder of [replies, join(f.base, "decisions"), join(f.base, "roundtrips")]) mkdirSync(folder, {recursive: true});
+  writeFileSync(join(f.base, "decisions", row.request_id + ".json"), JSON.stringify({...identity, decision: "adopt"}));
+  writeFileSync(join(f.base, "roundtrips", row.request_id + ".json"), JSON.stringify(identity));
+  const remaining_work = {summary: "Validate the package", resume_when: "The build is ready"};
+  writeFileSync(join(replies, "conclusion.json"), JSON.stringify({...identity, phase: "conclusion",
+    decision: "adopt", text: "Source verification passed.", remaining_work}));
+  writeFileSync(join(replies, "conclusion.delivery.json"), JSON.stringify({status: "delivered"}));
+
+  const first = await f.call("receiver_read", {attention_only: true});
+  const firstPage = first.result as JsonObject, context = first.context as JsonObject;
+  assert.equal((firstPage.items as JsonObject[]).length, 20);
+  assert.equal(((context.unfinished_delegations as JsonObject).items as JsonObject[])
+    .some(item => item.request_id === row.request_id), false);
+  assert.deepEqual(firstPage.open_request_summaries, []);
+  assert.equal(firstPage.has_more, true);
+
+  const last = (await f.call("receiver_read", {attention_only: true, cursor: firstPage.next_cursor})).result as JsonObject;
+  assert.deepEqual(last.items, []);
+  assert.equal(last.has_more, false);
+  assert.equal(last.next_cursor, null);
+  const [summary] = last.open_request_summaries as JsonObject[];
+  assert.equal(summary.request_id, row.request_id);
+  assert.equal(summary.request_revision, 1);
+  assert.equal(summary.step, "review_request_work");
+  assert.deepEqual(summary.remaining_work, remaining_work);
+  assert.equal(JSON.stringify(summary).includes("PRIVATE_LONG_SOURCE"), false);
+  assert.equal(readdirSync(join(f.base, "reads")).includes(row.request_id + ".json"), false);
+  const exact = (await f.call("receiver_read", {request_id: row.request_id})).result as JsonObject;
+  assert.equal((exact.items as JsonObject[])[0].message, row.message);
+});
+
+test("the attention cursor reaches all open sent requests without redelivering a peer result", async t => {
+  const f = fixture(t), operations = join(f.base, "peer-operations", targets.exact);
+  const receiver = join(f.base, "entries", "5ab0deb53efce4b1d0cf830afb67ce662e0e9aff3127e2424a4ce768212b5586");
+  for (const folder of [operations, receiver, join(f.base, "decisions"), join(f.base, "roundtrips")]) {
+    mkdirSync(folder, {recursive: true});
+  }
+  for (let n = 1; n <= 20; n++) f.publish(n);
+  const sent = Array.from({length: 22}, (_, n) => f.row(101 + n, {
+    agent_id: "reviewer", source_kind: "peer", source_agent_id: "worker",
+    brief: {schema_version: "collaboration_brief_v0", purpose: "Independent review",
+      context: "PRIVATE_LONG_SOURCE", constraints: [], inputs: [], acceptance: ["Return findings"], return_requirement: "Reply"},
+  }));
+  for (const row of sent) {
+    writeFileSync(join(receiver, row.request_id + ".json"), JSON.stringify(row));
+    writeFileSync(join(operations, row.request_id + ".json"), JSON.stringify(row));
+  }
+  const {request_id, goal_id, agent_id, source_id} = sent[0];
+  const identity = {request_id, goal_id, agent_id, source_id, goal_ref: ref};
+  writeFileSync(join(f.base, "roundtrips", request_id + ".json"), JSON.stringify(identity));
+  writeFileSync(join(f.base, "decisions", request_id + ".json"), JSON.stringify({...identity, decision: "adopt"}));
+  const replies = join(f.base, "replies", request_id);
+  mkdirSync(replies, {recursive: true});
+  writeFileSync(join(replies, "conclusion.json"), JSON.stringify({...identity, phase: "conclusion",
+    decision: "adopt", text: "Checked result", created_at: "2026-10-19T00:00:00Z"}));
+
+  const open = (await f.call("receiver_read", {attention_only: true, turn_instance_id: "turn-original"})).result as JsonObject;
+  assert.equal((open.items as JsonObject[]).length, 20);
+  assert.deepEqual(open.open_request_summaries, []);
+  assert.ok(open.peer_returns);
+  const originalReceipt = sourceBytes(replies);
+  await assert.rejects(f.call("pending", {cursor: open.next_cursor}), /pending request cursor scope mismatch/);
+  await assert.rejects(f.call("pending", {attention_only: true, cursor: open.next_cursor, agent_id: "other"}),
+    /pending request cursor scope mismatch/);
+
+  const next = await f.call("receiver_read", {attention_only: true, cursor: open.next_cursor, turn_instance_id: "turn-other"});
+  assert.equal(next.outgoing_continuation, true);
+  const second = next.result as JsonObject;
+  assert.equal(second.unavailable_count, 0);
+  assert.equal((second.open_request_summaries as JsonObject[]).length, 20);
+  assert.equal((second.open_request_summaries as JsonObject[])[0].step, "consume_peer_result");
+  assert.deepEqual(second.items, []);
+  assert.equal(second.peer_returns, undefined);
+  writeFileSync(join(operations, "f".repeat(64) + ".json"), "{malformed");
+  const last = (await f.call("receiver_read", {attention_only: true, cursor: second.next_cursor})).result as JsonObject;
+  assert.equal(last.has_more, false);
+  assert.equal(last.next_cursor, null);
+  assert.equal(last.unavailable_count, 1);
+  assert.equal(last.peer_returns, undefined);
+  const summaries = [...second.open_request_summaries as JsonObject[], ...last.open_request_summaries as JsonObject[]];
+  assert.deepEqual(summaries.map(row => row.request_id), sent.map(row => row.request_id));
+  assert.ok(summaries.every(row => row.direction === "outgoing" && row.request_revision === 1));
+  assert.doesNotMatch(JSON.stringify(summaries), /PRIVATE_LONG_SOURCE|Checked result/);
+  assert.deepEqual(sourceBytes(replies), originalReceipt);
+});
