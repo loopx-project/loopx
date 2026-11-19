@@ -784,3 +784,291 @@ def test_handoff_query_batched_source_session_validates_per_row_goal_ref(tmp_pat
     assert scope_calls == ["delivery"]
     assert {row["request_id"] for row in result["rows"]} == set(valid_ids)
     assert result["coverage"]["unreadable"] == 2
+
+
+def _write_source_registry(registry_path, goals, *, runtime_root=None):
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
+    payload = {
+        "profile_id": "source_session_v1",
+        **({"common_runtime_root": str(runtime_root)} if runtime_root is not None else {}),
+        "goals": [
+            {
+                "id": gid,
+                "repo": str(registry_path.parent),
+                "activation": {"schema_version": "loopx_goal_activation_v1", "state": "active"},
+                "goal_instance_id": inst_id,
+                "coordination": {"registered_agents": ["worker"]},
+            }
+            for gid, inst_id in goals
+        ],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+    }
+    with source_session_registry_transaction(
+        registry_path, operation="test_create_tracking_registry", create=lambda: payload
+    ) as tx:
+        tx.commit(tx.payload_copy())
+
+
+def _write_tracking_entry(
+    root,
+    *,
+    gid,
+    inst_id,
+    idx,
+    channel="manager",
+    delivered_at=None,
+    include_goal_ref=True,
+    dir_key=None,
+):
+    rid = f"{idx:064x}"
+    goal_ref = {"goal_id": gid, "goal_instance_id": inst_id}
+    target = (
+        {"goal_ref": goal_ref, "agent_id": "worker"}
+        if include_goal_ref
+        else {"goal_id": gid, "agent_id": "worker"}
+    )
+    row = {
+        "schema_version": "loopx_manager_context_entry_v2" if include_goal_ref else "loopx_manager_context_entry_v1",
+        "request_id": rid,
+        "goal_id": gid,
+        "agent_id": "worker",
+        **({"goal_ref": goal_ref} if include_goal_ref else {}),
+        "source_id": f"web:{gid}:{idx}",
+        "message": f"Tracking request {idx}",
+        "instruction": "Tracking instruction",
+        "delivered_at": delivered_at or f"2026-11-19T{(idx // 3600) % 24:02d}:{(idx // 60) % 60:02d}:{idx % 60:02d}+00:00",
+        **({"source_channel": channel} if channel is not None else {}),
+    }
+    folder = _root(root) / "entries" / (dir_key or _hash(target))
+    folder.mkdir(parents=True, exist_ok=True)
+    _write(folder / f"{rid}.json", row)
+    return rid, row
+
+
+def test_query_bounds_registry_loads_and_lifecycle_rpcs_across_many_entries(tmp_path, monkeypatch):
+    from loopx.capabilities.manager_context import tracking
+    from loopx.control_plane.collaboration import goal_instance_scope as gis
+
+    inst_a = "ginst_" + "a" * 32
+    inst_b = "ginst_" + "b" * 32
+    inst_hist = "ginst_" + "c" * 32
+    inst_ignored = "ginst_" + "d" * 32
+    root = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    _write_source_registry(
+        registry,
+        [("goal-a", inst_a), ("goal-b", inst_b), ("goal-ignored", inst_ignored)],
+    )
+
+    expected_rows = []
+    for i in range(50):
+        channel = "manager.external.one" if i < 10 else "manager.external.two"
+        _, row = _write_tracking_entry(root, gid="goal-a", inst_id=inst_a, idx=i, channel=channel)
+        expected_rows.append(row)
+    for i in range(50, 80):
+        if i < 55:
+            channel = None
+            _write(
+                _root(root) / "ingress" / f"{i:064x}.json",
+                {"source_id": f"web:goal-a:{i}", "channel": "manager.external.one"},
+            )
+        else:
+            channel = "manager.external.two"
+        _, row = _write_tracking_entry(root, gid="goal-a", inst_id=inst_hist, idx=i, channel=channel)
+        expected_rows.append(row)
+    for i in range(80, 100):
+        _, row = _write_tracking_entry(root, gid="goal-b", inst_id=inst_b, idx=i, channel="manager.external.two")
+        expected_rows.append(row)
+    for i in range(100, 120):
+        _write_tracking_entry(root, gid="goal-ignored", inst_id=inst_ignored, idx=i, channel="manager.external.one")
+
+    orig_load = gis.load_project_registry
+    orig_scope = tracking.collaboration_goal_scope
+    orig_rpc = gis.effect_runtime_result
+    counts = {"load": 0, "scope": 0, "decide_rpc": 0}
+
+    def counted_load(path):
+        counts["load"] += 1
+        return orig_load(path)
+
+    def counted_scope(*args, **kwargs):
+        counts["scope"] += 1
+        return orig_scope(*args, **kwargs)
+
+    def counted_rpc(method, params, **kwargs):
+        if method == "collaboration.goal_instance.decide":
+            counts["decide_rpc"] += 1
+        return orig_rpc(method, params, **kwargs)
+
+    monkeypatch.setattr(gis, "load_project_registry", counted_load)
+    monkeypatch.setattr(tracking, "collaboration_goal_scope", counted_scope)
+    monkeypatch.setattr(gis, "effect_runtime_result", counted_rpc)
+
+    result = query(root, registry, goal_ids=["goal-a", "goal-b"], owner_scope=True, offset=5, limit=8)
+    expected_rows.sort(key=lambda r: (r["delivered_at"], r["request_id"]), reverse=True)
+    assert result["matched"] == 100
+    assert result["coverage"] == {
+        "scan_complete": True,
+        "legacy_audience_scan_complete": True,
+        "unreadable": 0,
+    }
+    assert [r["request_id"] for r in result["rows"]] == [r["request_id"] for r in expected_rows[5:13]]
+    assert counts == {"load": 2, "scope": 2, "decide_rpc": 3}
+
+    # Audience pre-filtering skips goal-b entirely before locks, registry, or RPCs.
+    counts.update(load=0, scope=0, decide_rpc=0)
+    external = query(
+        root,
+        registry,
+        goal_ids=["goal-a", "goal-b"],
+        owner_scope=False,
+        channel_id="manager.external.one",
+        offset=0,
+        limit=12,
+    )
+    assert external["matched"] == 15
+    assert len(external["rows"]) == 12
+    assert counts == {"load": 1, "scope": 1, "decide_rpc": 2}
+
+    # Legacy registry (profile_id != source_session_v1) makes zero lifecycle RPCs.
+    legacy_root = tmp_path / "legacy-runtime"
+    legacy_registry = tmp_path / "legacy-registry.json"
+    legacy_registry.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {"id": "goal-a", "repo": str(tmp_path), "coordination": {"registered_agents": ["worker"]}},
+                    {"id": "goal-b", "repo": str(tmp_path), "coordination": {"registered_agents": ["worker"]}},
+                ]
+            }
+        )
+    )
+    for i in range(40):
+        gid = "goal-a" if i < 20 else "goal-b"
+        _write_tracking_entry(legacy_root, gid=gid, inst_id=inst_a, idx=i, include_goal_ref=False)
+    counts.update(load=0, scope=0, decide_rpc=0)
+    legacy_result = query(legacy_root, legacy_registry, goal_ids=["goal-a", "goal-b"], owner_scope=True, limit=10)
+    assert legacy_result["matched"] == 40
+    assert len(legacy_result["rows"]) == 10
+    assert counts == {"load": 2, "scope": 2, "decide_rpc": 0}
+
+
+def test_query_preserves_unreadable_and_lifecycle_rejection_parity_in_batches(tmp_path, monkeypatch):
+    from loopx.capabilities.manager_context import tracking
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane.collaboration import goal_instance_scope as gis
+    from loopx.control_plane.collaboration.request_control_source import execute_request_control
+
+    inst_a = "ginst_" + "a" * 32
+    inst_hist = "ginst_" + "b" * 32
+    inst_mismatch = "ginst_" + "c" * 32
+    inst_other = "ginst_" + "d" * 32
+    root = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    _write_source_registry(registry, [("goal-a", inst_a)], runtime_root=root)
+
+    store = ChatSessionStore(root)
+    session = store.create_session(
+        goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="fixture", channel_id="manager",
+    )
+    turn, _ = store.create_turn(session["session_id"], client_turn_id="ctrl-1", message="Check controlled", origin="web")
+    brief = {
+        "schema_version": "collaboration_brief_v0",
+        "purpose": "Verify controlled readback",
+        "context": "Keep current instance",
+        "constraints": [],
+        "inputs": [],
+        "acceptance": ["Readback matches"],
+        "return_requirement": "Return findings",
+    }
+    ctrl_receipt = deliver(
+        root, registry, session=session, turn=turn,
+        request={"goal_id": "goal-a", "agent_id": "worker", "brief": brief},
+        source_store=store,
+    )
+    ctrl_rid = ctrl_receipt["request_id"]
+    ctrl_view = execute_request_control(
+        registry_path=registry, runtime_root=root, goal_ref=ctrl_receipt["goal_ref"],
+        receiver_agent_id="worker", request_id=ctrl_rid, actor_agent_id=None,
+        operation="inspect", execute=False,
+    )["view"]
+    revised = execute_request_control(
+        registry_path=registry, runtime_root=root, goal_ref=ctrl_receipt["goal_ref"],
+        receiver_agent_id="worker", request_id=ctrl_rid, actor_agent_id=None,
+        operation="revise",
+        parameters={
+            "operation_id": "rev-1",
+            "expected_revision": ctrl_view["revision"],
+            "expected_digest": ctrl_view["revision_digest"],
+            "brief": {**brief, "purpose": "Revised purpose"},
+            "reason": "Updated requirement",
+        },
+        execute=True,
+    )["view"]
+    acknowledge(
+        root, "goal-a", "worker", ctrl_rid, "adopt", "Accepted",
+        registry=registry, caller_goal_ref=ctrl_receipt["goal_ref"],
+        request_revision=2, request_revision_digest=revised["revision_digest"],
+    )
+    report(
+        root, "goal-a", "worker", ctrl_rid, "conclusion", "Checked.",
+        registry=registry, caller_goal_ref=ctrl_receipt["goal_ref"],
+        request_revision=2,
+    )
+
+    valid_curr_id, _ = _write_tracking_entry(root, gid="goal-a", inst_id=inst_a, idx=1, delivered_at="2026-11-19T00:01:00+00:00")
+    valid_hist_id, _ = _write_tracking_entry(root, gid="goal-a", inst_id=inst_hist, idx=2, delivered_at="2026-11-19T00:02:00+00:00")
+
+    corrupt_dir = _root(root) / "entries" / _hash({"goal_ref": {"goal_id": "goal-a", "goal_instance_id": inst_a}, "agent_id": "worker"})
+    (corrupt_dir / f"{'e' * 64}.json").write_text("{damaged", encoding="utf-8")
+    _write(corrupt_dir / f"{'f' * 64}.json", {"goal_id": "goal-a"})
+    _write(corrupt_dir / f"{'1' * 63}a.json", {"goal_id": "goal-a", "agent_id": "worker", "request_id": f"{'1' * 63}a", "goal_ref": "bad"})
+    _write(corrupt_dir / f"{'1' * 63}b.json", {"goal_id": "goal-a", "agent_id": "worker", "request_id": f"{'1' * 63}b", "goal_ref": {"goal_id": "goal-a", "goal_instance_id": "invalid"}})
+    _write_tracking_entry(root, gid="goal-a", inst_id=inst_a, idx=3, include_goal_ref=False)
+    _write_tracking_entry(root, gid="goal-a", inst_id=inst_a, idx=4, dir_key="wrongdir")
+    _write_tracking_entry(root, gid="unregistered-goal", inst_id=inst_a, idx=5)
+    _write_tracking_entry(root, gid="unregistered-goal", inst_id=inst_a, idx=6)
+
+    mismatch_ids = set()
+    for i in range(10, 15):
+        rid, _ = _write_tracking_entry(root, gid="goal-a", inst_id=inst_mismatch, idx=i)
+        mismatch_ids.add(rid)
+
+    orig_entry = tracking._entry
+    orig_rpc = gis.effect_runtime_result
+    decide_calls = 0
+
+    def wrapped_entry(entry_root, goal_id, agent_id, req_id, *, scope=None):
+        row = orig_entry(entry_root, goal_id, agent_id, req_id, scope=scope)
+        if req_id in mismatch_ids:
+            return {**row, "goal_ref": {"goal_id": "goal-a", "goal_instance_id": inst_other}}
+        return row
+
+    def counted_rpc(method, params, **kwargs):
+        nonlocal decide_calls
+        if method == "collaboration.goal_instance.decide":
+            decide_calls += 1
+        return orig_rpc(method, params, **kwargs)
+
+    monkeypatch.setattr(tracking, "_entry", wrapped_entry)
+    monkeypatch.setattr(gis, "effect_runtime_result", counted_rpc)
+
+    result = query(root, registry, goal_ids=["goal-a", "unregistered-goal"], owner_scope=True, limit=12)
+    assert result["matched"] == 3
+    assert result["coverage"]["unreadable"] == 13
+    assert {r["request_id"] for r in result["rows"]} == {ctrl_rid, valid_curr_id, valid_hist_id}
+    assert decide_calls == 3
+
+    by_id = {r["request_id"]: r for r in result["rows"]}
+    assert by_id[ctrl_rid]["request_revision"] == 2
+    assert isinstance(by_id[ctrl_rid]["request_control"], dict)
+    assert by_id[ctrl_rid]["request_control"]["control_state"]
+    assert by_id[ctrl_rid]["brief"]["purpose"] == "Revised purpose"
+    assert len(by_id[ctrl_rid]["return_replies"]) == 1
+    assert by_id[ctrl_rid]["return_replies"][0]["request_revision"] == 2
+    assert by_id[valid_hist_id]["goal_ref"] == {"goal_id": "goal-a", "goal_instance_id": inst_hist}
