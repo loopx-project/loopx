@@ -259,6 +259,17 @@ export function heartbeatWorkRequalification(
     throw receiptIdentityConflict("work requalification cannot replace the original semantic replan guard");
   }
   const qualified = {...oldDetails};
+  // The guarded route becomes durable when this binding first admits work.
+  const spendSource = currentDetails.quota_spend_source;
+  if (spendSource != null) {
+    if (spendSource !== "heartbeat" && spendSource !== "visible-goal") {
+      throw receiptIdentityConflict("work requalification has an unsupported quota spend source");
+    }
+    if (oldDetails.quota_spend_source != null && oldDetails.quota_spend_source !== spendSource) {
+      throw receiptIdentityConflict("work requalification cannot replace the original quota spend source");
+    }
+    qualified.quota_spend_source = spendSource;
+  }
   // The first positive work admission owns these facts. A repair-only
   // receipt's earlier selection cannot describe the newly admitted work.
   for (const field of ["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed",
