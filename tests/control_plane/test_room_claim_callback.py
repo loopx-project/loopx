@@ -479,3 +479,64 @@ def test_legacy_offer_cannot_inherit_an_exact_goal_instance(offered):
     assert snapshot(args)["provider_revision"] == before
     denied = offer(key="exact-profile-offer")
     assert not denied["ok"] and denied["blocker"] == "exact_instance_claim_unqualified", denied
+
+def _offer_on(offer_args, todo_id, revision, key):
+    return ingress.run_room_claim_offer(**offer_args, actor_id="agent-a", command="offer", execute=True,
+        todo_id=todo_id, expected_revision=revision, idempotency_key=key,
+        principals=["lark:ou_room_owner"], expires_at="2030-01-01T00:00:00Z")
+
+
+def _add_second_todo(args):
+    proc = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
+        "--format", "json", "todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--text", "Second independently claimable task"], cwd=ROOT, text=True, capture_output=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return next(todo["todo_id"] for todo in snapshot(args)["todos"] if todo["todo_id"] != TODO)
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+def test_revoked_offer_cannot_starve_valid_receipt_recovery(offered, limit):
+    """Mixed recovery queue: two legal claims committed but both first card
+    updates failed; the offer sorting first is then revoked. Recovery must
+    deliver the still-valid receipt to its original message within the limit,
+    leave the revoked card untouched and never advance the canonical revision."""
+    args, room, _, offer_args, _, event, callback_args, transport = offered
+    second = _add_second_todo(args)
+    base = snapshot(args)["provider_revision"]
+    first_offer = _offer_on(offer_args, TODO, base, "room-recovery-first")
+    transport["fail_update"] = True
+    first_pending = ingress.handle_room_claim_callback(event(first_offer), **callback_args)
+    assert first_pending["canonical_claim_accepted"] and not first_pending["ok"], first_pending
+    mid = snapshot(args)["provider_revision"]
+    assert mid != base
+    second_offer = _offer_on(offer_args, second, mid, "room-recovery-second")
+    second_pending = ingress.handle_room_claim_callback(event(second_offer), **callback_args)
+    assert second_pending["canonical_claim_accepted"] and not second_pending["ok"], second_pending
+    committed = snapshot(args)["provider_revision"]
+    assert committed != mid
+    offers = {"first": first_offer, "second": second_offer}
+    files = {name: args["runtime_root"] / "room-claim-offers" / (result["request_id"] + ".json")
+             for name, result in offers.items()}
+    revoked_name, valid_name = sorted(files, key=lambda name: str(files[name]))
+    valid_receipt_id = (first_pending if valid_name == "first" else second_pending)["receipt"]["receipt_id"]
+    revoked_file, valid_file = files[revoked_name], files[valid_name]
+    revoked_message_id = json.loads(revoked_file.read_bytes())["delivery"]["message_id"]
+    valid_message_id = json.loads(valid_file.read_bytes())["delivery"]["message_id"]
+    revoked_card_before = next(m for m in room.messages if m["message_id"] == revoked_message_id)["body"]["content"]
+    revoked = ingress.run_room_claim_offer(**offer_args, actor_id="agent-a", command="revoke",
+        execute=True, request_id=offers[revoked_name]["request_id"])
+    assert revoked["ok"], revoked
+    revoked_offer_after_revoke = revoked_file.read_bytes()
+    transport["fail_update"] = False
+    recovery = ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"}, limit=limit)
+    assert recovery == {"attempted": 1, "delivered": 1, "failed": 0}, recovery
+    valid_message = next(m for m in room.messages if m["message_id"] == valid_message_id)
+    assert valid_receipt_id in valid_message["body"]["content"], valid_message["body"]["content"]
+    revoked_message = next(m for m in room.messages if m["message_id"] == revoked_message_id)
+    assert revoked_message["body"]["content"] == revoked_card_before
+    # Recovery neither rewrote the revoked record nor touched its message.
+    assert revoked_file.read_bytes() == revoked_offer_after_revoke
+    assert snapshot(args)["provider_revision"] == committed
+    assert ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"}, limit=limit)["attempted"] == 0

@@ -323,18 +323,24 @@ def recover_room_claim_results(*, runtime_root: Path, profile_app_id: str, allow
                 not isinstance(d, Mapping) or d["app_id"] != profile_app_id or
                 d["chat_id"] not in allowed_chat_ids or d["profile"] != profile):
                 continue
-            stats["attempted"] += 1
             with exclusive_file_lock(path, operation="room_claim_result_recovery"):
                 p = _read(path)
                 d = p["delivery"]
                 _scope(p, runtime_root)
                 if p.get("scope_state") != "active" or p.get("result_delivery_verified") is True:
+                    # Permanently ineligible records (revoked, expired or
+                    # already delivered) never consume a delivery slot: the
+                    # fixed sort order must not let a dead prefix starve the
+                    # still-valid receipts queued behind it.
                     continue
                 request = p["request"]
                 admission = effect_runtime_result("goal_channel.work.claim_admission", {"request": request,
                     "scope_state": p["scope_state"], "principal": request["authorized_principals"][0], "observed_at": _now()})
                 if not admission["allowed"] or verified_app_id(runner=runner, cli_bin=cli_bin, profile=profile) != profile_app_id:
                     continue
+                # A slot is spent only on an actual transport attempt after
+                # every eligibility recheck passed under the record lock.
+                stats["attempted"] += 1
                 result = patch_result_card(runner=runner, cli_bin=cli_bin, profile=profile,
                     card=p["last_result_card"], message_id=d["message_id"], chat_id=d["chat_id"], app_id=profile_app_id)
                 p["result_delivery_verified"] = result.get("readback_verified") is True

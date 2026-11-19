@@ -195,7 +195,10 @@ Private offer files preserve intent/scope and message delivery metadata, not an
 independently advanceable copy of Todo state. On restart the existing collector
 may recover a recorded public result card; recovery only patches/reads that
 message and never executes another canonical claim. The current binding and
-offer scope still govern recovery.
+offer scope still govern recovery. Permanently ineligible records — revoked,
+expired or already delivered — are rechecked under the record lock and never
+consume a recovery delivery slot, so a dead prefix in the fixed scan order
+cannot starve the still-valid receipts queued behind it.
 
 Validation uses synthetic Lark transport and real disposable File/SQLite
 providers, including source CLI preview and the production collector dispatch
@@ -333,5 +336,7 @@ Markdown 写入。正常领取继续服从 canonical owner 的当前策略与准
 canonical 领取提交后，原卡上的回执号直接由不可变接受事实构造，后续实时投影读失败
 不会把它替换成无回执的摘要卡；未确认接受时保留诚实的未确认提示，不伪造回执号。
 已提供单次授权的 IM 领取按钮、显式撤销和结果卡片恢复；默认不启用 collector。
+恢复在记录锁内复核资格，已撤销、已过期或已送达的记录不消耗投递名额，固定扫描
+顺序中的失效前缀不会饿死排在后面的有效回执。
 真实房间、多主机、daemon reconnect、授权 artifact 引用和 OpenViking 只读检索仍待联调。
 合成 Lark transport 加真实隔离权威的测试不能宣称三方 RFC 已完成。
