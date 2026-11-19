@@ -186,10 +186,13 @@ def complete_turn_host_source(
     include_session_lineage: bool = False,
     include_model_context: bool = False,
     recorded_capability_result: bool = False,
+    required_write_scope: str | None = None,
 ) -> dict[str, Any] | None:
     if "schema_version" in request:
         assert_turn_host_request_version(request)
     if "work_contract" not in request:
+        if required_write_scope is not None:
+            raise ValueError("A Codex write directory requires the complete admitted work source.")
         return None
     wire = {}
     if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA:
@@ -200,6 +203,7 @@ def complete_turn_host_source(
         # An explicit historical adapter still requires full validation.
         wire["envelope"] = _wire_mapping(request.get("turn_envelope"))
     checked = _turn_envelope_result(operation, payload=request["work_contract"], **wire,
+                                 **({"required_write_scope": required_write_scope} if required_write_scope is not None else {}),
                                  **({"recorded_capability_result": True} if recorded_capability_result else {}),
                                  **({"include_model_context": True} if include_model_context else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))

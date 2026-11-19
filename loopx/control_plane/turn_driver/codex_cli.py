@@ -358,6 +358,7 @@ def _prompt(request: Mapping[str, Any]) -> str:
 
 def _checked_prompt_context(
     request: Mapping[str, Any], *, include_session_lineage: bool = False,
+    required_write_scope: str | None = None,
 ) -> dict[str, Any] | None:
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
 
@@ -369,7 +370,7 @@ def _checked_prompt_context(
     try:
         checked = complete_turn_host_source(request, operation="host_dispatch_context",
                                         include_session_lineage=include_session_lineage,
-                                        include_model_context=True)
+                                        include_model_context=True, required_write_scope=required_write_scope)
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
         # input without imposing a second bridge call on valid requests.
@@ -379,7 +380,9 @@ def _checked_prompt_context(
     return checked
 
 
-def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+def prepare_codex_cli_input(
+    request: Mapping[str, Any], *, required_write_scope: str | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Prepare one launch's prompt and schema from one complete-source check.
 
     This value never crosses an attempt/result boundary or enters a cache.
@@ -387,7 +390,7 @@ def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, 
     their existing prompt/schema readers. Launch and result authority stay with
     the original Host and outer executor.
     """
-    checked = _checked_prompt_context(request)
+    checked = _checked_prompt_context(request, required_write_scope=required_write_scope)
     if checked is None:
         return _prompt(request), codex_cli_result_schema(request)
     return _render_prompt(request, checked=checked), _result_schema(request, checked=checked)
@@ -805,6 +808,15 @@ def codex_project_write_scope(project: Path, directory: Path, runtime_root: Path
     return directory, scope
 
 
+def _codex_write_launch_options(
+    project: Path, runtime_root: Path, directory: Path | None, sandbox: str,
+) -> tuple[Path | None, str, dict[str, str]]:
+    if directory is None:
+        return None, sandbox, {}
+    directory, scope = codex_project_write_scope(project, directory, runtime_root)
+    return directory, f"directory:{directory}", {"required_write_scope": scope}
+
+
 def _codex_command(
     *,
     codex_bin: str,
@@ -926,14 +938,9 @@ def run_codex_cli_host(
     resolved = shutil.which(codex_bin) if os.path.sep not in codex_bin else codex_bin
     if not resolved or not Path(resolved).exists():
         raise ValueError("Codex CLI executable is unavailable")
-    session_sandbox = sandbox
-    if write_directory is not None:
-        write_directory, scope = codex_project_write_scope(project, write_directory, runtime_root)
-        work = _mapping(request.get("work_contract"))
-        if (_mapping(work.get("goal_boundary")).get("write_scope") != [scope]
-                or _mapping(work.get("selected_todo")).get("required_write_scopes") != [scope]):
-            raise ValueError("Codex write directory must match the admitted task and goal scope.")
-        session_sandbox = f"directory:{write_directory}"
+    write_directory, session_sandbox, write_context = _codex_write_launch_options(
+        project, runtime_root, write_directory, sandbox,
+    )
     lineage = _lineage(request)
     admission = goal_admission
     if admission is None and registry_path is not None:
@@ -965,7 +972,7 @@ def run_codex_cli_host(
     ) if session_scope == "agent" else None)
     if binding and profile_digest:
         approved_write_resume = (
-            write_directory is None and sandbox == "workspace-write"
+            session_sandbox == "workspace-write"
             and binding.get("session_profile_digest") == codex_session_profile_digest(
                 project=project, codex_bin=str(resolved),
                 home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),
@@ -1034,7 +1041,7 @@ def run_codex_cli_host(
         temporary = Path(directory)
         schema_path = temporary / "result-schema.json"
         output_path = temporary / "last-message.json"
-        input_text, result_schema = prepare_codex_cli_input(request)
+        input_text, result_schema = prepare_codex_cli_input(request, **write_context)
         schema_path.write_text(
             json.dumps(
                 result_schema,
