@@ -621,7 +621,21 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
                         "--task-lease-expected-version", version)
     assert code == 0 and updated["ok"] is True, updated
 
-    code, refreshed = _refresh(project, runtime, registry)
+    proof_args = ("--task-lease-idempotency-key", lease_key, "--task-lease-expected-version", version)
+    code, unprepared = _refresh(project, runtime, registry, *proof_args)
+    assert code == 1 and unprepared["error_code"] == "refresh_task_lease_unavailable", unprepared
+    assert unprepared["appended"] is False and cli._spend_run_count(runtime) == 0
+    before_ready = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID, registry_path=registry)
+    assert before_ready is not None and not before_ready.writeback.receipts and not before_ready.spend.receipts
+
+    code, ready = _guard(project, runtime, registry)
+    assert code == 0 and ready["normal_delivery_allowed"], ready
+    assert ready["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    prep = ready["interaction_contract"]["cli_channel"]["execution_preparation"]
+    assert prep["state"] == "ready"
+    assert prep["lease_proof"] == {"idempotency_key": lease_key, "expected_version": int(version)}
+    code, refreshed = _refresh(project, runtime, registry, *proof_args)
     assert code == 0, refreshed
     command = refreshed["settlement_owed"]["command"]
     code, spent = _execute(command, project, runtime, registry)
@@ -647,6 +661,80 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     assert next_wake["selected_todo"]["todo_id"] == cli.TODO_ID
     assert next_wake["effective_action"] != "unsettled_host_turn_recovery"
     assert cli._spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("transition", ["complete", "defer"])
+def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, provider, transition):
+    project, runtime, registry, _, _ = _source(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+        extra=f"claimed_by={cli.AGENT_ID}",
+    )
+    scope = ("--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
+
+    def run(*args):
+        return cli._run_cli(registry, runtime, *args, *scope, cwd=project)
+
+    code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
+    assert code == 0 and claim["ok"], claim
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0 and guard["normal_delivery_allowed"], guard
+    proof = guard["execution_preparation"]["lease_proof"]
+    code, released = run("task-lease", "release", "--owner", cli.AGENT_ID,
+                         "--idempotency-key", proof["idempotency_key"],
+                         "--expected-version", str(proof["expected_version"]))
+    assert code == 0 and released["released"], released
+    code, newer = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
+    assert code == 0 and newer["ok"] and newer["claim_operation_id"] != claim["claim_operation_id"], newer
+    lifecycle = ("todo", "complete", "--turn-instance-id", cli.TURN_ID,
+                 "--evidence", "evidence:fixture-complete") if transition == "complete" else (
+        "todo", "update", "--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z",
+        "--reason", "Wait for the fixture's external dependency",
+    )
+    code, committed = run(*lifecycle, "--agent-id", cli.AGENT_ID,
+                          "--claim-operation-id", newer["claim_operation_id"])
+    assert code == 0 and committed["ok"], committed
+    journal = rollout_event_log_path(runtime, cli.GOAL_ID)
+    before_rejection = journal.read_bytes()
+    code, denied = _refresh(project, runtime, registry,
+                            "--task-lease-idempotency-key", proof["idempotency_key"],
+                            "--task-lease-expected-version", str(proof["expected_version"]))
+    assert code == 1 and not denied["appended"], denied
+    assert denied["error_code"] == "refresh_task_lease_unavailable", denied
+    # The rejected operation must not change the external delivery preference.
+    assert journal.read_bytes() == before_rejection
+    result = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID, registry_path=registry)
+    assert result is not None and result.identity.value is not None
+    assert result.identity.value.as_dict() == guard["heartbeat_receipt"]["settlement_identity"]
+    assert not result.writeback.receipts and not result.spend.receipts
+    assert cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unprepared_turn_does_not_become_admitted_after_deferral(tmp_path, provider):
+    project, runtime, registry, _, _ = _source(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+        extra=f"claimed_by={cli.AGENT_ID}",
+    )
+    code, pending = _guard(project, runtime, registry)
+    assert code == 0 and pending["execution_preparation"]["state"] == "claim_required", pending
+    scope = ("--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID)
+    code, claim = cli._run_cli(registry, runtime, "todo", "claim", *scope,
+                              "--claimed-by", cli.AGENT_ID, cwd=project)
+    assert code == 0 and claim["ok"], claim
+    code, deferred = cli._run_cli(registry, runtime, "todo", "update", *scope, "--status", "deferred",
+        "--resume-when", "resume_at:2099-01-01T00:00:00Z", "--reason", "Wait for the fixture's dependency",
+        "--claim-operation-id", claim["claim_operation_id"], cwd=project)
+    assert code == 0 and deferred["ok"], deferred
+    code, denied = _refresh(project, runtime, registry)
+    assert code == 1 and not denied["appended"], denied
+    assert denied["error_code"] == "refresh_task_lease_unavailable", denied
+    readback = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID, registry_path=registry)
+    assert readback is not None and readback.prepared_lease_required and readback.prepared_lease is None
+    assert not readback.writeback.receipts and not readback.spend.receipts
+    assert cli._spend_run_count(runtime) == 0
 
 
 def test_returned_command_settles_and_repairs_receipts_without_another_debit(tmp_path):

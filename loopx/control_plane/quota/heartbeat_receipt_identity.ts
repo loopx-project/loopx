@@ -224,6 +224,26 @@ export function selectAdmissionHeartbeatReceipt<Value>(
   return identities.size === 1 ? [...identities.values()][0]! : null;
 }
 
+interface HeartbeatPreparedLease extends JsonObject {
+  prepared_lease_key_sha256: string;
+  prepared_lease_version: number;
+}
+
+export function heartbeatPreparedLease(details: JsonObject): HeartbeatPreparedLease | null {
+  const key = details.prepared_lease_key_sha256;
+  const version = details.prepared_lease_version;
+  if (key === undefined && version === undefined) return null;
+  if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
+      typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+    throw new EffectRuntimeRequestError("Turn readiness has a malformed lease proof", "malformed_settlement_state");
+  }
+  return {prepared_lease_key_sha256: key, prepared_lease_version: version};
+}
+
+export function isHeartbeatLeaseReadiness(event: JsonObject): boolean {
+  return heartbeatReceiptDetails(event).settlement_receipt_revision === "lease_readiness";
+}
+
 /** Reentry can qualify work on the original binding, never replace its authority.
  * The caller commits this append-only projection under the receipt-log lock. */
 export function heartbeatWorkRequalification(
@@ -253,12 +273,23 @@ export function heartbeatWorkRequalification(
   const currentReplan = normalizeHeartbeatReplanObligationId(currentDetails.semantic_replan_obligation_id);
   if (nativeChildReportAdmission(currentDetails, null, identity.effect_id, phase, false, currentReplan)
       .report_permission !== "new_operation") return replay;
+  const preparedLease = identity.todo_id === null ? null : heartbeatPreparedLease(currentDetails);
   if (nativeChildReportAdmission(oldDetails, original.status, identity.effect_id, phase, false, originalReplan)
-      .report_permission === "new_operation") return replay;
+      .report_permission === "new_operation") {
+    if (preparedLease === null || originalReplan !== currentReplan) return replay;
+    const previous = heartbeatPreparedLease(oldDetails);
+    const previousVersion = previous?.prepared_lease_version ?? 0;
+    // A delayed readiness evaluation can never replace a newer lease. Only
+    // the preparation proof changes; admission, billing and workspace stay bound.
+    if (preparedLease.prepared_lease_version <= previousVersion) return replay;
+    return {append: true, details: {
+      ...oldDetails, ...preparedLease, settlement_receipt_revision: "lease_readiness",
+    }};
+  }
   if (currentReplan !== null && currentReplan !== originalReplan) {
     throw receiptIdentityConflict("work requalification cannot replace the original semantic replan guard");
   }
-  const qualified = {...oldDetails};
+  const qualified = {...oldDetails, ...preparedLease};
   // The guarded route becomes durable when this binding first admits work.
   const spendSource = currentDetails.quota_spend_source;
   if (spendSource != null) {

@@ -116,6 +116,7 @@ def execute_turn_run_once(
         )
         selected_todo = execution_context["selected_todo"]
         expected_todo_text_sha256 = execution_context["sha256"]
+        task_lease_proof = execution_context.get("task_lease_proof") or None
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -288,6 +289,7 @@ def execute_turn_run_once(
                 dry_run=dry_run,
                 sync_global=not bool(args.no_global_sync),
                 goal_ref=goal_ref,
+                task_lease_proof=task_lease_proof,
             )
         # A Todo-less native governance Turn has no business artifact/argv.
         # Its independent validator is the canonical semantic writeback preview,
@@ -762,6 +764,7 @@ def execute_turn_run_once(
                     else None
                 ),
                 goal_ref=goal_ref,
+                task_lease_proof=task_lease_proof,
             )
 
         managed_cadence = managed_cadence_start(

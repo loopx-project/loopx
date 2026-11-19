@@ -183,6 +183,8 @@ class QuotaSettlementReadback:
     replan_execution_pending: bool = False
     admission_recorded_at: str | None = None
     admission_event_id: str | None = None
+    prepared_lease: dict[str, Any] | None = None
+    prepared_lease_required: bool = False
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -582,4 +584,6 @@ def read_heartbeat_settlement(
         ),
         admission_recorded_at=_optional_readback_text(payload.get("admission_recorded_at")),
         admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
+        prepared_lease=_optional_readback_record(payload.get("prepared_lease")),
+        prepared_lease_required=payload.get("prepared_lease_required") is True,
     )

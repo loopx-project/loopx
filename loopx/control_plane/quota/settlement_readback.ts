@@ -65,6 +65,8 @@ import {
   selectAdmissionHeartbeatReceipt,
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
+  heartbeatPreparedLease,
+  isHeartbeatLeaseReadiness,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -785,6 +787,32 @@ function admissionHeartbeatReceipt(
     : selectAdmissionHeartbeatReceipt(identity.goal_id, identity.agent_id, entries);
 }
 
+function heartbeatValidationEvent(
+  events: readonly JsonObject[],
+  receipt: JsonObject,
+  identity: SettlementIdentity,
+): JsonObject | null {
+  if (!isHeartbeatLeaseReadiness(receipt)) return receipt;
+  // Readiness appends to the same Turn; only its original positive work
+  // admission can serve as validation. Follow durable links toward that root.
+  let validation = receipt;
+  for (let index = events.lastIndexOf(receipt) - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    const lineage = jsonObject(validation.causality);
+    const parentId = optionalString(lineage?.source_event_id);
+    if (parentId === null || lineage?.caused_by !== parentId) return null;
+    if (event.event_id !== parentId) continue;
+    const fact = heartbeatReceiptFactFromEvent(event);
+    if (event.event_kind !== "quota_should_run" ||
+        event.goal_id !== identity.goal_id || event.agent_id !== identity.agent_id ||
+        fact.run_id !== identity.turn_instance_id || fact.todo_id !== identity.todo_id ||
+        !effectIdsMatch(fact.settlement_effect_id, identity.effect_id)) return null;
+    if (!isHeartbeatLeaseReadiness(event)) return event;
+    validation = event;
+  }
+  return null;
+}
+
 function writebackResult(
   identity: SettlementIdentity,
   run: JsonObject | null,
@@ -1184,7 +1212,11 @@ function resolveIdentity(
       "identity_mismatch",
     );
   }
-  const eventId = optionalString(receiptEvent.event_id);
+  const validationEvent = heartbeatValidationEvent(events, receiptEvent, identity);
+  if (validationEvent === null) {
+    return failedIdentity("matching work admission is missing for Turn readiness", "receipt_missing");
+  }
+  const eventId = optionalString(validationEvent.event_id);
   return settlementPure(
     settlementIdentityPayload(identity),
     [settlementReceipt(identity, "validation", eventId ? `rollout_event:${eventId}` : null)],
@@ -1427,6 +1459,10 @@ function readQuotaSettlementFromRequest(
     );
   }
   const receiptDetails = details(heartbeatReceipt);
+  const preparedLease = heartbeatPreparedLease(receiptDetails);
+  if (Object.hasOwn(receiptDetails, "prepared_lease_required") && receiptDetails.prepared_lease_required !== true) {
+    throw new EffectRuntimeRequestError("Turn readiness requirement is malformed", "malformed_settlement_state");
+  }
   const writebackRun = findWriteback(runs, identity);
   const writebackEvent = findStepEvent(events, identity, "refresh_state");
   const spendRun = findSpend(
@@ -1575,6 +1611,8 @@ function readQuotaSettlementFromRequest(
     ),
     spend_run: includeRecords ? spendRun : null,
     heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    ...(preparedLease === null ? {} : {prepared_lease: preparedLease}),
+    ...(receiptDetails.prepared_lease_required === true ? {prepared_lease_required: true} : {}),
     admission_recorded_at: typeof admissionReceipt?.recorded_at === "string"
       && admissionReceipt.recorded_at.trim() ? admissionReceipt.recorded_at : null,
     admission_event_id: typeof admissionReceipt?.event_id === "string"

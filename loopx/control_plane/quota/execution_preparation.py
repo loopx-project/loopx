@@ -1,20 +1,33 @@
 from __future__ import annotations
 
+import hashlib
 import shlex
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from ...file_lock import exclusive_cross_runtime_file_lock, exclusive_mutation_file_lock
 from ..coordination.local_authority import (
+    local_authority_is_promoted,
     LOCAL_AUTHORITY_SOURCES,
     LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
 )
+from ..coordination.shadow_management import (
+    require_shadow_primary_write_allowed,
+    shadow_maintenance_lock_target,
+)
 from ..effect_runtime import effect_runtime_result
+from ..goals.activation import goal_is_stopped
 from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id
 from ..work_items.action_selection_contract import (
     action_portfolio_requires_explicit_selection,
 )
 from ..work_items.task_lease import lease_is_active
+from ..work_items.recommendation_source_io import load_recommendation_source_goal
+
+if TYPE_CHECKING:
+    from .settlement import QuotaSettlementReadback
 
 
 def _unavailable_facts(*, goal_id: str, todo_id: str, agent_id: str) -> dict[str, Any]:
@@ -48,71 +61,182 @@ def project_selected_todo_execution_preparation(
     if not todo_id or not safe_agent_id or runtime_root is None:
         return None
     try:
-        response = effect_runtime_result(
-            "todo.read",
-            {"schema_version": "todo_read_request_v0", "kind": "execution_preparation_source",
-             "source": {"runtime_root": str(Path(runtime_root).expanduser().resolve(strict=False)),
-                        "goal_id": goal_id},
-             "todo_id": todo_id},
-            timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
-        )
-        snapshot = (
-            response.get("execution_preparation_source") if isinstance(response, dict)
-            and response.get("schema_version") == "todo_read_result_v0" else None
-        )
-        if (
-            not isinstance(snapshot, dict) or snapshot.get("goal_id") != goal_id
-            or snapshot.get("todo_id") != todo_id or snapshot.get("source_authority") not in LOCAL_AUTHORITY_SOURCES
-            or snapshot.get("decision_read_from_provider") is not True
-            or snapshot.get("legacy_fallback_used") is not False
-            or not isinstance(snapshot.get("provider_revision"), str) or not snapshot["provider_revision"]
-            or not isinstance(snapshot.get("todo"), dict) or snapshot["todo"].get("todo_id") != todo_id
-            or not isinstance(snapshot.get("leases"), list)
-        ):
-            facts = _unavailable_facts(
-                goal_id=goal_id, todo_id=todo_id, agent_id=safe_agent_id,
-            )
-        else:
-            todo = snapshot["todo"]
-            leases = []
-            for lease in snapshot["leases"]:
-                if not isinstance(lease, dict) or lease.get("todo_id") != todo_id:
-                    raise ValueError("execution preparation returned a lease for a different Todo")
-                status = str(lease.get("status") or "unknown").strip().lower()
-                leases.append({
-                    "status": status if status in {"active", "released"} else "unknown",
-                    "active": lease_is_active(dict(lease)),
-                    **({"owner": lease["owner"]} if normalize_todo_claimed_by(lease.get("owner")) else {}),
-                    "lease_proof": {"idempotency_key": lease.get("idempotency_key"),
-                                    "expected_version": lease.get("version")},
-                })
-            facts = {
-                "schema_version": "execution_preparation_facts_v0",
-                "goal_id": goal_id,
-                "agent_id": safe_agent_id,
-                "handoff_mode": str(snapshot.get("handoff_mode") or "hard_lease"),
-                "authority_available": True,
-                "selected_todo": {
-                    "todo_id": todo_id,
-                    "status": todo.get("status"),
-                    "claimed_by": normalize_todo_claimed_by(todo.get("claimed_by")),
-                },
-                "leases": leases,
-            }
+        snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
+        facts = _execution_facts(snapshot, goal_id, todo_id, safe_agent_id)
     except (OSError, RuntimeError, TypeError, ValueError):
-        facts = _unavailable_facts(
-            goal_id=goal_id, todo_id=todo_id, agent_id=safe_agent_id,
-        )
+        facts = _unavailable_facts(goal_id=goal_id, todo_id=todo_id, agent_id=safe_agent_id)
+    return _project_execution_facts(facts)
 
+
+def _read_execution_snapshot(
+    runtime_root: str | Path, goal_id: str, todo_id: str,
+) -> dict[str, Any] | None:
+    response = effect_runtime_result(
+        "todo.read",
+        {"schema_version": "todo_read_request_v0", "kind": "execution_preparation_source",
+         "source": {"runtime_root": str(Path(runtime_root).expanduser().resolve(strict=False)),
+                    "goal_id": goal_id},
+         "todo_id": todo_id},
+        timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
+    )
+    snapshot = (
+        response.get("execution_preparation_source") if isinstance(response, dict)
+        and response.get("schema_version") == "todo_read_result_v0" else None
+    )
+    if (
+        not isinstance(snapshot, dict) or snapshot.get("goal_id") != goal_id
+        or snapshot.get("todo_id") != todo_id or snapshot.get("source_authority") not in LOCAL_AUTHORITY_SOURCES
+        or snapshot.get("decision_read_from_provider") is not True
+        or snapshot.get("legacy_fallback_used") is not False
+        or not isinstance(snapshot.get("provider_revision"), str) or not snapshot["provider_revision"]
+        or not isinstance(snapshot.get("todo"), dict) or snapshot["todo"].get("todo_id") != todo_id
+        or not isinstance(snapshot.get("leases"), list)
+    ):
+        return None
+    return snapshot
+
+
+def _execution_facts(
+    snapshot: dict[str, Any] | None, goal_id: str, todo_id: str, agent_id: str,
+) -> dict[str, Any]:
+    if snapshot is None:
+        return _unavailable_facts(goal_id=goal_id, todo_id=todo_id, agent_id=agent_id)
+    todo = snapshot["todo"]
+    leases = []
+    for lease in snapshot["leases"]:
+        if not isinstance(lease, dict) or lease.get("todo_id") != todo_id:
+            raise ValueError("execution preparation returned a lease for a different Todo")
+        status = str(lease.get("status") or "unknown").strip().lower()
+        leases.append({
+            "status": status if status in {"active", "released"} else "unknown",
+            "active": lease_is_active(dict(lease)),
+            **({"owner": lease["owner"]} if normalize_todo_claimed_by(lease.get("owner")) else {}),
+            "lease_proof": {"idempotency_key": lease.get("idempotency_key"),
+                            "expected_version": lease.get("version")},
+        })
+    return {
+        "schema_version": "execution_preparation_facts_v0",
+        "goal_id": goal_id,
+        "agent_id": agent_id,
+        "handoff_mode": str(snapshot.get("handoff_mode") or "hard_lease"),
+        "authority_available": True,
+        "selected_todo": {
+            "todo_id": todo_id,
+            "status": todo.get("status"),
+            "claimed_by": normalize_todo_claimed_by(todo.get("claimed_by")),
+        },
+        "leases": leases,
+    }
+
+
+def _project_execution_facts(facts: dict[str, Any]) -> dict[str, Any]:
     result = effect_runtime_result("work_item.execution_preparation.project", facts)
     if not isinstance(result, dict) or result.get("schema_version") != "execution_preparation_v0":
         raise TypeError("typed execution preparation returned an invalid projection")
     claim = result.get("claim")
     if isinstance(claim, dict) and isinstance(claim.get("cli_args"), list):
-        # The displayed command selects a smaller receipt. Hosts still receive
-        # the exact mutation argv in cli_args, including on historical captures.
         claim["command_line"] = shlex.join(["loopx", *map(str, claim["cli_args"]), "--thin"])
     return result
+
+
+class RefreshTaskLeaseUnavailable(ValueError):
+    code = "refresh_task_lease_unavailable"
+
+
+def prepared_lease_receipt_fields(proof: Mapping[str, Any]) -> dict[str, Any]:
+    """Serialize the prepared lease without persisting its operation key."""
+    return {
+        "prepared_lease_key_sha256": hashlib.sha256(proof["idempotency_key"].encode("utf-8")).hexdigest(),
+        "prepared_lease_version": proof["expected_version"],
+    }
+
+
+def quota_prepared_lease_receipt_fields(
+    preparation: object, *, todo_id: str | None, selected_todo_id: object,
+    agent_id: str | None, delivery_admitted: bool,
+) -> dict[str, Any]:
+    if (
+        todo_id is None or selected_todo_id != todo_id
+        or not isinstance(preparation, Mapping)
+        or preparation.get("handoff_mode") != "hard_lease"
+        or preparation.get("todo_id") != todo_id
+        or preparation.get("agent_id") != agent_id
+    ):
+        return {}
+    fields: dict[str, Any] = {"prepared_lease_required": True}
+    if delivery_admitted and preparation.get("state") == "ready" and preparation.get("delivery_allowed") is True:
+        fields.update(prepared_lease_receipt_fields(preparation["lease_proof"]))
+    return fields
+
+
+@contextmanager
+def guard_first_writeback_execution(
+    *, runtime_root: Path, registry_path: Path, goal_id: str,
+    todo_id: str, agent_id: str, requested_proof: dict[str, Any] | None,
+    settlement: QuotaSettlementReadback,
+    locked_goal: dict[str, Any] | None,
+) -> Iterator[None]:
+    prepared_lease = settlement.prepared_lease
+    prepared_required = settlement.prepared_lease_required or prepared_lease is not None
+    if (requested_proof is None and not prepared_required
+            and not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id)):
+        yield
+        return
+
+    # Legacy spend acquires maintenance before the run index. Try maintenance
+    # once here so this order cannot block a competing accounting process.
+    with ExitStack() as locks:
+        locks.enter_context(exclusive_mutation_file_lock(
+            shadow_maintenance_lock_target(runtime_root, goal_id),
+            timeout_seconds=0,
+            operation="refresh-state-execution",
+        ))
+        require_shadow_primary_write_allowed(runtime_root, goal_id)
+        snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
+        if snapshot is None:
+            raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
+        if prepared_required and snapshot.get("handoff_mode") != "hard_lease":
+            raise RefreshTaskLeaseUnavailable("The Todo's original hard-lease authority is unavailable.")
+        if snapshot.get("handoff_mode") == "hard_lease":
+            todo_open = snapshot["todo"].get("status") == "open"
+            facts = _execution_facts(snapshot, goal_id, todo_id, agent_id)
+            current = _project_execution_facts({**facts, "include_retired_lease_for_writeback": not todo_open})
+            current_proof = (current.get("lease_proof") if current.get("state") == "ready"
+                             else current.get("retired_lease_proof"))
+            if todo_open or prepared_required:
+                execution_bound = (
+                    requested_proof is not None
+                    and current_proof == requested_proof
+                    and prepared_lease == prepared_lease_receipt_fields(requested_proof)
+                )
+            else:
+                # Older admitted closeouts may predate persisted lease readiness.
+                # Their retired holder still has to match the original binding.
+                admission = settlement.native_child_admission or {}
+                execution_bound = (current_proof is not None
+                    and admission.get("report_permission") in {"new_operation", "existing_operation_only"}
+                    and (requested_proof is None or requested_proof == current_proof))
+            if not execution_bound:
+                raise RefreshTaskLeaseUnavailable(
+                    "The original writeback needs a current task lease recorded for this Turn. "
+                    "Read the same Todo and Turn through its current guard before retrying."
+                )
+            if snapshot["todo"].get("status") == "done" and prepared_required and settlement.completion_event is None:
+                raise RefreshTaskLeaseUnavailable("The completed Todo is missing this Turn's completion receipt.")
+            goal = locked_goal
+            if goal is None:
+                source, _ = load_recommendation_source_goal(registry_path, goal_id)
+                invoked = registry_path.resolve()
+                for registry in dict.fromkeys((source, invoked)):
+                    locks.enter_context(exclusive_cross_runtime_file_lock(
+                        registry, timeout_seconds=0, operation="refresh-state-execution",
+                    ))
+                current_source, goal = load_recommendation_source_goal(registry_path, goal_id)
+                if current_source != source or goal is None:
+                    raise RefreshTaskLeaseUnavailable("The Goal source changed before this writeback committed.")
+            if goal_is_stopped(goal):
+                raise RefreshTaskLeaseUnavailable("The Goal was stopped before this writeback committed.")
+        yield
 
 
 def apply_selected_todo_execution_preparation(

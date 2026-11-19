@@ -97,9 +97,16 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
       reason_code: retired, reason: HANDOFF_MODE_RETIRED_REASON};
   }
   if (status !== "open") {
+    const retained = leases.length === 1 ? leases[0] : null;
+    const retiredProof = request.include_retired_lease_for_writeback === true &&
+      status !== null && handoffMode === "hard_lease" &&
+      (claimedBy === null || claimedBy === agentId) &&
+      retained?.status === "released" && retained.owner === agentId
+      ? retained.lease_proof : undefined;
     return {...base, state: "blocked_by_conflict", delivery_allowed: false,
       reason_code: "selected_todo_not_open",
-      reason: "The selected Todo is no longer open; select current work before execution."};
+      reason: "The selected Todo is no longer open; select current work before execution.",
+      ...(retiredProof === undefined ? {} : {retired_lease_proof: retiredProof})};
   }
   if (claimedBy !== null && claimedBy !== agentId) {
     return {...base, state: "blocked_by_conflict", delivery_allowed: false,
