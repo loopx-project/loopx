@@ -11,10 +11,14 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+from pathlib import Path
+import re
+import subprocess
 import time
 from typing import Any
 
 from ...agent_registry import load_goal_from_registry
+from ...chat_store import _atomic_write_json
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.runtime.time import now_utc
@@ -24,7 +28,9 @@ from .steward_commands import native_command
 from .steward_managed_mode import StewardManagedMode
 
 TARGET = "steward-portfolio-watch"
+FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
 _LOG = logging.getLogger(__name__)
+_GITHUB_REPO_URL = re.compile(r"^git:github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$")
 
 
 class StewardObservationAdapter:
@@ -54,6 +60,46 @@ def monitor_turn_id(todo: dict[str, Any]) -> str:
         [todo["todo_id"], todo["next_due_at"]], sort_keys=True).encode()).hexdigest()[:40]
 
 
+def advancement_turn_id(todo: dict[str, Any]) -> str:
+    """Stable Turn instance identity per Todo revision for Steward follow-ups."""
+    stamp = todo.get("updated_at") or todo.get("created_at") or "0"
+    return "advancement." + hashlib.sha256(json.dumps(
+        [todo["todo_id"], stamp], sort_keys=True).encode()).hexdigest()[:40]
+
+
+def _github_repo_slug(task_repository: Any) -> str | None:
+    if not isinstance(task_repository, str):
+        return None
+    match = _GITHUB_REPO_URL.fullmatch(task_repository.strip())
+    return match.group(1) if match else None
+
+
+def _observe_github_repository_prs(repo_slug: str) -> dict[str, Any]:
+    """Read bounded public/authorized open PR signal metadata without side effects."""
+    fields = ("number,title,url,headRefOid,headRefName,baseRefName,"
+              "isDraft,author,reviewDecision,mergeStateStatus,updatedAt")
+    try:
+        completed = subprocess.run(
+            ["gh", "pr", "list", "--repo", repo_slug, "--state", "open",
+             "--limit", "100", "--json", fields],
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+        if completed.returncode != 0:
+            return {"status": "unavailable", "repository": repo_slug}
+        rows = json.loads(completed.stdout or "[]")
+        if not isinstance(rows, list):
+            return {"status": "unavailable", "repository": repo_slug}
+        items = sorted((row for row in rows if isinstance(row, dict)),
+                       key=lambda row: int(row.get("number") or 0))
+        return {"status": "ok", "repository": repo_slug, "items": items}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {"status": "unavailable", "repository": repo_slug}
+
+
+def steward_monitor_snapshot_path(runtime_root: Path, goal_id: str, todo_id: str) -> Path:
+    return Path(runtime_root).expanduser().resolve() / "steward-monitors" / goal_id / f"{todo_id}.latest.json"
+
+
 class StewardMonitor:
     def __init__(self, controller: Any) -> None:
         self.controller = controller
@@ -71,6 +117,38 @@ class StewardMonitor:
         if len(rows) > 1:
             raise ValueError("the original native monitor is ambiguous")
         return rows[0] if rows else None
+
+    def due_monitors(self, actor: dict[str, Any]) -> list[dict[str, Any]]:
+        self.current(actor)
+        rows = [
+            row for row in self.todos(actor)
+            if row.get("task_class") == "continuous_monitor"
+            and row.get("claimed_by") == actor["agent_id"]
+            and isinstance(row.get("target_key"), str)
+            and row["target_key"]
+            and not row["target_key"].startswith("managed-session-watch.")
+            and not row["target_key"].startswith(FOLLOWUP_TARGET_PREFIX)
+            and monitor_todo_is_due(row)
+        ]
+        return sorted(rows, key=lambda row: (str(row.get("next_due_at") or ""), str(row["todo_id"])))
+
+    def runnable_advancement_todos(self, actor: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = [
+            row for row in self.todos(actor)
+            if row.get("status") == "open"
+            and row.get("task_class") == "advancement_task"
+            and row.get("action_kind") != "generate_periodic_report"
+            and row.get("claimed_by") == actor["agent_id"]
+            and isinstance(row.get("target_key"), str)
+            and row["target_key"].startswith(FOLLOWUP_TARGET_PREFIX)
+            and row.get("resume_ready") is not False
+        ]
+        prio = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+        return sorted(rows, key=lambda row: (
+            prio.get(str(row.get("priority") or "P1"), 9),
+            str(row.get("created_at") or ""),
+            str(row["todo_id"]),
+        ))
 
     def _acquire(self, actor: dict[str, Any], todo: dict[str, Any], key: str,
                  *, expected_version: int | None = None) -> dict[str, Any]:
@@ -143,6 +221,14 @@ class StewardMonitor:
             todo_id=args.todo_id, target_key=args.target_key,
             turn_instance_id=args.turn_instance_id,
             result_hash=args.result_hash, material_change=args.material_change,
+            next_agent_todo=getattr(args, "next_agent_todo", None),
+            next_action_kind=getattr(args, "next_action_kind", None),
+            next_task_repository=getattr(args, "next_task_repository", None),
+            next_required_capabilities=getattr(args, "next_required_capabilities", None),
+            next_continuation_policy=getattr(args, "next_continuation_policy", None),
+            next_target_key=getattr(args, "next_target_key", None),
+            next_claimed_by=getattr(args, "next_claimed_by", None),
+            next_agent_priority=getattr(args, "next_agent_priority", None),
             task_lease_idempotency_key=args.task_lease_idempotency_key,
             task_lease_expected_version=args.task_lease_expected_version,
             source="adapter", goal_ref=goal_ref, execute=True)
@@ -225,6 +311,63 @@ class StewardMonitor:
             return {"ok": True, "applied": True, "plan": plan, "receipt": receipt,
                 "monitor": self.current(actor), "model_invoked": False}
 
+    def _collect_signal_monitor(self, actor: dict[str, Any], context: dict[str, Any], todo: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        portfolio = self.bindings._core("collaboration.steward.monitor.observation", {
+            "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
+            "actor_goal_id": actor["goal_id"], "previous_hash": None})
+        from ...control_plane.collaboration.inbox import pending as inbox_pending
+        try:
+            inbox_raw = inbox_pending(self.controller.coordination_runtime_root,
+                goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+            inbox_items = [{"request_id": row["request_id"], "source_id": row.get("source_id")}
+                           for row in inbox_raw if isinstance(row, dict) and row.get("request_id")]
+        except (OSError, ValueError):
+            inbox_items = []
+        repo_slug = _github_repo_slug(todo.get("task_repository"))
+        repo_snapshot = _observe_github_repository_prs(repo_slug) if repo_slug else None
+        observation = self.bindings._core("collaboration.steward.monitor.signal_observation", {
+            "portfolio_observation": portfolio,
+            "inbox_items": inbox_items,
+            "repository_snapshot": repo_snapshot,
+            "previous_hash": todo.get("result_hash"),
+        })
+        if observation.get("observation_incomplete") is True:
+            raise RuntimeError("steward monitor external signal source temporarily unavailable")
+        snapshot_path = steward_monitor_snapshot_path(
+            self.controller.coordination_runtime_root, actor["goal_id"], todo["todo_id"])
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(snapshot_path, {
+            "schema_version": "steward_signal_monitor_snapshot_v0",
+            "goal_id": actor["goal_id"],
+            "todo_id": todo["todo_id"],
+            "target_key": todo.get("target_key"),
+            "monitor_text": todo.get("text"),
+            "task_repository": todo.get("task_repository"),
+            "result_hash": observation["result_hash"],
+            "material_change": observation["material_change"],
+            "observed_at": now_utc().isoformat(),
+            "repository_snapshot": repo_snapshot,
+            "inbox_items": inbox_items,
+        })
+        followup_key = f"{FOLLOWUP_TARGET_PREFIX}{todo['todo_id']}"
+        existing_followup = any(
+            row.get("target_key") == followup_key and row.get("status") == "open"
+            for row in self.todos(actor)
+        )
+        successor_args: list[str] = []
+        if observation["material_change"] and not existing_followup:
+            summary = " ".join(str(todo.get("text") or todo["target_key"]).split())[:180]
+            priority = str(todo.get("priority") or "P1")
+            successor_args = [
+                "--next-agent-todo", f"[{todo['target_key']}] 信号变更跟进：{summary}",
+                "--next-action-kind", "triage",
+                "--next-continuation-policy", "same_agent_non_delivery",
+                "--next-claimed-by", actor["agent_id"],
+                "--next-target-key", followup_key,
+                "--next-agent-priority", priority,
+            ]
+        return observation, successor_args
+
     def observe(self, *, host: Any, request: dict[str, Any], turn: dict[str, Any],
                 context: dict[str, Any], todo: dict[str, Any]) -> dict[str, Any]:
         actor = request["actor"]
@@ -233,11 +376,14 @@ class StewardMonitor:
             "--available-capability", "filesystem", "--available-capability", "external_evidence_poll",
             "--runtime-profile", "codex_app_server"]
         host._admit(request, turn=turn)
+        successor_args: list[str] = []
         if actor.get("schema_version") == "loopx_managed_session_actor_v0":
             from .conversation_bindings import ChatConversationBindings
             observation = ChatConversationBindings._core("collaboration.session.monitor.observation", {
                 "goal": self.managed._goal(actor["goal_id"]), "actor": actor,
                 "todos": self.todos(actor), "previous_hash": todo.get("result_hash")})
+        elif todo.get("target_key") != TARGET:
+            observation, successor_args = self._collect_signal_monitor(actor, context, todo)
         else:
             observation = self.bindings._core("collaboration.steward.monitor.observation", {
                 "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
@@ -258,9 +404,13 @@ class StewardMonitor:
                 "--target-key", todo["target_key"], "--result-hash", observation["result_hash"],
                 "--task-lease-idempotency-key", lease_key,
                 "--task-lease-expected-version", str(lease["version"]), "--execute",
-                *(["--material-change"] if observation["material_change"] else [])])
+                *(["--material-change"] if observation["material_change"] else []),
+                *successor_args])
         finally:
             self._release(actor, todo, lease)
+        if successor_args:
+            binding_id = actor["goal_id"].removeprefix("steward-agent-")
+            getattr(self.controller, "_steward_monitor_next_check", {}).pop(binding_id, None)
         self.controller.store.append_event(turn["session_id"], turn["turn_id"],
             kind="native_loopx.monitor_poll", payload={"observation": observation, "receipt": result})
         return {"schema_version": "loopx_chat_agent_response_v0", "message": "已检查授权 Goal 状态；覆盖缺口和原始请求继续保留。",
@@ -309,18 +459,38 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                         continue
                 except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                     _LOG.warning("An original steward report is unavailable; its window and other work are retained")
-            todo = service.current(actor)
-            if todo is None or not monitor_todo_is_due(todo):
-                if todo and todo.get("next_due_at") and todo.get("status") == "open":
-                    due = datetime.fromisoformat(todo["next_due_at"].replace("Z", "+00:00"))
-                    remaining = max(0, (due - datetime.now(timezone.utc)).total_seconds())
-                    cache[binding["binding_id"]] = time.monotonic() + min(60, remaining)
+            due = service.due_monitors(actor)
+            if due:
+                todo = due[0]
+                accepted, created = StewardTurnHost(controller).submit(binding["binding_id"],
+                    turn_instance_id=monitor_turn_id(todo), todo_id=todo["todo_id"], work_kind="monitor",
+                    monitor_deadline=todo["next_due_at"])
+                if created:
+                    changed.append(accepted)
                 continue
-            accepted, created = StewardTurnHost(controller).submit(binding["binding_id"],
-                turn_instance_id=monitor_turn_id(todo), todo_id=todo["todo_id"], work_kind="monitor",
-                monitor_deadline=todo["next_due_at"])
-            if created:
-                changed.append(accepted)
+            for adv in service.runnable_advancement_todos(actor):
+                from .steward_turn import native_steward_client_id
+                turn_id_token = advancement_turn_id(adv)
+                if controller.store.turn_for_client(actor["session_id"],
+                        native_steward_client_id(actor, turn_id_token)) is not None:
+                    continue
+                accepted, created = StewardTurnHost(controller).submit(binding["binding_id"],
+                    turn_instance_id=turn_id_token, todo_id=adv["todo_id"], work_kind="native_turn")
+                if created:
+                    changed.append(accepted)
+                break
+            else:
+                all_monitors = [row for row in service.todos(actor)
+                    if row.get("task_class") == "continuous_monitor" and row.get("status") == "open"
+                    and isinstance(row.get("target_key"), str)
+                    and not row["target_key"].startswith("managed-session-watch.")
+                    and not row["target_key"].startswith(FOLLOWUP_TARGET_PREFIX)
+                    and row.get("next_due_at")]
+                if all_monitors:
+                    soonest = min(all_monitors, key=lambda row: datetime.fromisoformat(row["next_due_at"].replace("Z", "+00:00")))
+                    due_dt = datetime.fromisoformat(soonest["next_due_at"].replace("Z", "+00:00"))
+                    remaining = max(0, (due_dt - datetime.now(timezone.utc)).total_seconds())
+                    cache[binding["binding_id"]] = time.monotonic() + min(60, remaining)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             # One unreadable conversation or unavailable provider must not starve
             # other native monitors; retain its original data and deadline.

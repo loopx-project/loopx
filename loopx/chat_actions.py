@@ -1229,6 +1229,7 @@ class ChatActionService(
             text=_monitor_text(parameters) or str(parameters["target"]),
             task_class="continuous_monitor",
             action_kind="observe",
+            task_repository=parameters.get("task_repository"),
             claimed_by=agent_id,
             agent_id=agent_id,
             resume_when=resume_when,
