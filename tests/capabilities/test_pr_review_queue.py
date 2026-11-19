@@ -810,6 +810,73 @@ def test_later_other_family_does_not_repeat_a_current_matching_review(shared_log
         assert after["independent_review"]["reviewer"] == "second-peer"
 
 
+@pytest.mark.parametrize(
+    "first_family,second_family",
+    [("Gemini", "gpt-6.2-sol"), ("gpt-6.2-sol", "Gemini")],
+)
+def test_shared_independent_login_keeps_both_model_families(
+    first_family: str, second_family: str,
+) -> None:
+    login = "shared-peer"
+    first = _github_model_review(10, login=login, family=first_family, state="APPROVED")
+    second = _github_model_review(11, login=login, family=second_family, state="APPROVED")
+    repeat = _github_model_review(12, login=login, family=first_family, state="APPROVED")
+    comment = _github_model_review(13, login=login, family=first_family)
+    comment["body"] = str(comment["body"]).splitlines()[0] + "\n\nOne follow-up question."
+
+    missing = "gemini" if second_family == "Gemini" else "gpt"
+    one_family = _github_model_pr([first], reviewDecision="APPROVED")
+    assert _model_queue_row(one_family, family=missing)["review_action_kind"] == (
+        "rereview_pull_request_exact_head"
+    )
+    for reviews in ([first, second], [first, second, repeat], [first, second, repeat, comment]):
+        pr = _github_model_pr(reviews, reviewDecision="APPROVED")
+        ordinary = _model_queue_row(pr, family=None)
+        for family in ("gpt", "gemini"):
+            assert _model_queue_row(pr, family=family) == ordinary
+
+
+@pytest.mark.parametrize("intervening", ["dismissal", "opposite_opinion", "different_head"])
+def test_shared_independent_login_retires_earlier_formal_evidence(intervening: str) -> None:
+    login = "shared-peer"
+    prior = _github_model_review(10, login=login, family="gpt-6.2-sol", state="APPROVED")
+    if intervening == "dismissal":
+        boundary = _github_model_review(11, login=login, family="Gemini", state="DISMISSED")
+    elif intervening == "opposite_opinion":
+        boundary = _github_model_review(11, login=login, family="Gemini", state="CHANGES_REQUESTED")
+    else:
+        boundary = _github_model_review(
+            11, login=login, family="Gemini", state="APPROVED", sha="2" * 40,
+        )
+    current = _github_model_review(12, login=login, family="Gemini", state="APPROVED")
+    pr = _github_model_pr([prior, boundary, current], reviewDecision="APPROVED")
+    row = _model_queue_row(pr)
+    ordinary = _model_queue_row(pr, family=None)
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert row["review_conclusion"] == ordinary["review_conclusion"]
+    assert row["independent_review"] == ordinary["independent_review"]
+
+
+@pytest.mark.parametrize(
+    "invalid_evidence",
+    ["association", "bot", "body"],
+)
+def test_shared_login_history_needs_valid_evidence_for_each_formal_review(
+    invalid_evidence: str,
+) -> None:
+    login = "shared-peer"
+    prior = _github_model_review(10, login=login, family="gpt-6.2-sol", state="APPROVED")
+    if invalid_evidence == "association":
+        prior["authorAssociation"] = "NONE"
+    elif invalid_evidence == "bot":
+        prior["author"] = {"login": login, "is_bot": True}
+    else:
+        prior["body"] = str(prior["body"]).splitlines()[0] + "\n\nLooks good."
+    current = _github_model_review(11, login=login, family="Gemini", state="APPROVED")
+    pr = _github_model_pr([prior, current], reviewDecision="APPROVED")
+    assert _model_queue_row(pr)["review_action_kind"] == "rereview_pull_request_exact_head"
+
+
 @pytest.mark.parametrize("line,reason", [
     (
         "model_agent | model=gpt-6.2-sol | provider=OpenAI | source=runtime_reported "

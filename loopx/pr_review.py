@@ -874,17 +874,20 @@ def _review_conclusion(
             "submitted_at": review.get("submittedAt"),
             "conclusion": conclusion}
             for review, conclusion in zip(reviews, conclusions)]}
+    if reviewer_model_family and history["reviews_complete"]:
+        history["include_independent_coverage"] = True
     selection = select_review_history(history)
     index = cast(int, selection["index"])
     independent = selection.get("independent_review")
     conclusion = conclusions[index]
-    if reviewer_model_family and history["reviews_complete"] and (conclusion["valid"] or independent):
+    coverage_ids = selection.get("independent_coverage_review_ids")
+    if reviewer_model_family and isinstance(coverage_ids, list) and (conclusion["valid"] or independent):
         from .capabilities.pr_review_queue.model_coverage import needs_cross_model_review, published_review_model
 
         if needs_cross_model_review(
             family=reviewer_model_family,
             history=history,
-            selection=selection,
+            independent_review_ids=coverage_ids,
             model_reports=[published_review_model(review.get("body")) for review in reviews],
         ):
             conclusion["cross_model_review_needed"] = True

@@ -666,9 +666,12 @@ In a Goal-bound GitHub queue, a recognized model family from the invoking
 runtime can reopen an open, non-draft exact head with a declared review from
 another family. The queue uses complete provider history. An independent
 review from the same family suppresses repeat work even when another account
-submitted a later review. A qualifying review published under the shared
-author login with a matching runtime declaration also suppresses repeat work
-for that model. GitHub independence still requires independent account
+submitted a later review. If different models share an independent GitHub
+account, each valid, attributable formal review on the current head supplies coverage
+while that account maintains the same formal opinion. Follow-up review comments
+preserve that history. A dismissal, a different head or a changed formal
+opinion ends it. A qualifying review published under the shared author login
+with a matching runtime declaration also suppresses repeat work for that model. GitHub independence still requires independent account
 evidence. The declarations record their source as published provenance.
 
 Missing model identity or incomplete history retains the existing queue
