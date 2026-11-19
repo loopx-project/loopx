@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Mapping, Sequence
 
 from .agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
@@ -1514,6 +1515,13 @@ class ChatActionService(
                 else self._goal_state_fingerprint(normalized["goal_id"]))
             evidence = ["Canonical LoopX User completion dry-run validated this decision."]
             permission = "durable_write"
+        elif action_kind == "pr.merge":
+            from .capabilities.native_chat.steward_pr_merge import pr_merge_preview
+
+            normalized, evidence, fingerprint = pr_merge_preview(
+                normalized, digest_fn=_digest, runner=subprocess.run
+            )
+            permission = "protected"
         elif action_kind == "agent.bind":
             binding = read_goal_agent_binding_with_source_route(
                 registry_path=self.registry_path,
@@ -1653,9 +1661,19 @@ class ChatActionService(
                 raise ProtectedActionGate(str(proposal["action_kind"]), gate={"kind": "authenticated_steward_confirmation_required",
                     "summary": "Confirm this proposal from its original owner private conversation.",
                     "next_action": "Use the exact /confirm command in the originating Bot before it expires."})
+            from .capabilities.native_chat.steward_pr_merge import steward_pr_merge_extra_auth
             from .control_plane.effect_runtime import effect_runtime_result
+            runtime_root = resolve_runtime_root(
+                self._registry(), self.runtime_root_override, registry_path=self.registry_path
+            ).resolve()
             effect_runtime_result("collaboration.steward.authorize_creation", {
-                "context": steward_context, "proposal": proposal, "now": steward_confirmed_at or now_utc().isoformat()})
+                "context": steward_context,
+                "proposal": proposal,
+                "now": steward_confirmed_at or now_utc().isoformat(),
+                **steward_pr_merge_extra_auth(
+                    self.registry_path, runtime_root, steward_context, proposal
+                ),
+            })
         if proposal.get("action_kind") == "operation.execute":
             raise ProtectedActionGate(
                 "operation.execute",
@@ -1704,6 +1722,12 @@ class ChatActionService(
             return self._apply_todo_update(proposal_id, proposal, parameters)
         if action_kind == "monitor.update":
             return self._apply_monitor_update(proposal_id, proposal, parameters)
+        if action_kind == "pr.merge":
+            from .capabilities.native_chat.steward_pr_merge import apply_pr_merge
+            return apply_pr_merge(
+                self, proposal_id, proposal, parameters,
+                digest_fn=_digest, gate_cls=ProtectedActionGate, runner=subprocess.run,
+            )
         if action_kind == "gate.resolve":
             raise ProtectedActionGate(
                 action_kind,
