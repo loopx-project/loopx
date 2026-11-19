@@ -24,6 +24,7 @@ from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.runtime.time import now_utc
 from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
+from .github_pr_evidence import observe_github_repository_prs
 from .steward_commands import native_command
 from .steward_managed_mode import StewardManagedMode
 
@@ -76,24 +77,7 @@ def _github_repo_slug(task_repository: Any) -> str | None:
 
 def _observe_github_repository_prs(repo_slug: str) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
-    fields = ("number,title,url,headRefOid,headRefName,baseRefName,"
-              "isDraft,author,reviewDecision,mergeStateStatus,updatedAt")
-    try:
-        completed = subprocess.run(
-            ["gh", "pr", "list", "--repo", repo_slug, "--state", "open",
-             "--limit", "100", "--json", fields],
-            capture_output=True, text=True, check=False, timeout=15,
-        )
-        if completed.returncode != 0:
-            return {"status": "unavailable", "repository": repo_slug}
-        rows = json.loads(completed.stdout or "[]")
-        if not isinstance(rows, list):
-            return {"status": "unavailable", "repository": repo_slug}
-        items = sorted((row for row in rows if isinstance(row, dict)),
-                       key=lambda row: int(row.get("number") or 0))
-        return {"status": "ok", "repository": repo_slug, "items": items}
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return {"status": "unavailable", "repository": repo_slug}
+    return observe_github_repository_prs(repo_slug, runner=subprocess.run)
 
 
 def steward_monitor_snapshot_path(runtime_root: Path, goal_id: str, todo_id: str) -> Path:
