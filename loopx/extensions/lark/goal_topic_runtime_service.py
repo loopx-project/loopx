@@ -110,6 +110,8 @@ MessageConsumer = tuple[threading.Event, Popen[str], threading.Event]
 class LarkGoalTopicRuntimeService:
     """Own one event-consumer worker per reusable Lark App profile."""
 
+    _LISTENER_SNAPSHOT_TTL_SECONDS = 5.0
+
     def __init__(
         self,
         *,
@@ -129,6 +131,11 @@ class LarkGoalTopicRuntimeService:
         self._profile_poller = profile_poller or self._poll_profile
         self.manager_route_reconciler = manager_route_reconciler
         self._lock = threading.Lock()
+        self._listener_snapshot_cond = threading.Condition(threading.Lock())
+        self._listener_snapshot_in_flight = False
+        self._listener_snapshot_value: PayloadView | None = None
+        self._listener_snapshot_at = 0.0
+        self._listener_snapshot_generation = 0
         self._workers: dict[str, ProfileWorker] = {}
         self._message_consumers: dict[str, MessageConsumer] = {}
         self._health: dict[str, Payload] = {}
@@ -356,6 +363,44 @@ class LarkGoalTopicRuntimeService:
         result = capture_callback(self.private_conversations, profile, event, action)
         self._delivery_wakeup.set()
         return result
+
+    def _invalidate_listener_snapshot(self) -> int:
+        with self._listener_snapshot_cond:
+            self._listener_snapshot_generation += 1
+            self._listener_snapshot_value = None
+            self._listener_snapshot_at = 0.0
+            self._listener_snapshot_cond.notify_all()
+            return self._listener_snapshot_generation
+
+    def _seed_listener_snapshot(self, generation: int, snapshot: PayloadView) -> None:
+        with self._listener_snapshot_cond:
+            if self._listener_snapshot_generation == generation and not self._closed.is_set():
+                self._listener_snapshot_value = snapshot
+                self._listener_snapshot_at = time.monotonic()
+
+    def _read_listener_snapshot(self) -> PayloadView:
+        with self._listener_snapshot_cond:
+            while self._listener_snapshot_in_flight:
+                self._listener_snapshot_cond.wait()
+            if (
+                not self._closed.is_set()
+                and self._listener_snapshot_value is not None
+                and time.monotonic() - self._listener_snapshot_at < self._LISTENER_SNAPSHOT_TTL_SECONDS
+            ):
+                return self._listener_snapshot_value
+            generation = self._listener_snapshot_generation
+            self._listener_snapshot_in_flight = True
+        try:
+            fresh = self.snapshot_provider()
+        finally:
+            with self._listener_snapshot_cond:
+                self._listener_snapshot_in_flight = False
+                self._listener_snapshot_cond.notify_all()
+        with self._listener_snapshot_cond:
+            if self._listener_snapshot_generation == generation and not self._closed.is_set():
+                self._listener_snapshot_value = fresh
+                self._listener_snapshot_at = time.monotonic()
+        return fresh
 
     def _refresh_on_start(self) -> None:
         while not self._closed.is_set():
@@ -720,7 +765,7 @@ class LarkGoalTopicRuntimeService:
                             continue
 
                         def listener_snapshot() -> PayloadView:
-                            current = self.snapshot_provider()
+                            current = self._read_listener_snapshot()
                             with self._lock:
                                 # Reuse the same observations used to admit
                                 # each worker. A successful refresh adds new
@@ -830,7 +875,9 @@ class LarkGoalTopicRuntimeService:
                 return False
             self._profile_refresh_sequence += 1
             sequence = self._profile_refresh_sequence
+        snapshot_generation = self._invalidate_listener_snapshot()
         snapshot = self.snapshot_provider()
+        self._seed_listener_snapshot(snapshot_generation, snapshot)
         profile_configs, unavailable = self._listener_configs(snapshot)
         with self._lock:
             if self._closed.is_set():
@@ -944,6 +991,7 @@ class LarkGoalTopicRuntimeService:
 
     def close(self) -> None:
         self._closed.set()
+        self._invalidate_listener_snapshot()
         self._delivery_wakeup.set()
         with self._lock:
             if self._refresh_retry is not None:
