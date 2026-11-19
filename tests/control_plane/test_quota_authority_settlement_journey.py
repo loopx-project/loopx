@@ -674,10 +674,8 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     assert cli._spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("transition", ["complete", "defer"])
-@pytest.mark.parametrize("explicit_proof", [False, True])
-def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, provider, transition, explicit_proof):
+@pytest.fixture
+def hard_lease_todo_cli(tmp_path, provider):
     project, runtime, registry, _, _ = _source(
         tmp_path, provider=provider, handoff_mode="hard_lease",
         extra=f"claimed_by={cli.AGENT_ID}",
@@ -686,6 +684,17 @@ def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, prov
 
     def run(*args):
         return cli._run_cli(registry, runtime, *args, *scope, cwd=project)
+
+    return project, runtime, registry, run
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("transition", ["complete", "defer"])
+@pytest.mark.parametrize("explicit_proof", [False, True])
+def test_first_writeback_refuses_generation_retired_by_later_work(
+    hard_lease_todo_cli, transition, explicit_proof,
+):
+    project, runtime, registry, run = hard_lease_todo_cli
 
     code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
     assert code == 0 and claim["ok"], claim
@@ -729,16 +738,9 @@ def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, prov
 @pytest.mark.parametrize("replace_lease", [False, True])
 @pytest.mark.parametrize("retire_for_blocker", [False, True])
 def test_first_blocked_writeback_checks_original_lease(
-    tmp_path, provider, replace_lease, retire_for_blocker,
+    hard_lease_todo_cli, replace_lease, retire_for_blocker,
 ):
-    project, runtime, registry, _, _ = _source(
-        tmp_path, provider=provider, handoff_mode="hard_lease",
-        extra=f"claimed_by={cli.AGENT_ID}",
-    )
-    scope = ("--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
-
-    def run(*args):
-        return cli._run_cli(registry, runtime, *args, *scope, cwd=project)
+    project, runtime, registry, run = hard_lease_todo_cli
 
     code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
     assert code == 0 and claim["execution_managed"], claim
@@ -789,15 +791,8 @@ def test_first_blocked_writeback_checks_original_lease(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_original_turn_refuses_readiness_from_a_replacement_lease(tmp_path, provider):
-    project, runtime, registry, _, _ = _source(
-        tmp_path, provider=provider, handoff_mode="hard_lease",
-        extra=f"claimed_by={cli.AGENT_ID}",
-    )
-    scope = ("--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
-
-    def run(*args):
-        return cli._run_cli(registry, runtime, *args, *scope, cwd=project)
+def test_original_turn_refuses_readiness_from_a_replacement_lease(hard_lease_todo_cli):
+    project, runtime, registry, run = hard_lease_todo_cli
 
     code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
     assert code == 0 and claim["ok"], claim
