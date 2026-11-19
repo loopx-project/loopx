@@ -95,9 +95,9 @@ class LarkOwnerAttention:
 
     def _route(self, binding: dict[str, Any], saved: dict[str, Any] | None = None, *,
                session_id: str | None = None, source_ref: str | None = None) -> dict[str, Any]:
-        candidates = [saved] if saved is not None else [
+        candidates = [saved] if saved is not None else (
             _read_json(path) for path in sorted(self.transport.root.glob("*.json"), reverse=True)
-            if re.fullmatch(r"[a-f0-9]{24}", path.stem)]
+            if re.fullmatch(r"[a-f0-9]{24}", path.stem))
         for record in candidates:
             if not isinstance(record, dict):
                 continue
