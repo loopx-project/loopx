@@ -212,6 +212,10 @@ During an unbound Todo choice, including during workspace repair, the initial
 read keeps the candidate identities and selection command. It points to long
 candidate write scopes in the original capture when those scopes matter to the
 choice. The guard for the same Turn supplies the current scopes before delivery.
+When a selected Todo needs an ordinary managed claim, the initial read keeps
+the claim and continuation instructions. Read long requested scopes at
+`/selected_todo/required_write_scopes` when needed for preparation. Use the
+same-Turn guard's complete current scopes after the claim and before delivery.
 The preference source's complete `current` view also stays in the initial read:
 corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the

@@ -2469,9 +2469,11 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
     obligation.must_attempt_work === true && obligation.delivery_allowed === false;
   if (!repair && payload.effective_action !== EffectiveAction.NORMAL_RUN) return [];
   const selecting = hasUnboundActionSelection(cli);
+  const selected = jsonObject(payload.selected_todo);
   const claiming = cli.selection_required !== true && payload.normal_delivery_allowed === false &&
     preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION && preparation.state === "claim_required" &&
-    preparation.delivery_allowed === false && jsonObject(preparation.claim)?.host_execution_allowed === true;
+    preparation.delivery_allowed === false && typeof selected?.todo_id === "string" &&
+    preparation.todo_id === selected.todo_id && jsonObject(preparation.claim)?.host_execution_allowed === true;
   if (!repair && !selecting && !claiming) return [];
   const boundary = jsonObject(payload.goal_boundary);
   // The recovery pointer and its guidance also cost bytes. Leave short lists inline.
@@ -2483,15 +2485,12 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
     marker_path: ["goal_boundary", "write_scope_pointer"],
     instruction: repair
       ? "If workspace repair needs the Goal's write scopes, select /goal_boundary/write_scope from the source below. "
-      : "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. ",
+      : "If work preparation needs the Goal's write scopes, select the pointer in goal_boundary.write_scope_pointer from the source below. ",
   });
-  const selected = jsonObject(payload.selected_todo);
-  if ((repair || selecting) && selected?.schema_version === "quota_selected_todo_v0" &&
+  if (selected?.schema_version === "quota_selected_todo_v0" &&
       typeof selected.todo_id === "string" && longScope(selected.required_write_scopes)) scopes.push({
     path: ["selected_todo", "required_write_scopes"],
-    instruction: repair
-      ? "If workspace repair needs the Todo's requested write scopes, select /selected_todo/required_write_scopes from the source below. "
-      : "If choosing work depends on the recommended Todo's write scopes, select /selected_todo/required_write_scopes from the source below. ",
+    instruction: "If this preparation needs the Todo's requested write scopes, select /selected_todo/required_write_scopes from the source below. ",
   });
   const suggestions = jsonObject(payload.action_portfolio)?.suggested_actions;
   if (selecting && Array.isArray(suggestions)) suggestions.forEach((value, index) => {

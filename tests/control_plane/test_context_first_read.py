@@ -393,6 +393,78 @@ def test_unbound_candidate_scopes_are_only_expanded_on_request(tmp_path, monkeyp
     assert not registry.exists() and not runtime.exists()
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_claim_preparation_keeps_requested_write_scopes_on_demand(tmp_path, monkeypatch, provider):
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _configure_repository_write_todo, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _initialize_git_checkout, _run_cli, _spend_run_count, _write_fixture,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    scopes = [f"src/area-{index:03d}/implementation/entrypoints/**" for index in range(355)]
+    state = _configure_repository_write_todo(project)
+    state.write_text(state.read_text().replace(
+        "required_capabilities=filesystem_write -->",
+        f"required_capabilities=filesystem_write required_write_scopes={','.join(scopes)} -->",
+    ))
+    config = json.loads(registry.read_text())
+    config["goals"][0]["coordination"]["write_scope"] = ["src/**"]
+    registry.write_text(json.dumps(config))
+    _initialize_git_checkout(project)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--quiet", "--allow-empty", "-m", "fixture"], cwd=project, check=True)
+    workspace = tmp_path / "work"
+    subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(workspace)],
+                   cwd=project, check=True)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+
+    def cli(*args):
+        code, result = _run_cli(registry, runtime, *args, cwd=workspace)
+        assert code == 0 and result["ok"], result
+        return result
+
+    turn = "same-turn-claim"
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
+    guard = ("quota", "should-run", "--codex-app", *binding, "--turn-instance-id", turn,
+             "--available-capability", "filesystem_write", "--available-capability", "shell")
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    native = ("--context-delivery", "on", "--delta-delivery", "off",
+              "--decision-output-root", str(captures), "--codex-context-root", str(captures))
+    raw = cli(*guard, "--context-delivery", "off")
+    channel = raw["interaction_contract"]["cli_channel"]
+    preparation = channel["execution_preparation"]
+    assert preparation["state"] == "claim_required" and preparation["delivery_allowed"] is False
+    assert preparation["claim"]["host_execution_allowed"]
+    assert raw["selected_todo"]["required_write_scopes"] == scopes
+
+    view = cli(*guard, *native)
+    page, opening = read_selection(view["first_read_command"])
+    state_pointer = "/interaction_contract/cli_channel/execution_preparation"
+    scope_pointer = "/selected_todo/required_write_scopes"
+    assert opening[state_pointer] == preparation
+    assert opening["/normal_delivery_allowed"] is False
+    assert opening["/interaction_contract/cli_channel/spend_after_validation"] is False
+    assert opening["/selected_todo"]["todo_id"] == TODO_ID
+    assert "required_write_scopes" not in opening["/selected_todo"], page["total_bytes"]
+    assert scope_pointer in opening["/context_details/instruction"]
+    _, detail = read_selection(opening["/context_details/command_template"].replace("<pointer>", scope_pointer))
+    assert detail[scope_pointer] == scopes
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+
+    claim = cli(*preparation["claim"]["cli_args"])
+    assert claim["execution_managed"] and claim["claim_operation_id"]
+    ready = cli(*guard, *native)
+    _, opening = read_selection(ready["first_read_command"])
+    assert opening["/normal_delivery_allowed"] is True and opening[state_pointer]["state"] == "ready"
+    assert opening["/selected_todo"]["required_write_scopes"] == scopes
+    assert opening["/heartbeat_receipt"]["settlement_identity"] == raw["heartbeat_receipt"]["settlement_identity"]
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("damage", [None, "foreign_plan", "changed_file"])
 def test_native_preparation_reuses_only_its_current_digest_bound_navigation(
     tmp_path, monkeypatch, decision, damage,
