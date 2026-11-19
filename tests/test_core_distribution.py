@@ -708,7 +708,11 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         'pathlib.Path("squares.json").write_text(json.dumps([n*n for n in range(8)]))\noutput_path = '))
     home = tmp_path / "codex-home"
     home.mkdir()
-    environment = {"FAKE_CODEX_LOG": str(log), "CODEX_HOME": str(home)}
+    prompt_path = tmp_path / "worker-prompt.txt"
+    environment = {
+        "FAKE_CODEX_LOG": str(log), "CODEX_HOME": str(home),
+        "FAKE_CODEX_PROMPT_CAPTURE": str(prompt_path),
+    }
     command = [*prefix, "turn", "run-once", "--host", "codex-cli", "--goal-id", GOAL,
         "--agent-id", AGENT, "--todo-id", todo_id, "--project", str(workspace),
         "--codex-bin", str(binary), "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
@@ -730,5 +734,19 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     replay = json.loads(_run(core_python, [*resume_command, "--resume-turn-key", result["resume_turn_key"],
         "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])],
         workspace, environment=environment).stdout)
+    model_input = json.loads(prompt_path.read_text(encoding="utf-8").split("Turn request:\n", 1)[1])
+    capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
+    original = json.loads(capture.read_text(encoding="utf-8"))
+    context = model_input["task_context"]
+    assert original["agent_todo_summary"]["monitor_due_items"] == []
+    assert original["user_todo_summary"]["gate_open_items"] == []
+    assert "monitor_due_items" not in context["agent_todo_summary"]
+    assert "gate_open_items" not in context["user_todo_summary"]
+    assert (
+        context["agent_todo_summary"]["first_executable_items"]
+        == original["agent_todo_summary"]["first_executable_items"]
+    )
+    assert context["user_todo_summary"]["work_counts"] == original["user_todo_summary"]["work_counts"]
+    assert model_input["source_decision_hash"] == original["contract_binding"]["content_hash"]
     assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1

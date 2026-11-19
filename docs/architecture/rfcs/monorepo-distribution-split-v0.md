@@ -419,6 +419,11 @@ contract explicitly requires their receipt. Batch best-effort telemetry only;
 do not defer authoritative receipt persistence, weaken fsync/transaction
 guarantees or cache stale permission/lease decisions to meet a timing target.
 
+For an admitted ordinary task, the built-in Worker view omits known empty
+Todo summary lanes. The selected task, nonempty lanes, counts, references and
+upstream truncation remain visible. The signed source and original reader
+retain the complete summaries for recovery and diagnosis.
+
 ### Governed lifecycle and external effects
 
 Use existing Goal/Agent/work/Turn identities, revisions, leases, effect ids and
