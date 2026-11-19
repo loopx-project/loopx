@@ -665,7 +665,8 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("transition", ["complete", "defer"])
-def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, provider, transition):
+@pytest.mark.parametrize("explicit_proof", [False, True])
+def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, provider, transition, explicit_proof):
     project, runtime, registry, _, _ = _source(
         tmp_path, provider=provider, handoff_mode="hard_lease",
         extra=f"claimed_by={cli.AGENT_ID}",
@@ -696,9 +697,11 @@ def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, prov
     assert code == 0 and committed["ok"], committed
     journal = rollout_event_log_path(runtime, cli.GOAL_ID)
     before_rejection = journal.read_bytes()
-    code, denied = _refresh(project, runtime, registry,
-                            "--task-lease-idempotency-key", proof["idempotency_key"],
-                            "--task-lease-expected-version", str(proof["expected_version"]))
+    arguments = (
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"]),
+    ) if explicit_proof else ()
+    code, denied = _refresh(project, runtime, registry, *arguments)
     assert code == 1 and not denied["appended"], denied
     assert denied["error_code"] == "refresh_task_lease_unavailable", denied
     # The rejected operation must not change the external delivery preference.
