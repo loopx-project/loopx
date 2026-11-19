@@ -190,7 +190,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
     @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:
         health: dict[str, dict[str, int]] = {}
-        quota_pending = self.core.quota_backlog_observer(use_cache=True)
+        observed_fps: dict[Path, tuple[int, ...]] = {}
+        quota_pending = self.core.quota_backlog_observer(use_cache=True, observed_fps=observed_fps)
         completed: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
         def count(row: dict[str, Any]) -> None:
@@ -212,9 +213,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     or (row.get("historical_answer_images") or {}).get("status") == "pending"):
                 return None
             deliveries = row.get("deliveries")
-            if not isinstance(deliveries, dict) or not all(
-                isinstance(phase, dict) for phase in deliveries.values()
-            ):
+            if not isinstance(deliveries, dict) or not all(isinstance(phase, dict) for phase in deliveries.values()):
                 return None
             # Settings uses only correlation and retry metadata. Never retain
             # delivered bodies or use these fields for admission or sending.
@@ -226,9 +225,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
 
         def delivered_requests() -> Iterator[dict[str, Any]]:
             paths = [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]
-            for path, row in self._health_delivery_discovery.rows(
-                self.root, paths, read=_read_json, project=health_fields,
-            ):
+            for path, row in self._health_delivery_discovery.rows(self.root, paths, read=_read_json, project=health_fields):
                 health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
                 if row["status"] != "delivered":
                     if triage.pending(row):
@@ -240,7 +237,9 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
 
         # Pair the original receipts with the current Core correlation and Turn.
         receipts, refs = tee(delivered_requests())
-        natives = self.core.read_backlog_requests(row["request_ref"] for row in refs)
+        natives = self.core.read_backlog_requests(
+            (row["request_ref"] for row in refs), defer_recovery=True, observed_fps=observed_fps,
+        )
         for row, native in zip(receipts, natives, strict=True):
             if (native.get("status") == "accepted" and native.get("command") is None
                     and _same_fields(native, row, "binding_id", "source", "session_id", "turn_id")):
