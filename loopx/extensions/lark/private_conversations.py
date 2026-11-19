@@ -190,7 +190,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
     @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:
         health: dict[str, dict[str, int]] = {}
-        quota_pending = self.core.quota_backlog_observer()
+        quota_pending = self.core.quota_backlog_observer(use_cache=True)
         completed: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
         def count(row: dict[str, Any]) -> None:
