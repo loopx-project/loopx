@@ -82,7 +82,7 @@ def register_ingress(
         source_message=normalize_source_context(message if source_message is None else source_message),
     )
     if origin is not None:
-        if origin != "web":
+        if origin not in {"web", "native_loopx"}:
             raise ValueError("unsupported local ingress origin")
         value["origin"] = origin
     path = (

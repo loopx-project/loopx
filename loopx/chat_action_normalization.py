@@ -763,6 +763,7 @@ class ChatActionNormalizationMixin:
                     "agent_id",
                     "target",
                     "target_key",
+                    "task_repository",
                     "cadence",
                     "timezone",
                     "stop_condition",
@@ -779,6 +780,11 @@ class ChatActionNormalizationMixin:
                 "cadence": _normalize_cadence(values.get("cadence")),
                 "timezone": _text(values.get("timezone"), field="timezone", limit=80),
             }
+            if values.get("task_repository"):
+                raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
+                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                    raw_repo = f"git:github.com/{raw_repo}"
+                result["task_repository"] = raw_repo
             stop_cond_raw = values.get("stop_condition")
             if stop_cond_raw:
                 raw_text = _text(stop_cond_raw, field="stop_condition", limit=160)
@@ -803,6 +809,7 @@ class ChatActionNormalizationMixin:
                     "operation",
                     "target",
                     "target_key",
+                    "task_repository",
                     "cadence",
                     "stop_condition",
                     "session_id",
@@ -830,6 +837,11 @@ class ChatActionNormalizationMixin:
                 result["target"] = _text(values["target"], field="target", limit=400)
             if values.get("target_key"):
                 result["target_key"] = _opaque(values["target_key"], field="target_key")
+            if values.get("task_repository"):
+                raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
+                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                    raw_repo = f"git:github.com/{raw_repo}"
+                result["task_repository"] = raw_repo
             if values.get("cadence"):
                 result["cadence"] = _normalize_cadence(values["cadence"])
             if values.get("stop_condition"):
