@@ -28,6 +28,23 @@ def native_cli(args, *command, ok=True):
         "--format", "json", *command], cwd=ROOT, text=True, capture_output=True, timeout=90)
     payload = json.loads(completed.stdout)
     assert (completed.returncode == 0) is ok, (payload, completed.stderr)
+    if payload.get("schema_version") == "context_capture_navigation_v1":
+        # Main now caps large quota CLI stdout behind a digest-pinned capture
+        # reference; recover the exact original packet page by page like the
+        # automation-cadence consumers instead of treating the envelope as a
+        # quota decision.
+        pages, offset = [], 0
+        while True:
+            page = json.loads(subprocess.run([*invocation, "-m", "loopx.cli", "--registry",
+                str(args["registry_path"]), "--format", "json", "quota", "context-read",
+                "--reference-file", payload["reference_file"], "--page-bytes", "262144",
+                "--max-page-output-bytes", "262144", "--offset", str(offset)],
+                cwd=ROOT, text=True, capture_output=True, timeout=90).stdout)
+            pages.append(page["content"])
+            if page.get("eof") is True:
+                break
+            offset = page["next_offset"]
+        return json.loads("".join(pages))
     return payload
 
 
@@ -102,14 +119,10 @@ def test_source_cli_preview_is_private_and_performs_no_recall_or_claim(reconnect
     result = resume.run_room_resume(**kwargs, execute=False)
     assert result["ok"] and result["status"] == "planned", json.dumps(result)
     saved = tmp_path / "admitted.json"
-    guard = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
-        "--format", "json", "quota", "should-run", "--goal-id", GOAL, "--agent-id", "agent-a",
-        "--codex-app", "--turn-instance-id", TURN, "--available-capability", "network"],
-        cwd=ROOT, text=True, capture_output=True)
-    assert guard.returncode == 0, guard.stdout + guard.stderr
-    admitted = json.loads(guard.stdout)
+    admitted = native_cli(args, "quota", "should-run", "--goal-id", GOAL, "--agent-id", "agent-a",
+        "--codex-app", "--turn-instance-id", TURN, "--available-capability", "network")
     assert admitted["ok"] and admitted["heartbeat_receipt"]["status"] == "replayed", admitted
-    saved.write_text(guard.stdout)
+    saved.write_text(json.dumps(admitted))
     proc = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
         "--format", "json", "goal-channel", "work", "resume", "--goal-id", GOAL, "--agent-id", "agent-a",
         "--turn-instance-id", TURN, "--quota-decision-json", str(saved)], cwd=ROOT, text=True, capture_output=True)

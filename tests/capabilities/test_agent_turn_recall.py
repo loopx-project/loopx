@@ -692,7 +692,7 @@ def test_selected_receipt_identity_transport_failure_stops_before_provider(
     decision = bound_quota_decision()
     monkeypatch.setattr(recall_cli, "resolve_reward_memory_experiment", lambda **_kwargs: ({"status": "available"}, config))
     monkeypatch.setattr(recall_cli, "_goal_repo", lambda *_args: tmp_path)
-    monkeypatch.setattr(recall_cli, "_quota_decision", lambda *_args: decision)
+    monkeypatch.setattr(recall_cli, "load_turn_quota_decision", lambda *_args: decision)
 
     def unavailable(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("private runtime startup detail")

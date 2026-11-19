@@ -2,7 +2,9 @@
 import json
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -20,13 +22,16 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
     source["goals"][0]["source_registry"] = str(args["registry_path"])
     (args["runtime_root"] / "registry.global.json").write_text(json.dumps(source))
     monkeypatch.setattr(ingress, "resolve_extension_activation", lambda *a, **k: {"enabled": True})
-    transport_state = {"fail_update": False, "readable": True, "member": True}
+    transport_state = {"fail_update": False, "readable": True, "member": True, "delay_chat_get_until": None}
 
     def runner(argv, cwd, timeout):
         payload = None
         if "auth" in argv:
             return room(argv, cwd, timeout)
         if "chats" in argv and "get" in argv:
+            delayed_until = transport_state["delay_chat_get_until"]
+            if delayed_until is not None:
+                time.sleep(max(0.0, (delayed_until - datetime.now(timezone.utc)).total_seconds()))
             payload = {"data": {"tenant_key": "room-fixture-tenant", "chat_id": "oc_room_fixture"}}
         elif "+chat-members-list" in argv and "--member-types" in argv and argv[argv.index("--member-types") + 1] == "user":
             payload = {"data": {"items": [{"open_id": "ou_room_owner", "tenant_key": "room-fixture-tenant"}]
@@ -57,10 +62,10 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
         goal_id=GOAL, runner=runner)
     revision = snapshot(args)["provider_revision"]
 
-    def offer(actor="agent-a", key="room-offer-fixture", execute=True):
+    def offer(actor="agent-a", key="room-offer-fixture", execute=True, expires_at="2030-01-01T00:00:00Z"):
         return ingress.run_room_claim_offer(**offer_args, actor_id=actor, command="offer", execute=execute,
             todo_id=TODO, expected_revision=revision, idempotency_key=key,
-            principals=["lark:ou_room_owner"], expires_at="2030-01-01T00:00:00Z")
+            principals=["lark:ou_room_owner"], expires_at=expires_at)
 
     def event(result):
         mid = next(m["message_id"] for m in room.messages
@@ -149,6 +154,72 @@ def test_final_native_expiry_refusal_preserves_offer_message_and_authority(offer
     assert snapshot(args) == before
     assert json.dumps(room.messages) == messages
     assert path.read_bytes() == original_offer
+
+
+def _operation_receipt(args, operation_id):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    return effect_runtime_result("coordination.local_authority.operation_receipt", {
+        "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+        "runtime_root": str(args["runtime_root"]), "goal_id": GOAL, "operation_id": operation_id,
+    })
+
+
+@pytest.mark.parametrize("delay_stage", ["card_read", "delivery_preflight"])
+def test_offer_expired_during_provider_reads_cannot_claim(offered, monkeypatch, delay_stage):
+    """Real-clock deadline crossing: an offer that was valid at callback entry
+    must not produce a canonical claim, receipt or room effect when provider
+    reads push the attempt past its declared expiry."""
+    args, room, _, _, offer, event, callback_args, transport = offered
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=1.2)
+    prepared = offer(expires_at=deadline.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert prepared["ok"], prepared
+    path = args["runtime_root"] / "room-claim-offers" / (prepared["request_id"] + ".json")
+    original_offer = path.read_bytes()
+    before, messages = snapshot(args), json.dumps(room.messages)
+    receipt_before = _operation_receipt(args, json.loads(original_offer)["request"]["idempotency_key"])
+    assert receipt_before["status"] == "missing", receipt_before
+    cross_after = deadline + timedelta(seconds=0.3)
+
+    if delay_stage == "card_read":
+        real_read = ingress.read_callback_card_content
+
+        def slow_read(**kwargs):
+            time.sleep(max(0.0, (cross_after - datetime.now(timezone.utc)).total_seconds()))
+            return real_read(**kwargs)
+
+        monkeypatch.setattr(ingress, "read_callback_card_content", slow_read)
+    else:
+        # The delivery preflight inside the claim facade re-verifies the route
+        # through the same provider; a slow chat read here also crosses the
+        # deadline after callback admission already passed.
+        transport["delay_chat_get_until"] = cross_after
+    with pytest.raises(ingress.RoomClaimCallbackError) as rejected:
+        ingress.handle_room_claim_callback(event(prepared), **callback_args)
+    assert rejected.value.code == "offer_expired"
+    # Refusal preserves the full canonical state, revision, operation receipt
+    # and room messages; only the wall clock moved.
+    assert snapshot(args) == before
+    assert json.dumps(room.messages) == messages
+    assert path.read_bytes() == original_offer
+    assert _operation_receipt(args, json.loads(original_offer)["request"]["idempotency_key"]) == receipt_before
+
+
+def test_unexpired_offer_still_claims_after_the_same_reads(offered):
+    """Control for the real-clock crossing above: without an expiry crossing,
+    the same callback path still yields exactly one canonical acceptance."""
+    args, room, _, _, offer, event, callback_args, _ = offered
+    prepared = offer()  # fixture default expiry stays in the future
+    before = snapshot(args)
+    result = ingress.handle_room_claim_callback(event(prepared), **callback_args)
+    assert result["canonical_claim_accepted"] is True, result
+    after = snapshot(args)
+    assert after["provider_revision"] != before["provider_revision"]
+    assert after["todos"][0]["claimed_by"] == "agent-a"
+    receipt = _operation_receipt(args, json.loads(
+        (args["runtime_root"] / "room-claim-offers" / (prepared["request_id"] + ".json")).read_bytes()
+    )["request"]["idempotency_key"])
+    assert receipt["status"] == "found", receipt
 
 
 @pytest.mark.parametrize("rejection", ["principal", "grant", "actor", "binding", "message", "app", "card", "expiry", "membership", "route"])
