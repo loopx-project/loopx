@@ -49,17 +49,20 @@ def published_review_model(body: object) -> tuple[str, str] | None:
 
 
 def needs_cross_model_review(
-    *, family: str, history: dict[str, Any], independent_review_ids: Sequence[int],
+    *, family: str, history: dict[str, Any],
+    independent_coverage_ids: Sequence[int], independent_activity_ids: Sequence[int],
     model_reports: Sequence[tuple[str, str] | None],
 ) -> bool:
     """Detect missing model coverage from one complete exact-head snapshot.
 
-    Interpret provenance for queue work only. The existing history owner
-    still determines whether an account supplies independent review evidence.
+    The history owner supplies current account activity and qualified
+    conclusions. Another family's submission can trigger a second opinion.
+    Suppressing it requires qualified coverage from the invoking family.
     """
     author = history["author"].casefold()
     head = history["head"].casefold()
-    independent_ids = set(independent_review_ids)
+    coverage_ids = set(independent_coverage_ids)
+    activity_ids = set(independent_activity_ids)
     other_family_review = False
     for row, declared in zip(history["reviews"], model_reports, strict=True):
         if (row["head"].casefold() != head or row["state"] not in
@@ -79,8 +82,9 @@ def needs_cross_model_review(
                     # still prevents repeat assignment to the same model.
                     return False
             continue
-        if review_id in independent_ids:
-            if reviewed_family == family:
+        if reviewed_family == family:
+            if review_id in coverage_ids:
                 return False
+        elif review_id in coverage_ids or review_id in activity_ids:
             other_family_review = True
     return other_family_review

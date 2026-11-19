@@ -33,8 +33,8 @@ function effectiveOpinions<T extends Opinion>(reviews: readonly T[], author: str
   return [...latest.values()];
 }
 
-/** Submitted review activity covers duplicate work, independently of whether
- * its body earns a qualified approval. Comments here are formal review events;
+/** Submitted review activity establishes account-level evidence. Model coverage
+ * also requires a qualified conclusion. Comments here are formal review events;
  * issue comments do not enter this history. Dismissal retires only that actor. */
 function independentReviewEvidence(reviews: readonly ProviderOpinion[],
   complete: boolean, author: string | null, head: string, includeCoverage: boolean): JsonObject {
@@ -72,7 +72,10 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
     grants_approval: false, grants_merge_authority: false,
   };
   if (submitted) {
-    const coverage = new Set(active.map(row => row.id));
+    // A complete COMMENTED review can cover a model without a formal opinion.
+    const validCoverageConclusion = (row: ProviderOpinion) => row.conclusion.valid === true
+      || row.state === "COMMENTED" && row.source.review_body_valid === true;
+    const coverage = new Set(active.filter(validCoverageConclusion).map(row => row.id));
     const logins = new Set(active.map(row => row.login));
     const formalStates = new Map<string, ReviewState>();
     // Keep attributable formal reviews while the same account and head still
@@ -90,8 +93,9 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
         continue;
       }
       formalStates.set(row.login, row.state);
-      if (qualifies(row) && row.conclusion.valid === true) coverage.add(row.id);
+      if (qualifies(row) && validCoverageConclusion(row)) coverage.add(row.id);
     }
+    evidence.independent_review_activity_ids = active.map(row => row.id);
     evidence.independent_coverage_review_ids = [...coverage];
   }
   return evidence;

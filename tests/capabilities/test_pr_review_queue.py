@@ -877,6 +877,25 @@ def test_shared_login_history_needs_valid_evidence_for_each_formal_review(
     assert _model_queue_row(pr)["review_action_kind"] == "rereview_pull_request_exact_head"
 
 
+@pytest.mark.parametrize("state", ["COMMENTED", "APPROVED"])
+def test_latest_review_with_unqualified_body_does_not_cover_its_model(state: str) -> None:
+    login = "shared-peer"
+    prior = _github_model_review(10, login=login, family="Gemini", state="APPROVED")
+    latest = _github_model_review(11, login=login, family="gpt-6.2-sol", state=state)
+    latest["body"] = str(latest["body"]).splitlines()[0] + "\n\nLooks good."
+    pr = _github_model_pr([prior, latest], reviewDecision="APPROVED")
+
+    ordinary = _model_queue_row(pr, family=None)
+    gpt = _model_queue_row(pr)
+    assert gpt["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert gpt["review_plan"] and gpt["evidence_commands"]
+    assert gpt["review_conclusion"] == ordinary["review_conclusion"]
+    assert gpt["independent_review"] == ordinary["independent_review"]
+    assert gpt["independent_review"]["review_id"] == 11
+    assert gpt["independent_review"]["state"] == state
+    assert _model_queue_row(pr, family="gemini") == ordinary
+
+
 @pytest.mark.parametrize("line,reason", [
     (
         "model_agent | model=gpt-6.2-sol | provider=OpenAI | source=runtime_reported "
