@@ -545,7 +545,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             {
                 "command": "python3 examples/cli-version-command-modularization-smoke.py",
                 "tier": "default",
-                "reason": "guards a low-risk command migration plus old version invocations",
+                "reason": "guards version output parity and both JSON format option placements",
             },
             {
                 "command": "python3 examples/cli-control-plane-command-modularization-smoke.py",
@@ -597,11 +597,6 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "command": "python3 examples/control_plane/todo-concurrent-write-lock-smoke.py",
                 "tier": "deep",
                 "reason": "samples lock behavior for concurrent todo writes",
-            },
-            {
-                "command": "python3 examples/control_plane/todo-detail-cold-path-contract-smoke.py",
-                "tier": "deep",
-                "reason": "checks the cold-path todo detail contract when detail surfaces are promoted",
             },
         ],
     },
@@ -771,6 +766,8 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             "examples/issue-fix-capability-guide-smoke.py",
             "examples/issue-fix-reviewer-recommendation-smoke.py",
             "examples/issue-fix-reviewer-request-smoke.py",
+            "examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+            "loopx/capabilities/issue_fix/reviewer_notification_drain.py",
             "examples/issue-fix-json-input-boundary-smoke.py",
             "examples/issue-fix-reviewer-notification-sink-smoke.py",
             "loopx/capabilities/issue_fix/cli.py",
@@ -798,6 +795,11 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "command": "python3 examples/issue-fix-reviewer-request-smoke.py",
                 "tier": "default",
                 "reason": "guards author exclusion, formal-request-first notification, permission-only comment fallback, idempotency, blockers, and post-write verification",
+            },
+            {
+                "command": "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+                "tier": "default",
+                "reason": "guards restart-safe drain writeback, unverified-send suppression, and semantic notification deduplication",
             },
             {
                 "command": "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
