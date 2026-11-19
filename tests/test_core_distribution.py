@@ -65,6 +65,19 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
         assert (staged / "loopx" / name).read_bytes() == (REPOSITORY / "loopx" / name).read_bytes()
     assert not (staged / ".loopx").exists()
     assert not (staged / "tests").exists()
+    recall = staged / "loopx/capabilities/agent_turn_recall"
+    for name in ("core.py", "cli.py"):
+        assert not (recall / name).exists()
+    for name in ("catalog_entry.py", "runtime.py"):
+        assert (recall / name).is_file()
+    review = staged / "loopx/capabilities/pr_review_queue"
+    assert {path.name for path in review.iterdir()} == {
+        "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
+        "order.py", "scheduling.py", "README.md",
+    }
+    assert not (staged / "loopx/cli_commands/pr_review.py").exists()
+    assert not (staged / "loopx/pr_review.py").exists()
+    assert not (staged / "loopx/pr_review_merge_readiness.py").exists()
 
 
 @pytest.fixture
@@ -312,6 +325,19 @@ def test_installed_core_catalog_entries_have_executable_parsers(core_python, tmp
                 _run(core_python, [*prefix, "--help"], tmp_path)
 
 
+def test_installed_core_reports_optional_turn_recall(core_python, tmp_path):
+    detail = _run(core_python, ["capability", "show", "agent-turn-recall", "--format", "json"], tmp_path)
+    record = json.loads(detail.stdout)["capability"]
+    assert record["provider_id"] == "loopx"
+    assert record["default_enabled"] is False
+    assert record["provider_state"] == {"declared": True, "installed": False, "enabled": False, "ready": False}
+    assert "loopx-capability-agent-turn-recall" in record["next_real_step"]
+    refusal = _run(core_python, ["agent-turn-recall", "--help"], tmp_path, expected=2)
+    assert "unavailable in the standalone core" in refusal.stderr
+    assert "loopx-capability-agent-turn-recall" in refusal.stderr
+    assert not list(tmp_path.iterdir())
+
+
 def test_installed_core_deep_doctor_verifies_distribution_ownership(core_python, tmp_path, monkeypatch):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -546,6 +572,32 @@ def test_installed_core_goal_lifecycle_respects_outer_controller(core_python, ta
     assert json.loads(blocked.stderr)["error_code"] == "kunluncode_outer_controller_write_owned"
     assert (registry.read_bytes(), (runtime / "registry.global.json").read_bytes()) == before
     assert _spends(runtime) == 0 and not (workspace / "host-invocations").exists()
+
+
+@pytest.mark.parametrize("ingest", [False, True])
+def test_installed_core_completes_turn_with_configured_optional_recall(core_python, task, ingest):
+    from tests.control_plane.reward_memory_host_fixture import enable_live_memory
+
+    workspace, runtime, registry, arguments = task
+    enable_live_memory(registry, ingest=ingest)
+    host_index = arguments.index("--host-adapter-command-json") + 1
+    host = workspace / "recall-host.py"
+    host.write_text(HOST_SOURCE.replace(
+        "request=json.load(sys.stdin)\n", """request=json.load(sys.stdin)
+pathlib.Path('recall-readback.json').write_text(json.dumps(request.get('reward_memory_recall')))
+""",
+    ))
+    arguments[host_index] = json.dumps([core_python, "-I", str(host)])
+    execution = subprocess.run([core_python, "-I", "-m", "loopx.entrypoint", *arguments],
+        cwd=workspace, env=_environment(core_python), capture_output=True, text=True, timeout=90)
+    assert execution.returncode == 0, (execution.stdout, execution.stderr)
+    _assert_committed(core_python, workspace, runtime, json.loads(execution.stdout))
+    recall = json.loads((workspace / "recall-readback.json").read_text())
+    assert recall["status"] == "runtime_unavailable"
+    assert recall["reason_code"] == "automatic_recall_not_installed"
+    assert recall["provider_call_count"] == 0 and recall["context"] is None
+    assert recall["experiment"]["automatic_ingest"] is ingest
+    assert ("outcome_ingest_reconciliation" in recall) is ingest
 
 
 def _assert_committed(core_python, workspace, runtime, result):
