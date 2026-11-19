@@ -4,7 +4,6 @@ import json
 import sys
 from pathlib import Path
 
-from loopx.capabilities.goal_closeout.hooks import GOAL_CLOSEOUT_LEDGER_FILENAME
 from loopx.capabilities.goal_closeout.machine_defaults import (
     GOAL_CLOSEOUT_CONFIGURATION_SCHEMA,
 )
@@ -16,6 +15,7 @@ from loopx.capabilities.machine_configuration.store import (
 )
 from loopx.control_plane.goals.activation_service import set_goal_activation_state
 from loopx.global_registry import retire_global_registry_goals, sync_project_registry_to_global
+from loopx.lifecycle.goal_closeout import GOAL_CLOSEOUT_LEDGER_FILENAME
 from loopx.runtime import archive_runtime_goal
 
 
