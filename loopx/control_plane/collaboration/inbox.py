@@ -223,7 +223,10 @@ def pending(
 
 def _pending_result(root, snapshot, scope, operation_cursor):
     result = snapshot["result"]
-    if "request_id" in result or snapshot.get("completed") or snapshot.get("native_child_continuation"):
+    # A completed request page has no read effects left, but an explicitly
+    # requested operation page still has its own independent cursor.
+    if ("request_id" in result or snapshot.get("native_child_continuation")
+            or (snapshot.get("completed") and operation_cursor is None)):
         return result
     from .operation_handoff import pending_operation_handoffs
 

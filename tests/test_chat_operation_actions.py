@@ -1194,8 +1194,9 @@ def test_recovery_binding_revocation_cannot_split_report_validation_from_commit(
 def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
     tmp_path: Path,
 ) -> None:
-    import subprocess
-    import sys
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.control_plane.collaboration.peers import request as request_peer
 
     service, store = _service(tmp_path)
     operation_ids = set()
@@ -1227,32 +1228,17 @@ def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
     cursor = inbox["operation_handoff_next_cursor"]
     assert cursor == inbox["operation_handoff_overflow"]["next_cursor"]
     before = store.path.read_bytes()
-    process = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "loopx.cli",
-            "--format",
-            "json",
-            "--registry",
-            str(service.registry_path),
-            "--runtime-root",
-            str(store.root.parent.parent),
-            "manager-inbox",
-            "read",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            EXECUTION_ACTOR["agent_id"],
-            "--operation-cursor",
-            cursor,
-        ],
-        text=True,
-        capture_output=True,
-        check=True,
-        timeout=30,
-    )
-    rest = json.loads(process.stdout)
+    def read_inbox(*options):
+        process = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json",
+             "--registry", str(service.registry_path), "--runtime-root", str(store.root.parent.parent),
+             "manager-inbox", "read", "--goal-id", GOAL_ID, "--agent-id", EXECUTION_ACTOR["agent_id"],
+             *options],
+            text=True, capture_output=True, check=True, timeout=30,
+        )
+        return json.loads(process.stdout)
+
+    rest = read_inbox("--operation-cursor", cursor)
     assert len(rest["operation_handoffs"]) == 2
     assert rest["operation_handoff_next_cursor"] is None
     assert rest["operation_handoff_pending_count"] == 22
@@ -1277,6 +1263,35 @@ def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
         pending(
             store.root.parent.parent, GOAL_ID, "other-agent", operation_cursor=cursor
         )
+
+    root = store.root.parent.parent
+    registry = json.loads(service.registry_path.read_text())
+    registry["goals"][0]["coordination"]["registered_agents"].append("fixture-reviewer")
+    service.registry_path.write_text(json.dumps(registry))
+    peer = request_peer(root, service.registry_path, GOAL_ID, EXECUTION_ACTOR["agent_id"],
+        "fixture-reviewer", "review-fixture", {"schema_version": "collaboration_brief_v0",
+            "purpose": "Confirm the test boundary", "context": "Isolated review fixture",
+            "constraints": [], "inputs": [], "acceptance": ["Report the observations"],
+            "return_requirement": "Reply to the requester"})
+    peer_id = peer["request_id"]
+    acknowledge(root, GOAL_ID, "fixture-reviewer", peer_id, "adopt", "Fixture inspection")
+    report(root, GOAL_ID, "fixture-reviewer", peer_id, "conclusion", "The isolated check passed.")
+    first = read_inbox("--attention-only")
+    assert [row["request_id"] for row in first["peer_returns"]["items"]] == [peer_id]
+    request_cursor = first["next_cursor"]
+    operation_cursor = first["operation_handoff_next_cursor"]
+    assert request_cursor and operation_cursor
+    outgoing = read_inbox("--attention-only", "--cursor", request_cursor)
+    operation = read_inbox("--attention-only", "--operation-cursor", operation_cursor)
+    combined = read_inbox("--attention-only", "--cursor", request_cursor, "--operation-cursor", operation_cursor)
+    assert combined["open_request_summaries"] == outgoing["open_request_summaries"]
+    assert [row["request_id"] for row in combined["open_request_summaries"]] == [peer_id]
+    assert "operation_handoffs" not in outgoing
+    assert len(operation["operation_handoffs"]) == 2
+    assert combined["operation_handoffs"] == operation["operation_handoffs"]
+    assert combined["operation_handoff_next_cursor"] is None and combined["operation_handoff_pending_count"] == 22
+    assert combined["items"] == [] and "peer_returns" not in combined
+    assert store.path.read_bytes() == before
 
 
 def test_operation_preview_arms_one_canonical_gate_and_local_apply_cannot_claim(
