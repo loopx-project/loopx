@@ -1144,7 +1144,7 @@ class ChatExternalConversations:
             response = adapter.start_turn(text, lambda kind, payload: event_sink(kind, payload)
                 if kind not in {"answer.delta", "answer.final"} else None)
             external._checked_answer_review(session, turn)
-            if any(response.get(key) for key in ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work")):
+            if any(response.get(key) for key in ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work", "memory_preferences")):
                 raise ValueError("an answer review cannot admit actions or business continuation")
             if answer_review.get("context_correction") and response.get("gate") is None:
                 response = {**response, "gate": {"kind": "evidence_gap",
@@ -1186,7 +1186,7 @@ class ChatExternalConversations:
         handoffs = response.get("context_handoff")
         expected = continuation["metadata_handoffs"]
         if (not isinstance(handoffs, list) or len(handoffs) != len(expected)
-                or any(response.get(key) for key in ("gate", "proposals", "protected_action", "goal_draft", "unfinished_work"))
+                or any(response.get(key) for key in ("gate", "proposals", "protected_action", "goal_draft", "unfinished_work", "memory_preferences"))
                 or any(set(item) != {"goal_id", "agent_id", "brief"}
                     or any(item.get(key) != original[key] for key in ("goal_id", "agent_id"))
                     or item["brief"].get("context") != original["brief"]

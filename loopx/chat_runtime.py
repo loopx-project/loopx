@@ -2038,6 +2038,14 @@ class ChatRuntimeController:
                 return
             if adapter.upstream_thread_id != str((self.store.load_session(session_id) or {}).get("upstream_thread_id") or ""):
                 self.store.update_session(session_id, upstream_thread_id=adapter.upstream_thread_id)
+            if not native_loopx and scope.get("bound_steward") is True:
+                try:
+                    from .capabilities.steward_memory.runtime import commit_steward_memory_after_turn
+                    memory_receipt = commit_steward_memory_after_turn(runtime_root=self.coordination_runtime_root, session=session, scope=scope, turn=current_turn, turn_id=turn_id, user_message=str(current_turn.get("message") or ""), response=response)
+                    if memory_receipt is not None:
+                        self.store.append_event(session_id, turn_id, kind="steward.memory", payload=memory_receipt)
+                except Exception:  # noqa: BLE001 - memory writeback must fail open without breaking Turn completion.
+                    pass
             self.store.finalize_managed_turn_completion(
                 session_id,
                 turn_id,

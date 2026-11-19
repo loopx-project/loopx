@@ -328,6 +328,11 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
     if scope.get("bound_steward") is True and isinstance(context.get("bound_steward"), dict):
         from ..capabilities.native_chat.external_conversations import ChatExternalConversations
         context["bound_steward"]["executions"] = ChatExternalConversations(controller).commission_evidence(session)
+        if not observation_only:
+            from ..capabilities.steward_memory.runtime import recall_steward_memory_for_turn
+            recalled_memory = recall_steward_memory_for_turn(runtime_root=runtime_root, session=session, scope=scope, turn=turn, message=str(turn.get("message") or ""))
+            if recalled_memory is not None:
+                context["steward_memory"] = recalled_memory
     controller.store.append_event(session_id, turn_id, kind="manager.context", payload=context)
     if observation_only:
         # The scoped reader validates its full current source before/after.
