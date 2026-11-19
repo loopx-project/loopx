@@ -597,6 +597,7 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
         "python3 examples/issue-fix-capability-guide-smoke.py",
         "python3 examples/issue-fix-reviewer-recommendation-smoke.py",
         "python3 examples/issue-fix-reviewer-request-smoke.py",
+        "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
         "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
     ], reviewer_profile
     assert all(check["tier"] == "default" for check in reviewer_profile["checks"]), reviewer_profile
