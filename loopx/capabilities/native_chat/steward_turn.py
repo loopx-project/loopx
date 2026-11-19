@@ -7,7 +7,7 @@ read-only native control client. Chat retains its own execution fence.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, ExitStack, nullcontext
 import hashlib
 import json
@@ -21,6 +21,20 @@ from ...file_lock import exclusive_file_lock
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
 
 _USER_ACTION_DEDUPE_KEY = re.compile(r"^[a-z0-9][a-z0-9._:@/-]{0,119}$")
+_REPORT_VALIDATOR_PREFIX = (
+    "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
+    "validate_private_generation(Path("
+)
+
+
+def _same_report_validator_command(frozen_cmd: Any, request_cmd: Any) -> bool:
+    """Allow report validation commands whose only drift is the host Python path."""
+    return (isinstance(frozen_cmd, list) and isinstance(request_cmd, list)
+        and len(frozen_cmd) == 3 and len(request_cmd) == 3
+        and all(isinstance(part, str) and bool(part) for part in [*frozen_cmd, *request_cmd])
+        and frozen_cmd[1] == "-c" and request_cmd[1] == "-c"
+        and frozen_cmd[2] == request_cmd[2] and frozen_cmd[2].startswith(_REPORT_VALIDATOR_PREFIX)
+        and frozen_cmd[2].endswith("))"))
 
 
 def native_steward_client_id(actor: Mapping[str, Any], turn_instance_id: str) -> str:
@@ -547,7 +561,13 @@ class StewardTurnHost:
             frozen = {key: value for key, value in (existing.get("loopx_request") or {}).items()
                 if key not in {"monitor_lease_version", "monitor_deadline"}}
             frozen.setdefault("work_kind", "native_turn")
-            if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
+            comparable_frozen = (
+                {**frozen, "validation_command": request["validation_command"]}
+                if work_kind == "report" and _same_report_validator_command(
+                    frozen.get("validation_command"), request.get("validation_command"))
+                else frozen
+            )
+            if comparable_frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
                 raise ValueError("native steward request identity conflict")
             if work_kind == "report":
                 retained = report_turn(self.store, actor, report_window)
