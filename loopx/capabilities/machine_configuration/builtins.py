@@ -61,6 +61,11 @@ _BUILTIN_NAMESPACES = (
         "loopx.capabilities.steward_executor.machine_defaults",
         "steward_executor_machine_configuration_namespace",
     ),
+    (
+        "steward_memory",
+        "loopx.capabilities.steward_memory.machine_defaults",
+        "steward_memory_machine_configuration_namespace",
+    ),
 )
 
 

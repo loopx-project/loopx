@@ -860,6 +860,35 @@ def normalize_agent_response(
 
     handoff = normalize_handoff(payload.get("context_handoff"))
     protected = tuple(protected_paths)
+    memory_prefs: list[dict[str, Any]] = []
+    raw_prefs = payload.get("memory_preferences")
+    if raw_prefs is not None:
+        if not isinstance(raw_prefs, list):
+            raise ValueError("memory_preferences must be a list")
+        redacted_prefs = [
+            {
+                **{str(k): v for k, v in item.items() if k != "content"},
+                **(
+                    {"content": redact_response_markdown(str(item["content"]), protected_paths=protected)}
+                    if isinstance(item.get("content"), str)
+                    else ({"content": item["content"]} if "content" in item else {})
+                ),
+            }
+            if isinstance(item, Mapping)
+            else item
+            for item in raw_prefs
+        ]
+        from .control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+        try:
+            memory_prefs = list(
+                effect_runtime_result(
+                    "collaboration.steward.memory_preferences",
+                    {"memory_preferences": redacted_prefs},
+                ).get("preferences")
+                or []
+            )
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
     message = redact_response_markdown(
         str(payload.get("message") or ""),
         protected_paths=protected,
@@ -873,6 +902,7 @@ def normalize_agent_response(
             or unfinished.get("effects_settled") is not True
             or any(not isinstance(unfinished.get(key), str) or not 1 <= len(unfinished[key].strip()) <= 1000
                    for key in ("remaining", "dependency"))
+            or bool(memory_prefs)
             or any(payload.get(key) for key in ("gate", "protected_action", "goal_draft", "context_handoff", "proposals"))):
         unfinished = None
     else:
@@ -882,6 +912,7 @@ def normalize_agent_response(
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
         "message": message,
+        **({"memory_preferences": memory_prefs} if memory_prefs else {}),
         **({"unfinished_work": unfinished} if unfinished else {}),
         **({"goal_draft": goal_draft} if goal_draft else {}),
         **({"context_handoff": handoff} if handoff else {}),
