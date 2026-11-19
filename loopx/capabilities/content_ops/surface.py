@@ -576,11 +576,15 @@ def validate_content_ops_surface(surface: Mapping[str, object]) -> dict[str, obj
 
     for item in angle_candidates:
         _validate_item_fields(errors, item, specs["angle_candidates"])
+        angle_id = item.get("angle_id")
         raw_source_ids = item.get("source_item_ids")
-        if isinstance(raw_source_ids, Sequence) and not isinstance(raw_source_ids, (str, bytes)):
-            for source_id in raw_source_ids:
-                if str(source_id) not in source_ids:
-                    errors.append(f"angle {item.get('angle_id')} references unknown source {source_id}")
+        if raw_source_ids is not None:
+            if not isinstance(raw_source_ids, Sequence) or isinstance(raw_source_ids, (str, bytes, bytearray)):
+                errors.append(f"angle {angle_id} has invalid source_item_ids")
+            else:
+                for source_id in raw_source_ids:
+                    if str(source_id) not in source_ids:
+                        errors.append(f"angle {angle_id} references unknown source {source_id}")
 
     for item in draft_items:
         _validate_item_fields(errors, item, specs["draft_items"])
