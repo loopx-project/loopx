@@ -298,3 +298,63 @@ def test_external_conversations_recover_does_not_retain_delivered_image_payloads
 
     retained_bytes = sum(stat.size_diff for stat in after.compare_to(before, "lineno") if stat.size_diff > 0)
     assert retained_bytes < 512 * 1024, f"recover() retained {retained_bytes} bytes of delivered image payloads"
+
+
+def test_private_conversations_caches_historical_repairs_and_staggers_recovery_probes(tmp_path, monkeypatch):
+    from loopx.extensions.lark import private_conversations as private
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    repairs_dir = tmp_path / "historical-answer-images"
+    repairs_dir.mkdir()
+    _atomic_write_json(repairs_dir / f"{_hex_ref(1)}.json", {"turn_id": "t1"})
+
+    clock = [100.0]
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport._historical_image_probe_at = {}
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _ref: False)
+
+    for idx in range(2, 62):
+        ref = _hex_ref(idx)
+        _atomic_write_json(
+            tmp_path / f"{ref}.json",
+            {
+                "status": "delivered",
+                "request_ref": ref,
+                "session_id": f"sess_{idx}",
+                "turn_id": f"turn_{idx}",
+                "profile": "fixture",
+                "event": {"message_id": f"om_{idx}"},
+            },
+        )
+
+    glob_calls = 0
+    original_glob = Path.glob
+
+    def counted_glob(self: Path, pattern: str):
+        nonlocal glob_calls
+        if self == repairs_dir:
+            glob_calls += 1
+        return original_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", counted_glob)
+
+    assert transport.pending_delivery_paths() == []
+    assert glob_calls == 1
+    assert transport.pending_delivery_paths() == []
+    assert glob_calls == 1, "unchanged historical-answer-images dir must hit mtime cache without globbing"
+
+    # Adding a new repair manifest updates dir mtime_ns and refreshes the cached set once.
+    _atomic_write_json(repairs_dir / f"{_hex_ref(2)}.json", {"turn_id": "t2"})
+    assert transport.pending_delivery_paths() == [tmp_path / f"{_hex_ref(2)}.json"]
+    assert glob_calls == 2
+
+    # Delivered probe deadlines must stagger across [60, 120)s rather than locking every file onto T+60.
+    deadlines = set(transport._context_recovery_probe_at.values())
+    assert len(deadlines) > 10
+    assert all(160.0 <= value < 220.0 for value in deadlines)

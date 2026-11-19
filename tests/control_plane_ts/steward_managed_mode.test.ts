@@ -82,6 +82,45 @@ test("identity-refused watches need independent collector evidence and retain cu
   }
 });
 
+test("signal-unavailable custom monitors admit exactly one zero-effect recovery after manager_context", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.signal", todo_id: "todo_signal_watch", validation_command: null,
+    monitor_deadline: "2026-11-19T13:21:54Z", monitor_lease_version: 0};
+  const original = {turn_id: "2".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_error",
+    error: "steward monitor external signal source temporarily unavailable",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, loopx_request: prior};
+  const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+    phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true};
+  const monitor = {todo_id: "todo_signal_watch", task_class: "continuous_monitor",
+    target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
+    next_due_at: prior.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+
+  for (const changed of [
+    {contexts: []},
+    {contexts: [{schema_version: "wrong_schema"}]},
+    {contexts: [...basis.contexts, ...basis.contexts]},
+    {phases: [{phase: "model_start"}]},
+    {event_kinds: ["turn.queued", "agent.phase", "turn.failed"]},
+    {poll_absent: false},
+    {lease_available: false},
+    {original: {...original, error: "other transient failure"}},
+    {original: {...original, upstream_turn_id: "model-started"}},
+    {original: {...original, loopx_request: {...prior, monitor_restart_recovery: {original_turn_id: "3".repeat(32)}}}},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...changed}}));
+  }
+});
+
 test("monitor configuration retains the original actor and native Todo authority", () => {
   const {params, goal} = fixture();
   const actor = bindStewardManagedActor({...params, goal});
