@@ -940,7 +940,7 @@ path, and canary route rather than as a user-facing release baseline.
   rendering. At the frozen source, 515 public smokes and 360 affected Python
   checks passed; the authorized DS Flash/high alternative passed all 22
   scenarios twice and six contrasts, with zero failures or skips. Earlier
-  Doubao qualification failures remain unqualified; Windows execution, Apple notarization,
+  Doubao qualification failures remain unqualified. Windows execution, Apple notarization,
   authenticated Host interaction, external backend execution and sustained
   SQLite qualification remain unqualified. No paired-version benchmark uplift
   or isolated Astra causal effect is claimed.
@@ -1279,7 +1279,7 @@ PR numbers in commit titles are navigation, not a completeness check. Confirm
 that metadata coverage reaches the whole range, resolving unmatched integration
 commits through their associated merged PRs. Check an author's earlier merged
 PR history before calling a contribution first-time. Reconcile both language
-lists and their summary counts against that verified set; Refresh this evidence when the final
+lists and their summary counts against that verified set. Refresh this evidence when the final
 release range changes.
 
 Organize the remaining release note into the following stable groups. Omit an

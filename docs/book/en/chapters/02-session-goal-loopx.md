@@ -113,7 +113,7 @@ Goal-start contract keeps those choices explicit:
    `fresh_agent_registration_required` (`register_fresh_agent`), and first onboarding needs no extra
    `--new-peer`; a bound thread keeps its bound lane;
 5. continue an existing Agent only when the user explicitly selects that exact `agent_id`;
-6. runtime metadata does.
+6. an Agent name or prefix does not prove the Host surface; runtime metadata does.
 
 This lets a session continue the same project without silently impersonating the previous executor.
 

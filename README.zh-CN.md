@@ -236,7 +236,7 @@ App 为 ad-hoc 签名，尚未 notarize。Windows 预览版目前手动更新，
 | DeepSeek Harness | 安装 [DSH 原生 Plugin](packages/dsh-loopx-plugin/README.md)，在技能选择器中选 `loopx`，然后直接描述任务 |
 
 LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并引导宿主激活。
-让 Agent 回报当前 Goal、下一条 Todo 和实际续跑机制；
+让 Agent 回报当前 Goal、下一条 Todo 和实际续跑机制；生成 setup packet 不等于循环已经启动。
 持续工作需要宿主保持可用。`loopx status` 显示目标、等你处理的决策和下一条 Todo；
 `loopx doctor` 诊断安装。
 

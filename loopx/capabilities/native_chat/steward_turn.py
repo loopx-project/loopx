@@ -466,7 +466,7 @@ class StewardTurnHost:
     def recover_report_settlement(self, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]) -> None:
         """Resume only cached, validated native effects of the original report.
 
-        The
+        Neither Todo DONE nor outer Chat completion is a native commit. The
         journal owner must authorize a no-host continuation; its existing
         effect readbacks reconcile ambiguous writeback/debit outcomes.
         """

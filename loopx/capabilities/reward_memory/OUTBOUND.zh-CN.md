@@ -69,7 +69,7 @@ Provider preflight 先校验身份、群成员、mention 和 provider dry-run，
 
 OpenViking 的 Reward Memory 查询只取 L2 正文，最多多取 32 个候选；先规范化
 chunk URI、排除摘要和不可读或格式错误的记录，再填充结果上限。应用层按 scope、
-有效期和 candidate 去重后截取。其他 namespace 的查询保持原行为；
+有效期和 candidate 去重后截取。其他 namespace 的查询保持原行为；这不是全量扫描。
 
 验收应使用真实目标和消息用途的只读 preflight，检查必读记录实际出现、
 `required_guidance_complete=true` 且无外部写入；不要在消息中塞入待召回答案。

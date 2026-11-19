@@ -142,7 +142,7 @@ To add an observable field:
 
 The evidence packet is intended to be deterministic and auditable. The
 proposal is explicitly advisory. The review receipt settles whether the source
-material has been consumed; The outcome
+material has been consumed. The outcome
 receipt is append-only evidence; only a verified outcome may later become a
 Reward Memory candidate, and that candidate still follows Reward Memory review
 and activation.
@@ -490,7 +490,7 @@ The existing `max_pending_batches=N` still bounds active batches. Held history
 has a separate cap of N; new hold/restart operations stop after 2N audit records
 (at most one rollback per applicable receipt). No automatic eviction, compaction
 or repeated capacity increase is performed. At that bound, preserve/export the
-private spool and make an explicit retention decision; A hold is explicit, not an automatic fairness policy.
+private spool and make an explicit retention decision. A hold is explicit, not an automatic fairness policy.
 It can isolate a noisy source; reserved source windows additionally prevent a
 busy source from borrowing other sources' future capacity. Neither mechanism
 replaces semantic review: a full source needs oldest-batch review or explicit

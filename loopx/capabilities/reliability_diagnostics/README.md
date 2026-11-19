@@ -196,7 +196,7 @@ Empty, malformed, or timezone-free values exit with code 2, even when the ledger
 is missing, empty, or corrupt; this applies with or without `--with-receipt`.
 
 `status --with-receipt` returns both existing contracts from one ledger read.
-Omit the option to retain projection-only output. Concurrent appends are not atomic snapshots.
+Omit the option to retain projection-only output. Concurrent appends are not atomic snapshots;
 partial records remain integrity failures. See the
 [DSH/Pi assessment](../../../docs/architecture/rfcs/harness-selection-dsh-pi-v0.md)
 before wiring this full-ledger CLI into a polling surface.

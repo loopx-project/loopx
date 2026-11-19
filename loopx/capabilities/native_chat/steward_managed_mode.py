@@ -143,7 +143,7 @@ class StewardManagedMode:
                     "scheduling_enabled": False, "model_invoked": False}
 
     def health(self, binding_id: str) -> dict[str, Any]:
-        """Metadata projection only."""
+        """Metadata projection only; it neither verifies grants nor enables work."""
         try:
             binding = next(row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id)
             actor = binding.get("managed_actor")

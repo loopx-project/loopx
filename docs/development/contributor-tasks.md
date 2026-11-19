@@ -80,7 +80,8 @@ Request the closest contact before escalating to the lead maintainer.
    there is a public helper slice instead.
 
 Before claiming a row, reconcile its anchor with latest main, related PRs and
-the roadmap. The
+the roadmap. Historical rows are not proof that a missing feature remains
+unimplemented or a proposed slice is still useful. The
 [Technical Directions map](../project/technical-directions.md) owns contributor
 routing and current maturity; this board does not keep a second copy.
 
