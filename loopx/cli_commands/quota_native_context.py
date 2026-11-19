@@ -8,6 +8,8 @@ import stat
 import subprocess
 import tempfile
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,11 @@ from ..control_plane.effect_runtime import (
 from ..control_plane.quota.error_codes import (
     QuotaCommandValidationError,
     QuotaDecisionTransportError,
+)
+from ..control_plane.turn_driver.codex_execution_preparation import (
+    NativeRecoveryLeaseUnavailable,
+    guard_native_recovery_publication,
+    require_native_recovery_lease,
 )
 from ..control_plane.turn_driver.decision_capture import (
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
@@ -145,21 +152,28 @@ def project_saved_context_capture(
     full_reference = dict(reference)
     version = payload.get("schema_version")
     complete = version == COMPLETE_TURN_DECISION_VERSION
+    publication_guard: Callable[[], AbstractContextManager[None]] = nullcontext
+
+    def authority_refusal(error: Exception) -> dict[str, Any]:
+        return _saved_context_transport_failure(error, args=args, receipt=receipt,
+            recovery=full_reference, reader_argv=reader_argv, authority_unverified=True)
+
     if prepared_claim is not None:
         from ..history import load_registry
         from ..paths import resolve_runtime_root
-        from ..control_plane.turn_driver.codex_execution_preparation import require_native_recovery_lease
 
         try:
             if not complete or registry_path is None:
                 raise ValueError("Native readiness recovery requires a bound complete Turn.")
             assert_complete_turn_decision(payload)
+            registry_path = registry_path.resolve()
             runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg).resolve()
             require_native_recovery_lease(payload, claim_operation_id=prepared_claim,
-                                          registry_path=registry_path.resolve(), runtime_root=runtime_root)
+                                          registry_path=registry_path, runtime_root=runtime_root)
         except (OSError, RuntimeError, ValueError, TypeError) as exc:
-            return _saved_context_transport_failure(exc, args=args, receipt=receipt,
-                recovery=full_reference, reader_argv=reader_argv, authority_unverified=True)
+            return authority_refusal(exc)
+        publication_guard = partial(guard_native_recovery_publication, payload,
+            claim_operation_id=prepared_claim, registry_path=registry_path, runtime_root=runtime_root)
     try:
         if not complete and not is_legacy_saved_quota_decision(payload):
             if activation["enabled"]:
@@ -200,10 +214,13 @@ def project_saved_context_capture(
             navigation = quota_capture.progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
                 directory=None, reader_argv=reader_argv, captured_decision=captured_decision, page_attached=saved_page)
-            if saved_page:
-                return _saved_context_read_page(args, navigation, initial_reference=None,
-                    initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
-            return navigation
+            with publication_guard():
+                if saved_page:
+                    return _saved_context_read_page(args, navigation, initial_reference=None,
+                        initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
+                return navigation
+        except NativeRecoveryLeaseUnavailable as exc:
+            return authority_refusal(exc)
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
             if complete:
                 return _saved_context_transport_failure(exc, args=args, receipt=receipt,
@@ -264,7 +281,7 @@ def project_saved_context_capture(
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
             captured_decision=captured_decision if activation["progressive_enabled"]
                 and (args.initial_read or "sha256" in captured_decision) else None,
-            hook_session=hook_session, saved_capture=True)
+            hook_session=hook_session, saved_capture=True, publication_guard=publication_guard)
         projected = prepared.delivery
         initial_read_plan = prepared.initial_read_plan
         native_prepared = True
@@ -289,6 +306,8 @@ def project_saved_context_capture(
         mode, target = native_view["mode"], native_view.get("target")
         initial_reference = native_view.get("first_read_reference")
         native_view = model_context_reference(native_view, reader_argv=reader_argv)
+    except NativeRecoveryLeaseUnavailable as exc:
+        return authority_refusal(exc)
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         if not complete:
             raise
@@ -314,10 +333,14 @@ def project_saved_context_capture(
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + (CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if activation["enabled"] else CONTEXT_CAPTURE_READ_GUIDANCE)}
     navigation = native_view or result
-    if saved_page:
-        return _saved_context_read_page(args, navigation, initial_reference=initial_reference,
-            initial_read_plan=initial_read_plan, output_limit=output_limit, reader_argv=reader_argv)
-    return navigation
+    try:
+        with nullcontext() if native_prepared else publication_guard():
+            if saved_page:
+                return _saved_context_read_page(args, navigation, initial_reference=initial_reference,
+                    initial_read_plan=initial_read_plan, output_limit=output_limit, reader_argv=reader_argv)
+            return navigation
+    except NativeRecoveryLeaseUnavailable as exc:
+        return authority_refusal(exc)
 
 
 def _handle_context_config(

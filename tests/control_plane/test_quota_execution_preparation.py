@@ -659,6 +659,8 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     "reencoded-released-execution", "legacy-marked-released-execution",
     "ssh-same-execution", "delta-only-same-execution",
     "released-at-delivery", "ssh-released-at-delivery", "delta-released-at-delivery", "replaced-at-delivery",
+    "released-during-staging", "ssh-released-during-staging", "delta-released-during-staging",
+    "replaced-during-staging",
 ])
 def test_native_hook_replays_the_original_claim_after_guard_timeout(
     tmp_path, monkeypatch, capsys, provider, case,
@@ -681,8 +683,10 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
     capture = tmp_path / "before-claim"
     legacy = case.startswith("legacy-")
     after_ready = case.startswith("after-ready-")
+    retire_during_staging = case.endswith("-during-staging")
     retire_at_delivery = case.endswith("-at-delivery")
-    released = not case.endswith("same-execution") and not retire_at_delivery
+    refuse_delivery = retire_at_delivery or retire_during_staging
+    released = not case.endswith("same-execution") and not refuse_delivery
     scenario = "codex_app_ssh_goal" if case.startswith("ssh-") else "codex_app_heartbeat"
     host = ("--runtime-profile", scenario)
     delivery = ("--context-delivery", "off", "--delta-delivery", "auto") if case.startswith("delta-") else (
@@ -853,24 +857,54 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
                 projection = shlex.split(receipt["ready_context_command_template"].replace(
                     "<capture_sha256>", ready["capture_sha256"]))
                 assert projection[projection.index("--prepared-claim-operation-id") + 1] == original_id
+                release = ["task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
+                    "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"]]
+                replacement_args = ["task-lease", "acquire", "--goal-id", GOAL, "--todo-id", TODO,
+                    "--owner", AGENT, "--idempotency-key", "replacement-lease", "--ttl-seconds", "3600"]
                 if retire_at_delivery:
-                    retired = read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
-                        "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
+                    retired = read(*release)
                     if case == "replaced-at-delivery":
-                        replacement = read("task-lease", "acquire", "--goal-id", GOAL, "--todo-id", TODO,
-                            "--owner", AGENT, "--expected-version", str(retired["lease"]["version"]),
-                            "--idempotency-key", "replacement-lease", "--ttl-seconds", "3600")
+                        replacement = read(*replacement_args, "--expected-version", str(retired["lease"]["version"]))
                         assert replacement["lease"]["lease_epoch"] != lease["lease_epoch"]
+                if retire_during_staging:
+                    # Stage through the real publisher and let a separate canonical writer
+                    # finish before the publication transaction can validate its lease.
+                    run_projection = """
+import json
+import subprocess
+import sys
+from loopx.control_plane.quota import turn_envelope
+from loopx.entrypoint import main
+projection, release, replace = json.loads(sys.argv[1])
+prefix = projection[:projection.index("quota")]
+prepare = turn_envelope.prepare_context_delivery
+def stage_then_release(*args, **kwargs):
+    staged = prepare(*args, **kwargs)
+    result = subprocess.run([*prefix, *release], capture_output=True, check=True, timeout=20)
+    retired = json.loads(result.stdout)["lease"]
+    assert retired["status"] == "released"
+    if replace:
+        replaced = subprocess.run([*prefix, *replace, "--expected-version", str(retired["version"])],
+                                   capture_output=True, check=True, timeout=20)
+        assert json.loads(replaced.stdout)["lease"]["lease_epoch"] != retired["lease_epoch"]
+    return staged
+turn_envelope.prepare_context_delivery = stage_then_release
+raise SystemExit(main(projection[projection.index("--registry"):]))
+"""
+                    replace = replacement_args if case == "replaced-during-staging" else []
+                    projection = [sys.executable, "-c", run_projection, json.dumps([projection, release, replace])]
                 projected = subprocess.run(projection, cwd=tmp_path, capture_output=True, text=True, timeout=30)
                 view = json.loads(projected.stdout)
-                assert view["ok"] is (not retire_at_delivery) and view["recovery"]["command"]
-                assert projected.returncode == (1 if retire_at_delivery else 0)
-                if retire_at_delivery:
+                assert view["ok"] is (not refuse_delivery) and view["recovery"]["command"], projected.stderr
+                assert projected.returncode == (1 if refuse_delivery else 0)
+                if refuse_delivery:
                     assert "current" in view["reason"] and "content" not in view
                     assert source_marker.read_bytes() == marker_before
                     assert view["heartbeat_receipt"]["settlement_identity"] == before["heartbeat_receipt"]["settlement_identity"]
+                    if retire_during_staging:
+                        assert "recovery" not in codex_context._state(native)
                 reader = shlex.split(view["recovery"]["command"])
-                if not retire_at_delivery:
+                if not refuse_delivery:
                     reader += ["--select", "/interaction_contract/cli_channel/settlement_plan/identity",
                                "--select", "/heartbeat_receipt/settlement_identity"]
                 selected = subprocess.run(reader, cwd=tmp_path, capture_output=True, text=True, check=True, timeout=30)
@@ -878,7 +912,7 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
                 assert page["eof"]
                 facts = selected_context_values(page["content"])
                 identity = json.loads(original_bytes)["heartbeat_receipt"]["settlement_identity"]
-                if retire_at_delivery:
+                if refuse_delivery:
                     assert facts["/heartbeat_receipt"]["settlement_identity"] == identity
                 else:
                     assert facts["/interaction_contract/cli_channel/settlement_plan/identity"] == identity

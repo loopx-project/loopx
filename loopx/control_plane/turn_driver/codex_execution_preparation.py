@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from time import monotonic
 from typing import Any, TYPE_CHECKING
@@ -35,6 +36,10 @@ class LegacyNativePreparationCapture(ValueError):
             "If preparation is still needed, run the current quota should-run for the original Goal, "
             "Agent, Todo and Turn with a fresh capture and follow its preparation only if eligible."
         )
+
+
+class NativeRecoveryLeaseUnavailable(RuntimeError):
+    """The original lease could not authorize recovery publication."""
 
 
 def compact_execution_preparation_request(
@@ -446,6 +451,35 @@ def require_native_recovery_lease(
     current = inspect_task_lease(registry_path=registry_path, runtime_root=runtime_root, goal_id=goal, todo_id=todo)
     if current.get("active") is not True or not matches(current.get("lease")):
         raise ValueError("The original task lease is no longer current for native readiness recovery.")
+
+
+@contextmanager
+def guard_native_recovery_publication(
+    payload: Mapping[str, Any], *, claim_operation_id: str,
+    registry_path: Path, runtime_root: Path,
+) -> Iterator[None]:
+    """Serialize the local journal commit with the canonical lease writer."""
+    from ...file_lock import exclusive_mutation_file_lock
+    from ..coordination.shadow_management import (
+        require_shadow_primary_write_allowed,
+        shadow_maintenance_lock_target,
+    )
+
+    goal = payload["goal_id"]
+    with ExitStack() as locks:
+        try:
+            locks.enter_context(exclusive_mutation_file_lock(
+                shadow_maintenance_lock_target(runtime_root, goal),
+                operation="native-recovery-publication",
+            ))
+            require_shadow_primary_write_allowed(runtime_root, goal)
+            require_native_recovery_lease(
+                payload, claim_operation_id=claim_operation_id,
+                registry_path=registry_path, runtime_root=runtime_root,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            raise NativeRecoveryLeaseUnavailable(str(exc)) from exc
+        yield
 
 
 def codex_execution_preparation_readback_context(
