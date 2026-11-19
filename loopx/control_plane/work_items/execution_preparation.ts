@@ -2,6 +2,7 @@ import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {HANDOFF_MODE_RETIRED_REASON, retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
+import {LEASE_WORKSPACE_DIVERGENCE} from "./task_lease_workspace.ts";
 import {
   optionalNonEmptyString,
   requireBoolean,
@@ -37,7 +38,9 @@ function leaseFact(value: unknown, label: string): JsonObject {
     proof = {idempotency_key: key, expected_version: version};
   }
   return {status, active, ...(owner === null ? {} : {owner}),
-    ...(proof === undefined ? {} : {lease_proof: proof})};
+    ...(proof === undefined ? {} : {lease_proof: proof}),
+    ...(lease.workspace_matches === undefined ? {} :
+      {workspace_matches: requireBoolean(lease.workspace_matches, `${label}.workspace_matches`)})};
 }
 
 function claimAction(goalId: string, todoId: string, agentId: string): JsonObject {
@@ -123,6 +126,10 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
       return {...base, state: "blocked_by_conflict", delivery_allowed: false,
         reason_code: "active_lease_owned_by_other_agent", ...(owner ? {owner} : {}),
         reason: "The selected Todo has an active lease owned by another agent; do not take over its execution."};
+    }
+    if (active[0].workspace_matches === false) {
+      return {...base, state: "blocked_by_conflict", delivery_allowed: false,
+        reason_code: LEASE_WORKSPACE_DIVERGENCE.code, reason: LEASE_WORKSPACE_DIVERGENCE.reason};
     }
     return {...base, state: "ready", delivery_allowed: true,
       reason_code: "matching_active_task_lease",

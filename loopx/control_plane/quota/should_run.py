@@ -688,6 +688,7 @@ def build_quota_should_run(
             turn_instance_id=turn_instance_id,
             include_agent_todo_detail=include_agent_todo_detail,
             runtime_root=runtime_root,
+            workspace_path=workspace_path,
             goal_ref=goal_ref,
             scheduler_state_read_observer=_app_scheduler_state_read_observer(
                 direct_sources, app_scheduler_state_observer,

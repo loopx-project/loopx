@@ -1,4 +1,5 @@
-import {prepareClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
+import {ClaimWorkspaceMismatch, prepareClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
+import {LEASE_WORKSPACE_DIVERGENCE, matchesObservedLeaseWorkspace} from "../work_items/task_lease_workspace.ts";
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON,
   EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode} from "./handoff_mode_policy.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
@@ -456,6 +457,13 @@ async function executeClaimAttempt(
         result = await currentLeaseAcquisitionProof(store, {...input, owner: input.claimed_by,
           idempotency_key: key, required_handoff_mode: "hard_lease"}, result,
           (code, reason, detail = {}) => failure(code, reason, detail, "decision_rejection"));
+        if (result.execution_managed === true && (result.status === "replayed" || result.status === "recovered")) {
+          const current = canonicalAuthorityObject(result.lease, "current task lease");
+          if (!await matchesObservedLeaseWorkspace(current.write_workspace, observeWorkspace)) {
+            return failure(LEASE_WORKSPACE_DIVERGENCE.code, LEASE_WORKSPACE_DIVERGENCE.reason,
+              {todo_id: input.todo_id, original_receipt: result.original_receipt}, "decision_rejection");
+          }
+        }
       } catch (error) {
         return failure("invalid_coordination_task_lease", error instanceof Error ? error.message : "invalid canonical task lease",
           {original_receipt: result.original_receipt});
@@ -665,6 +673,8 @@ async function executeClaimAttempt(
       );
     }
   } catch (error) {
+    if (error instanceof ClaimWorkspaceMismatch) return failure(LEASE_WORKSPACE_DIVERGENCE.code, error.message,
+      {todo_id: input.todo_id}, "decision_rejection");
     return failure(
       "invalid_coordination_task_lease",
       error instanceof Error ? error.message : "invalid canonical task lease",

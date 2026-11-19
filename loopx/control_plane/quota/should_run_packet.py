@@ -1691,6 +1691,7 @@ def _build_quota_should_run_payload(
     turn_instance_id: str | None = None,
     include_agent_todo_detail: bool = False,
     runtime_root: str | Path | None = None,
+    workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     scheduler_state_read_observer: (
         Callable[[Mapping[str, Any]], None] | None
@@ -1718,6 +1719,7 @@ def _build_quota_should_run_payload(
         runtime_root=_interaction_runtime_root(runtime_root, prepared.status_payload),
         goal_id=prepared.safe_goal_id,
         agent_id=quota_decision_agent_id(payload) or prepared.requested_agent_id,
+        workspace_path=workspace_path,
         obligation=(
             payload["execution_obligation"]
             if isinstance(payload.get("execution_obligation"), dict)

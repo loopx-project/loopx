@@ -1,4 +1,5 @@
-import {claimExecutionProof, maintainClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
+import {ClaimWorkspaceMismatch, claimExecutionProof, maintainClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
+import {LEASE_WORKSPACE_DIVERGENCE} from "../work_items/task_lease_workspace.ts";
 import {claimExecutionRecovery} from "./claim_execution_recovery.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
@@ -222,8 +223,9 @@ export async function executeCoordinationTodoUpdate(
   if (isFailure(target)) return target;
   const claimReference = input.claim_operation_id;
   if (claimReference !== undefined) {
-    try { input = {...input, ...await claimExecutionProof(store, head.head, input, claimReference), claim_operation_id: undefined}; }
+    try { input = {...input, ...await claimExecutionProof(store, head.head, input, claimReference, observeWorkspace), claim_operation_id: undefined}; }
     catch (error) {
+      if (error instanceof ClaimWorkspaceMismatch) return rejection(LEASE_WORKSPACE_DIVERGENCE.code, error.message);
       const recovery = await claimExecutionRecovery(store, {...input, claim_operation_id: claimReference,
         caller_expected_provider_revision: input.expected_provider_revision,
         expected_provider_revision: head.provider_revision}, "update", error, authoritySourcesCurrent, observeWorkspace);
