@@ -6,7 +6,7 @@ DEFAULT_PERMISSION_RULE = "Reuse existing authorization for the current action; 
 OPERATOR_LANGUAGE_RULE = "Language=user; fallback=English; mix only if asked/scoped-bilingual."
 OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
-    "Read agent_channel.work_context and required_reads (or envelope) before work. "
+    "Read agent_channel.work_context and required_reads before work. "
     "Size by task/evidence/risk within authority/budget, not ops/files/wakes; "
     "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, "
     "never wake counts. Continue through integration, negative cases and readback "

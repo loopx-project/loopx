@@ -214,8 +214,18 @@ test("operation preflight optionally shares the existing normalized session line
 
 test("Host task presentation is source-checked and keeps task and backlog facts", () => {
   const source = payload();
+  source.normal_delivery_allowed = true;
   source.future_task_data = {instructions: "Preserve the final stop. ".repeat(200), value: -0};
-  source.agent_todo_summary = {backlog_items: [{todo_id: "later", text: "Required dependency."}]};
+  source.agent_todo_summary = {
+    schema_version: "todo_summary_v0", monitor_due_items: [],
+    backlog_items: [{todo_id: "later", text: "Required dependency."}], future_attention: [],
+  };
+  source.user_todo_summary = {
+    schema_version: "todo_summary_v0", gate_open_items: [],
+    first_open_items: [{todo_id: "review", text: "Review the unpublished artifact."}],
+    payload_compaction: {schema_version: "quota_todo_summary_payload_compaction_v0",
+      compacted_lanes: {gate_open_items: {shown: 0, total: 3}}},
+  };
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
   const before = structuredClone(complete);
@@ -235,7 +245,11 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
       else parent[key] = edit.from ? at(complete, edit.from as (string | number)[]) : edit.value;
     }
     assert.deepEqual(view.future_task_data, complete.future_task_data);
-    assert.deepEqual(view.agent_todo_summary, complete.agent_todo_summary);
+    assert.deepEqual(view.agent_todo_summary, {
+      schema_version: "todo_summary_v0",
+      backlog_items: [{todo_id: "later", text: "Required dependency."}], future_attention: [],
+    });
+    assert.deepEqual(view.user_todo_summary, complete.user_todo_summary);
     assert.deepEqual(view.goal_boundary, complete.goal_boundary);
     assert.deepEqual((view.interaction_contract as JsonObject).agent_channel,
       (complete.interaction_contract as JsonObject).agent_channel);
@@ -247,6 +261,18 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
       assert.throws(() => evaluateTurnEnvelope({...request, include_model_context: invalid}), /must be a boolean/);
     assert.throws(() => evaluateTurnEnvelope({...request, payload: {...complete, reason: "tampered"},
       include_model_context: true}), /integrity mismatch/);
+  }
+  for (const variant of [
+    {...source, normal_delivery_allowed: false},
+    {...source, agent_todo_summary: {...source.agent_todo_summary as JsonObject, schema_version: "future_summary"}},
+    {...source, agent_todo_summary: {...source.agent_todo_summary as JsonObject,
+      payload_compaction: {schema_version: "future_compaction", compacted_lanes: {}}}},
+  ]) {
+    const captured = evaluateTurnEnvelope({operation: "compose_complete", payload: variant, scheduler_execution_args: ""});
+    const checked = evaluateTurnEnvelope({operation: "host_context", payload: captured, include_model_context: true,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"b".repeat(64)}`}});
+    const edits = (checked.model_context_changes as JsonObject).changes as JsonObject[];
+    assert.equal(edits.some(edit => (edit.path as string[])[0] === "agent_todo_summary"), false);
   }
   assert.deepEqual(complete, before);
 });

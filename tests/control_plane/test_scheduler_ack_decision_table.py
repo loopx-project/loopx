@@ -5,7 +5,7 @@ import json
 import pytest
 
 from loopx.control_plane.scheduler.scheduler_hint import (
-    build_codex_app_scheduler_ack_hint,
+    build_app_automation_scheduler_ack_hint,
 )
 from loopx.control_plane.scheduler.state import (
     CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
@@ -81,9 +81,10 @@ def test_scheduler_state_scope_mutations_fail_closed(
 
 
 def test_scheduler_ack_hint_preserves_public_contract_and_runtime_capabilities() -> None:
-    hint = build_codex_app_scheduler_ack_hint(
+    hint = build_app_automation_scheduler_ack_hint(
         goal_id="goal-ack-contract",
         agent_id=AGENT_ID,
+        state_key=CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
         applied_rrule=EXPECTED_RRULE,
         reset_token=RESET_TOKEN,
         identity_signature=IDENTITY_SIGNATURE,
@@ -98,7 +99,7 @@ def test_scheduler_ack_hint_preserves_public_contract_and_runtime_capabilities()
         "uses_current_hint": hint["uses_current_hint"],
         "no_spend": hint["no_spend"],
     } == {
-        "schema_version": "codex_app_scheduler_ack_hint_v0",
+        "schema_version": "app_automation_scheduler_ack_hint_v0",
         "command": "quota scheduler-ack-current",
         "execute": True,
         "uses_current_hint": True,

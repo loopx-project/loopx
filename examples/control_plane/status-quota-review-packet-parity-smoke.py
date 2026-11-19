@@ -171,7 +171,7 @@ def assert_quota_parity(payload: dict) -> None:
     scheduler = payload["scheduler_hint"]
     assert scheduler["action"] == "run_now", scheduler
     assert scheduler["cadence_class"] == "active_work", scheduler
-    codex_app = scheduler["codex_app"]
+    codex_app = scheduler["app_automation"]
     assert codex_app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
     assert codex_app["recommended_interval_minutes"] == 3, scheduler
     assert codex_app["no_spend_for_cadence_change"] is True, scheduler

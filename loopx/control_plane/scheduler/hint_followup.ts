@@ -74,15 +74,3 @@ export function schedulerFallbackHint(request: JsonObject): JsonObject {
       + (projected ? "; automation_id_projected: no installed heartbeat automation matched this goal/agent, so loopx-apply-rrule will create it before applying the rrule" : ""),
     ...(projected ? {automation_id_projected: true, action: "create_then_apply_rrule_via_fallback"} : {})};
 }
-
-
-export function legacySchedulerAckHint(request: JsonObject): JsonObject {
-  return {...schedulerAckHint({...request, state_key: request.state_key === undefined ? CODEX_STATE : request.state_key}),
-    schema_version: "codex_app_scheduler_ack_hint_v0"};
-}
-
-export function legacySchedulerFailureHint(request: JsonObject): JsonObject {
-  const hint = schedulerFailureHint({...request, state_key: request.state_key === undefined ? CODEX_STATE : request.state_key});
-  return {...hint, schema_version: "codex_app_scheduler_failure_hint_v0", cli_args: (hint.cli_args as unknown[]).map(
-    argument => argument === "--app-automation-current-rrule" ? "--codex-app-current-rrule" : argument)};
-}

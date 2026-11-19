@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from loopx.control_plane.turn_driver import codex_execution_preparation
 from loopx.control_plane.turn_driver.codex_execution_preparation import (
     codex_execution_preparation_context,
     compact_execution_preparation_request,
@@ -90,13 +91,17 @@ def _bound_request(tmp_path: Path) -> dict:
 
 
 @pytest.mark.parametrize("scenario", ["codex_app_heartbeat", "codex_app_ssh_goal"])
-def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, scenario: str) -> None:
+def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, monkeypatch, scenario: str) -> None:
     request = _bound_request(tmp_path)
     capture, native = tmp_path / "ready", tmp_path / "native"
     calls: list[list[str]] = []
+    timeouts = []
+    clock = iter((100.0, 101.5))
+    monkeypatch.setattr(codex_execution_preparation, "monotonic", lambda: next(clock))
 
     def runner(command, *, cwd, timeout):
         calls.append(list(command))
+        timeouts.append(timeout)
         if "should-run" not in command:
             return _completed({"ok": True, "claimed": True,
                 "claim_operation_id": CLAIM})
@@ -133,6 +138,7 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, scenario: s
     assert receipt["capture_sha256"] == READY_DIGEST
     assert receipt["capture_path"] == str(capture / "decision.json")
     assert len(calls) == 2
+    assert timeouts == [4.0, 6.5]
     for call in calls:
         assert call[call.index("--registry") + 1] == (
             str((tmp_path / "loopx-project-a" / ".loopx" / "registry.json").resolve())
@@ -147,6 +153,21 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, scenario: s
     ]
     context = codex_execution_preparation_context(receipt)
     assert "do not repeat" in context and '"state":"ready"' in context
+
+
+def test_executor_skips_ready_check_after_preparation_deadline(tmp_path: Path, monkeypatch) -> None:
+    clock = iter((100.0, 108.0))
+    monkeypatch.setattr(codex_execution_preparation, "monotonic", lambda: next(clock))
+
+    def runner(command, *, cwd, timeout):
+        assert "claim" in command and timeout == 4.0
+        return _completed({"ok": True, "claim_operation_id": CLAIM})
+
+    with pytest.raises(TimeoutError, match="deadline elapsed"):
+        execute_codex_execution_preparation(
+            _bound_request(tmp_path), cwd=tmp_path.resolve(), scenario="codex_app_heartbeat",
+            capture_directory=tmp_path / "ready", context_directory=tmp_path / "native", runner=runner,
+        )
 
 
 @pytest.mark.parametrize("changed", ["goal", "agent", "todo", "turn"])

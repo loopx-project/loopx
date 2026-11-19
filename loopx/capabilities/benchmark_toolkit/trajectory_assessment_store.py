@@ -72,15 +72,27 @@ def _prepared(record: dict, output_language: str | None = None) -> dict:
     )
 
 
-def _verify_sources(record: dict) -> None:
+def _verify_sources(
+    record: dict,
+    *,
+    staged_sources: dict[str, bytes] | None = None,
+) -> None:
     # One byte observation per declared artifact in this verification only.
     # Check every digest/excerpt; later calls still read and verify fresh bytes.
+    staged_sources = staged_sources or {}
     artifacts: dict[str, list[dict]] = {}
     for source in record["input"]["sources"]:
         artifacts.setdefault(source["artifact"], []).append(source)
     for artifact, sources in artifacts.items():
-        path = _source_path(Path(record["source_root"]), artifact)
-        data = path.read_bytes()
+        if artifact in staged_sources:
+            relative = PurePosixPath(artifact)
+            if relative.is_absolute() or ".." in relative.parts or "\\" in artifact:
+                raise PackUnavailable("invalid_source_path")
+            Path(record["source_root"]).resolve(strict=True)
+            data = staged_sources[artifact]
+        else:
+            path = _source_path(Path(record["source_root"]), artifact)
+            data = path.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
         lines = None
         for source in sources:
@@ -391,6 +403,8 @@ def register_pack(
     include_tool_context: bool = False,
     loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
+    loopx_human_attention_start: str | None = None,
+    loopx_human_attention_end: str | None = None,
     base_pack_id: str | None = None,
     case_study_json: Path | None = None,
     select_default: bool = True,
@@ -398,10 +412,29 @@ def register_pack(
     """Trusted operator only; no HTTP/renderer path-registration endpoint."""
     if not title.strip():
         raise ValueError("A case/window title is required")
+    input_value = json.loads(input_path.read_text(encoding="utf-8"))
+    if (loopx_human_attention_start is None) != (loopx_human_attention_end is None):
+        raise ValueError(
+            "LoopX human attention start and end must be supplied together"
+        )
+    if loopx_human_attention_start is not None:
+        from .trajectory_human_attention_capture import (
+            prepare_verified_loopx_human_attention,
+        )
+
+        input_value, staged_attention = prepare_verified_loopx_human_attention(
+            runtime_root=runtime_root,
+            input_value=input_value,
+            source_root=source_root,
+            start=loopx_human_attention_start,
+            end=loopx_human_attention_end,
+        )
+    else:
+        staged_attention = {}
     prepared = effect_runtime_result(
         "benchmark.trajectory.prepare",
         {
-            "input": json.loads(input_path.read_text(encoding="utf-8")),
+            "input": input_value,
             "config": config or DEFAULT_CONFIG,
             "generation_defaults": not config,
             **({"case_study": json.loads(case_study_json.read_text(encoding="utf-8"))}
@@ -417,7 +450,13 @@ def register_pack(
             for k in ("input", "config", "analysis_key", "method_version")
         },
     }
-    _verify_sources(record)
+    _verify_sources(
+        record,
+        staged_sources={
+            artifact: text.encode("utf-8")
+            for artifact, text in staged_attention.items()
+        },
+    )
     if "human_attention" in prepared:
         record["human_attention"] = prepared["human_attention"]
     if "case_study" in prepared:
@@ -463,6 +502,15 @@ def register_pack(
     (owner / "packs").mkdir(parents=True, exist_ok=True, mode=0o700)
     pack_id = _pack_id(owner_goal_id, record)
     with exclusive_file_lock(owner / "packs.lock"):
+        if staged_attention:
+            from .trajectory_human_attention_capture import (
+                publish_verified_loopx_human_attention,
+            )
+
+            publish_verified_loopx_human_attention(
+                source_root=source_root,
+                artifacts=staged_attention,
+            )
         index = _index(owner)
         path = owner / "packs" / f"{pack_id}.json"
         if path.exists():

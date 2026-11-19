@@ -341,10 +341,10 @@ def assert_cleared_blocker_requires_successor_replan() -> None:
     scheduler = payload["scheduler_hint"]
     assert scheduler["action"] == "run_now", scheduler
     assert scheduler["cadence_class"] == "active_work", scheduler
-    assert scheduler["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
-    assert scheduler["codex_app"]["recommended_interval_minutes"] == 3, scheduler
-    assert scheduler["codex_app"]["stateful_backoff"]["apply_needed"] is True, scheduler
-    assert scheduler["codex_app"]["no_spend_for_cadence_change"] is True, scheduler
+    assert scheduler["app_automation"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
+    assert scheduler["app_automation"]["recommended_interval_minutes"] == 3, scheduler
+    assert scheduler["app_automation"]["stateful_backoff"]["apply_needed"] is True, scheduler
+    assert scheduler["app_automation"]["no_spend_for_cadence_change"] is True, scheduler
 
 
 def assert_stale_handoff_closeout_stays_with_its_executor() -> None:

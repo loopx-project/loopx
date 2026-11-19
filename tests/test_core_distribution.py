@@ -298,6 +298,26 @@ for name in ('workflow_plan','candidate_preflight','acceptance_loop','metadata_p
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("arguments", [
+    ["capability", "--help"],
+    ["capability", "list", "--format", "json"],
+    ["capability", "show", "benchmark-toolkit", "--format", "json"],
+    ["capability", "show", "issue-fix", "--format", "json"],
+])
+def test_installed_core_discovers_capabilities_without_benchmark_execution(core_python, tmp_path, arguments):
+    from tests.capabilities.test_benchmark_toolkit_loading import DISCOVERY_SCRIPT
+
+    result = subprocess.run([core_python, "-I", "-c", DISCOVERY_SCRIPT,
+        json.dumps(["--registry", str(tmp_path / "registry.json"),
+                    "--runtime-root", str(tmp_path / "runtime"), *arguments])],
+        cwd=tmp_path, env=_environment(core_python, {"PATH": ""}),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    if arguments[-1] == "json":
+        assert json.loads(result.stdout)["ok"] is True
+    assert not list(tmp_path.iterdir())
+
+
 def test_installed_core_catalog_entries_have_executable_parsers(core_python, tmp_path):
     reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
     for group in reference["groups"]:
@@ -464,6 +484,34 @@ def _spends(runtime):
     index = runtime / "goals" / GOAL / "runs/index.jsonl"
     return sum(json.loads(line).get("classification") == "quota_slot_spent"
                for line in index.read_text().splitlines()) if index.exists() else 0
+
+
+def test_installed_core_ordinary_turn_defers_explore_evaluation(core_python, task, tmp_path, monkeypatch):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    workspace, runtime, _registry, arguments = task
+    isolated = tmp_path / "loads"
+    isolated.mkdir()
+    isolate_sqlite_runtime(isolated, monkeypatch)
+    trace, observer = isolated / "modules.txt", isolated / "observe.mjs"
+    observer.write_text("""import {appendFileSync} from "node:fs";
+import {registerHooks} from "node:module";
+const tracked = new Set(["turn_envelope.ts", "yardstick_decision.ts", "explore_result_writeback.ts",
+  "explore_turn_context.ts", "explore_measurements.ts"]);
+registerHooks({load(url, context, next) {
+  const name = url.split("/").at(-1);
+  if (tracked.has(name)) appendFileSync(process.env.LOOPX_TEST_MODULE_TRACE, name + "\\n");
+  return next(url, context);
+}});
+""", encoding="utf-8")
+    monkeypatch.setenv("LOOPX_TEST_MODULE_TRACE", str(trace))
+    monkeypatch.setenv("NODE_OPTIONS", f"{os.environ['NODE_OPTIONS']} --import={observer.as_uri()}")
+    result = json.loads(_run(core_python, arguments, workspace).stdout)
+    key = _assert_committed(core_python, workspace, runtime, result)
+    replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", key], workspace).stdout)
+    assert replay["resume_turn_key"] == key
+    assert not any(replay["effects"][name] for name in ("host_invoked", "state_written", "quota_spent"))
+    assert set(trace.read_text(encoding="utf-8").splitlines()) == {"turn_envelope.ts"}
 
 
 def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core_python, task):
@@ -708,7 +756,11 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         'pathlib.Path("squares.json").write_text(json.dumps([n*n for n in range(8)]))\noutput_path = '))
     home = tmp_path / "codex-home"
     home.mkdir()
-    environment = {"FAKE_CODEX_LOG": str(log), "CODEX_HOME": str(home)}
+    prompt_path = tmp_path / "worker-prompt.txt"
+    environment = {
+        "FAKE_CODEX_LOG": str(log), "CODEX_HOME": str(home),
+        "FAKE_CODEX_PROMPT_CAPTURE": str(prompt_path),
+    }
     command = [*prefix, "turn", "run-once", "--host", "codex-cli", "--goal-id", GOAL,
         "--agent-id", AGENT, "--todo-id", todo_id, "--project", str(workspace),
         "--codex-bin", str(binary), "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
@@ -730,5 +782,19 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     replay = json.loads(_run(core_python, [*resume_command, "--resume-turn-key", result["resume_turn_key"],
         "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])],
         workspace, environment=environment).stdout)
+    model_input = json.loads(prompt_path.read_text(encoding="utf-8").split("Turn request:\n", 1)[1])
+    capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
+    original = json.loads(capture.read_text(encoding="utf-8"))
+    context = model_input["task_context"]
+    assert original["agent_todo_summary"]["monitor_due_items"] == []
+    assert original["user_todo_summary"]["gate_open_items"] == []
+    assert "monitor_due_items" not in context["agent_todo_summary"]
+    assert "gate_open_items" not in context["user_todo_summary"]
+    assert (
+        context["agent_todo_summary"]["first_executable_items"]
+        == original["agent_todo_summary"]["first_executable_items"]
+    )
+    assert context["user_todo_summary"]["work_counts"] == original["user_todo_summary"]["work_counts"]
+    assert model_input["source_decision_hash"] == original["contract_binding"]["content_hash"]
     assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1

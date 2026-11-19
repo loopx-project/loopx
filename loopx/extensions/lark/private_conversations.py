@@ -30,7 +30,7 @@ from ...capabilities.native_chat.conversation_bindings import ChatConversationBi
 from ...capabilities.native_chat.file_discovery import (
     REPLY_IMAGE_NAME_PATTERN, FileChatDiscovery, file_change_fingerprint, reply_image_workspace,
 )
-from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, normalize_chat_image_attachments
+from ...chat_attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
@@ -450,11 +450,13 @@ class LarkPrivateConversations:
                         render_content: bool = True,
                         sender_identity: dict[str, str] | None = None,
                         source_pair: tuple[Mapping[str, Any] | None, Mapping[str, Any] | None] | None = None,
+                        report_private_recall: bool = False,
                         ) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
 
         A p2p source read proves the destination without requiring group-member
         scopes. A caller cannot opt into this path with an HTTP boolean.
+        Queued private cards can request a recall marker after source verification.
         """
         event = record["event"]
         result: Mapping[str, Any]
@@ -583,13 +585,16 @@ class LarkPrivateConversations:
                             or canonical.get("message_id") != event["message_id"]
                             or canonical.get("sender", {}).get("id") != sender.get("id")
                             or canonical.get("sender", {}).get("sender_type") != "user"
-                            or canonical.get("deleted") is True
                             or canonical.get("msg_type", canonical.get("message_type"))
                             != message.get("msg_type", message.get("message_type"))
                             or any(message.get(key) and canonical.get(key) != message[key]
                                    for key in ("root_id", "parent_id", "thread_id"))):
                         return None
+                    if message.get("deleted") is True or canonical.get("deleted") is True:
+                        return {"deleted": True} if report_private_recall else None
                     message = {**canonical, "content": message.get("content")}
+                elif message.get("deleted") is True:
+                    return None
                 if render_content:
                     from .event_inbox import lark_event_mentions_bot
                     if observation is None:
@@ -602,8 +607,8 @@ class LarkPrivateConversations:
                             allow_text_fallback=False))
                 if group:
                     canonical_sender = canonical.get("sender") if isinstance(canonical, Mapping) else None
-                    if (canonical is None or canonical.get("chat_id") != event["chat_id"]
-                            or not isinstance(canonical_sender, Mapping)
+                    if (canonical is None or canonical.get("deleted") is True
+                            or canonical.get("chat_id") != event["chat_id"] or not isinstance(canonical_sender, Mapping)
                             or canonical_sender.get("id") != sender.get("id")
                             or canonical_sender.get("sender_type") != "user"
                             or canonical.get("msg_type", canonical.get("message_type"))
@@ -633,7 +638,7 @@ class LarkPrivateConversations:
                     from .event_inbox import lark_event_mentions_bot
                     if observation is None:
                         observation = self.bindings.observe(record["profile"])
-                    if (not original or original.get("chat_id") != event["chat_id"]
+                    if (not original or original.get("deleted") is True or original.get("chat_id") != event["chat_id"]
                             or original.get("sender", {}).get("sender_type") != "user"
                             or original.get("parent_id") or original.get("root_id") not in (None, "", root)
                             or not isinstance(original.get("mentions"), list)

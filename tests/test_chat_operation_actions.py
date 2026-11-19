@@ -1295,6 +1295,15 @@ def test_operation_preview_arms_one_canonical_gate_and_local_apply_cannot_claim(
     assert store.load(str(proposal["proposal_id"]))["status"] == "gated"
 
 
+def test_operation_preview_rejects_cross_goal_context(tmp_path: Path) -> None:
+    service, _store = _service(tmp_path)
+    request = _request()
+    request["context"]["goal_id"] = "other-goal"
+
+    with pytest.raises(ValueError, match="context must match its Goal"):
+        service.preview(request)
+
+
 def test_operation_digest_change_cannot_reuse_idempotency_key(tmp_path: Path) -> None:
     service, _store = _service(tmp_path)
     service.preview(_request())

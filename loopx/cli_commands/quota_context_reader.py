@@ -99,10 +99,6 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
             del words[index:index + 2]
     for option, value in options.items():
         words.extend((option, value))
-    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
-        words.append("--turn-envelope")
-    if getattr(args, "complete_turn", False) and "--complete-turn" not in words:
-        words.append("--complete-turn")
     selection["command_args_template"] = shlex.join(words)
 
 
@@ -531,8 +527,7 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
                 reference_file=Path(result["recovery"]["reference_file"]), reader_argv=reader_argv)
         if "remaining_read_command" in view:
             result["remaining_read_command"] = view["remaining_read_command"]
-    result["instruction"] += (" Append --select '<pointer>' or --list to recovery.command for current fields. "
-        "Reader references keep complete digests locally; the CLI checks them on every page. "
+    result["instruction"] += (" Reader references keep complete digests locally; the CLI checks them on every page. "
         "A reference or digest grants no authority or freshness.")
     if len(_native_output_bytes(result)) > min(output_bytes, 7900):
         return view  # Preserve usable legacy recovery under a very small ceiling.
@@ -578,6 +573,9 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
         if value is None or isinstance(value, (str, bool, int, float))
         and len(json.dumps(value, ensure_ascii=False).encode("utf-8")) <= 240}
     result["instruction"] = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if progressive_enabled else CONTEXT_CAPTURE_READ_GUIDANCE
+    result["instruction"] += " Use --select or --list on recovery.command."
+    if progressive_enabled:
+        result["instruction"] += " Deferred fields use context_details."
     if mode != "full":
         result["instruction"] += (" command reads the delta; baseline_reference identifies its exact saved base when file-backed. "
             "recovery.command reads current facts directly without that baseline.")
@@ -627,7 +625,6 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
         result["baseline_reference"].pop("command", None)  # Exact path/hash remain usable.
     if not fits():
         result.pop("index_command")
-        result["instruction"] += " Append --list or --select to recovery.command to discover or read current fields."
     if not fits():
         raise QuotaDecisionTransportError("Native context reference exceeds the output limit; "
             "read the saved original decision and receipt without rerunning admission.")

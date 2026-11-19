@@ -431,6 +431,11 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 | `turn_driver/decision_capture.py` 与 `cli_commands/quota_capture.py` | 复用不可变 capture、校验读取器和 full/delta 交付。首次交付和保存后恢复必须重建同一契约；不能仅因 Turn 身份相同，就把某投影的 continuity baseline 用于另一投影。 |
 | `benchmark/runtime/worker.py`、`benchmark/runtime/sessions.py` 与 `scripts/external_scheduler_worker.py` | 迁移它们实际调用的产品入口。保留评估配置与外层唤醒归属，不新增 benchmark 专用转换，也不把 managed-host 测试算作 attached-host 验收。 |
 
+当前 heartbeat 生成器通过 `interaction_contract` 交付目标选择、必读和原 Turn
+结算。已保存的 bootstrap 在唤醒时重新调用该生成器。树内所有生成调用都已采用
+此路径，因此退役旧 envelope 专用指令和额外提示词预算。已有 capture 中的工作
+继续由记录的恢复 reader 读取。
+
 替换任一接缝前，实现 PR 记录源路径、字段或指令条款、当前 reader、目标 owner、表示、
 恢复与退役条件。字段搬迁须包含引用解析；删除诊断须证明其中不含动作、权限、必读或
 验收义务。未知数据不得静默消失；未知的必需执行语义也不能靠转发 JSON 就变安全，

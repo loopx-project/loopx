@@ -564,7 +564,7 @@ def test_stopped_goal_and_zero_compute_keep_distinct_resume_authority() -> None:
     assert stopped["automation_liveness"]["automation_action"] == "stop_goal_stopped"
     assert stopped["scheduler_hint"]["reason_code"] == "goal_stopped"
     assert (
-        stopped["scheduler_hint"]["codex_app"]["resume_trigger"]
+        stopped["scheduler_hint"]["app_automation"]["resume_trigger"]
         == "explicit Goal lifecycle resume"
     )
 

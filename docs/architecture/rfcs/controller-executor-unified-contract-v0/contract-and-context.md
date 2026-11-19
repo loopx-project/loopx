@@ -579,6 +579,12 @@ design, not a claim that these paths have changed.
 | `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
 | `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
 
+The current heartbeat generator uses `interaction_contract` for target
+selection, required reads and exact Turn settlement. Saved bootstrap wrappers
+reload that generator on wake. All in-tree generation callers use this route,
+so the old envelope-specific instructions and their prompt budget allowance
+are retired. Previously captured work still uses its recorded recovery reader.
+
 Before replacing any seam, its implementation PR records source path, field or
 instruction clause, current readers, target owner, representation, recovery and
 retirement condition. Relocation must include reference resolution; an omitted

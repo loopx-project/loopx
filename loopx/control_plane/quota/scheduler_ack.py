@@ -10,7 +10,6 @@ from pathlib import Path
 from ..effect_runtime import _node_executable
 from ..runtime.time import now_local_iso
 from ..scheduler.state import (
-    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
     CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
     CODEX_APP_SURFACE,
     normalize_scheduler_rrule,
@@ -34,17 +33,18 @@ def _scheduler_packet(
         if isinstance(before.get("scheduler_hint"), dict)
         else {}
     )
-    if surface in {"trae_app", "antigravity_app"}:
-        packet_key = "app_automation"
-    elif (
+    packet_key = (
+        "app_automation"
+        if surface in {CODEX_APP_SURFACE, "trae_app", "antigravity_app"}
+        else surface
+    )
+    # A canonical packet can own a legacy persisted state key. Only read
+    # the historical projection when the capture predates app_automation.
+    if (
         surface == CODEX_APP_SURFACE
-        and (
-            state_key == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
-            or (state_key is None and isinstance(scheduler_hint.get("app_automation"), dict))
-        )
+        and state_key in {None, CODEX_APP_STATEFUL_BACKOFF_STATE_KEY}
+        and not isinstance(scheduler_hint.get(packet_key), dict)
     ):
-        packet_key = "app_automation"
-    else:
         packet_key = surface
     surface_packet = (
         cast(dict[str, Any], scheduler_hint.get(packet_key))
