@@ -528,18 +528,34 @@ function referenceExploreGuidance(payload: JsonObject): JsonObject {
     work_context: {...context, sources}}}};
 }
 
-/** Keep the complete vision audit once. These existing projection references
- * share identical facts only; a channel-specific obligation is never a summary
- * of the root. The old display adapter delegates here before adding metadata. */
-function visionAuditReference(audit: JsonObject): JsonObject {
+/** Carry the existing CLI view exactly. A new or changed channel field keeps
+ * its original inline value unless the producer's entire view matches. */
+function cliVisionAuditView(owner: JsonObject): JsonObject {
+  const fields = (value: JsonObject, keys: readonly string[]) =>
+    Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+  const view = fields(owner, ["required", "required_before_closeout", "recommended_action"]);
+  const judge = object(owner.vision_gap_judge);
+  if (Object.keys(judge).length) view.vision_gap_judge = fields(judge, [
+    "done", "decision", "reason", "agent_judge_instruction", "evidence_read_instruction",
+    "registry_read_instruction", "done_only_when", "continue_when", "otherwise",
+  ]);
+  return view;
+}
+
+function supportsCliVisionAuditView(owner: JsonObject): boolean {
+  return owner.schema_version === "vision_continuation_audit_v0" && owner.required === true;
+}
+
+function visionAuditReference(audit: JsonObject, cliView = false): JsonObject {
   const reference: JsonObject = {projection_ref: "$.vision_continuation_audit"};
+  if (cliView) reference.projection_view = "cli_channel";
   for (const key of ["schema_version", "required", "decision"]) {
     if (Object.hasOwn(audit, key)) reference[key] = audit[key];
   }
   if (typeof audit.vision_gap_judge === "object" && audit.vision_gap_judge !== null &&
       !Array.isArray(audit.vision_gap_judge)) {
     const judge = object(audit.vision_gap_judge);
-    reference.vision_gap_judge = {projection_ref: "$.vision_continuation_audit.vision_gap_judge"};
+    reference.vision_gap_judge = cliView ? {} : {projection_ref: "$.vision_continuation_audit.vision_gap_judge"};
     for (const key of ["done", "decision"]) {
       if (Object.hasOwn(judge, key)) (reference.vision_gap_judge as JsonObject)[key] = judge[key];
     }
@@ -566,12 +582,15 @@ function mapNestedVisionAudits(payload: JsonObject,
 
 function requireVisionAuditReferences(payload: JsonObject): void {
   const owner = object(payload.vision_continuation_audit);
-  const chained = Object.hasOwn(owner, "projection_ref") || Object.hasOwn(object(owner.vision_gap_judge), "projection_ref");
-  if (chained) throw new EffectRuntimeRequestError("Vision audit reference requires a complete inline root owner");
-  mapNestedVisionAudits(payload, audit => {
-    if (Object.hasOwn(audit, "projection_ref") || Object.hasOwn(object(audit.vision_gap_judge), "projection_ref")) {
-      if (!Object.keys(owner).length ||
-          JSON.stringify(canonicalValue(audit)) !== JSON.stringify(canonicalValue(visionAuditReference(owner)))) {
+  const hasReference = (audit: JsonObject) => Object.hasOwn(audit, "projection_ref") ||
+    Object.hasOwn(audit, "projection_view") || Object.hasOwn(object(audit.vision_gap_judge), "projection_ref");
+  if (hasReference(owner)) throw new EffectRuntimeRequestError("Vision audit reference requires a complete inline root owner");
+  mapNestedVisionAudits(payload, (audit, path) => {
+    if (hasReference(audit)) {
+      const cliView = audit.projection_view === "cli_channel" && path[1] === "cli_channel" &&
+        supportsCliVisionAuditView(owner);
+      const expected = cliView ? visionAuditReference(cliVisionAuditView(owner), true) : visionAuditReference(owner);
+      if (!Object.keys(owner).length || JSON.stringify(canonicalValue(audit)) !== JSON.stringify(canonicalValue(expected))) {
         throw new EffectRuntimeRequestError("Vision audit reference must match its complete inline root owner without conflicting facts");
       }
     }
@@ -580,7 +599,7 @@ function requireVisionAuditReferences(payload: JsonObject): void {
 }
 
 function referenceVisionContinuation(payload: JsonObject,
-    identity = contextSourceIdentity(payload)): JsonObject {
+    identity = contextSourceIdentity(payload), shareCliView = false): JsonObject {
   requireVisionAuditReferences(payload);
   const owner = object(payload.vision_continuation_audit);
   if (!Object.keys(owner).length) return payload;
@@ -588,8 +607,16 @@ function referenceVisionContinuation(payload: JsonObject,
   // A short audit is cheaper inline. Do not create a reference merely to count sharing.
   if (Buffer.byteLength(encoded, "utf8") <= Buffer.byteLength(JSON.stringify(reference), "utf8")) return payload;
   const source = identity(owner, ["vision_continuation_audit"]);
-  return mapNestedVisionAudits(payload, (audit, path) =>
-    identity(audit, path) === source ? structuredClone(reference) : audit);
+  return mapNestedVisionAudits(payload, (audit, path) => {
+    const candidate = identity(audit, path);
+    if (candidate === source) return structuredClone(reference);
+    if (!shareCliView || path[1] !== "cli_channel" || !supportsCliVisionAuditView(owner)) return audit;
+    const view = cliVisionAuditView(owner);
+    const scopedReference = visionAuditReference(view, true);
+    return candidate === identity(view, ["vision_continuation_audit"]) &&
+      Buffer.byteLength(JSON.stringify(scopedReference), "utf8") < Buffer.byteLength(candidate, "utf8")
+      ? scopedReference : audit;
+  });
 }
 
 /** The verified current Task is the only owner of a shared lane title. Keep
@@ -2110,7 +2137,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   source = referenceReplanAuthoring(source, sourceIdentity);
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);
-  source = referenceVisionContinuation(source, sourceIdentity);
+  source = referenceVisionContinuation(source, sourceIdentity, true);
   source = referenceQuotaSummaryLanes(source, sourceIdentity);
   requireCompleteDecisionSource(source);
   const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,

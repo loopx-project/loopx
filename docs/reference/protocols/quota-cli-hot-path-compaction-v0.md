@@ -110,6 +110,20 @@ projection. Candidate lists and peer action lists retain counts and point to
 `--include-detail vision`; `--include-detail all` restores every supported
 detail section.
 
+On the complete Turn wire, the CLI channel can carry that reference with
+`projection_view: "cli_channel"`. Its view contains `required`,
+`required_before_closeout`, `recommended_action`, and the existing judge
+fields `done`, `decision`, `reason`, `agent_judge_instruction`,
+`evidence_read_instruction`, `registry_read_instruction`, `done_only_when`,
+`continue_when`, and `otherwise` from the inline root. Resolve the reference
+within the original packet. A different channel obligation or additional
+field stays inline. Previously saved inline views and unqualified full-audit
+references remain readable.
+
+完整 Turn 包的 CLI 通道可以使用带 `projection_view: "cli_channel"` 的引用。
+该视图只读取上文列出的字段，来源是同一原包内联的完整 Vision 审核。通道内容或
+约束有差异时保留内联内容。以前保存的内联视图和完整审核引用仍可读取。
+
 When a bounded next-action label still carries the complete Task again in
 `agent_lane_next_action.title`, the default view may replace that exact duplicate
 with `title_ref`. The reference resolves to `text` or `title` in the single
