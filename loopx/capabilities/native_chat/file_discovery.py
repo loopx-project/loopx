@@ -1,7 +1,7 @@
 """File-backed Chat journal discovery and bounded reply image artifacts."""
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from copy import deepcopy
 from datetime import datetime
 import base64
@@ -108,6 +108,9 @@ def later_equivalent_source_input(
     return False
 
 
+_MISSING_FILE_FP: tuple[int, ...] = (-1,)
+
+
 def file_change_fingerprint(path: Path) -> tuple[int, ...] | None:
     """A local mutation token, or no reuse when the platform lacks one."""
     # Windows stat ctime can be creation time, not a mutation stamp. Keep
@@ -116,6 +119,254 @@ def file_change_fingerprint(path: Path) -> tuple[int, ...] | None:
         return None
     stat = path.stat()
     return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+
+def optional_file_fingerprint(path: Path) -> tuple[int, ...] | None:
+    """Return a file fingerprint or a sentinel when absent; None when unavailable."""
+    try:
+        return file_change_fingerprint(path)
+    except FileNotFoundError:
+        return None if sys.platform == "win32" else _MISSING_FILE_FP
+    except OSError:
+        return None
+
+
+def _set_bounded_cache(cache_map: dict[Any, Any], key: Any, value: Any, max_entries: int) -> None:
+    if key in cache_map:
+        del cache_map[key]
+    elif len(cache_map) >= max_entries:
+        del cache_map[next(iter(cache_map))]
+    cache_map[key] = value
+
+
+class QuotaBacklogObservationCache:
+    """Revision-bound cache for read-only quota backlog health classification.
+
+    Stores only pure boolean verdicts and Turn status labels keyed by file
+    fingerprints, Session status, and evaluator identity. Never retains Turn
+    bodies or request attachments.
+    """
+
+    def __init__(self, *, max_entries: int = 8192) -> None:
+        self._lock = Lock()
+        self._max_entries = max(1, max_entries)
+        self._base: dict[str, tuple[tuple[Any, ...], tuple[bool, str | None]]] = {}
+        self._stopped: dict[str, tuple[tuple[Any, ...], bool]] = {}
+        self._interrupt_events: dict[tuple[str, str], tuple[tuple[int, ...], bool]] = {}
+
+    def get_base(self, request_ref: str, key: tuple[Any, ...]) -> tuple[bool, str | None] | None:
+        with self._lock:
+            entry = self._base.get(request_ref)
+            return entry[1] if entry is not None and entry[0] == key else None
+
+    def has_base_prefix(self, request_ref: str, key_prefix: tuple[Any, ...]) -> bool:
+        with self._lock:
+            entry = self._base.get(request_ref)
+            return entry is not None and entry[0][:-1] == key_prefix
+
+    def put_base(self, request_ref: str, key: tuple[Any, ...], pending: bool, turn_status: str | None) -> None:
+        with self._lock:
+            _set_bounded_cache(self._base, request_ref, (key, (pending, turn_status)), self._max_entries)
+            stopped = self._stopped.get(request_ref)
+            if stopped is not None and stopped[0] != key:
+                self._stopped.pop(request_ref, None)
+
+    def get_stopped(self, request_ref: str, key: tuple[Any, ...]) -> bool | None:
+        with self._lock:
+            entry = self._stopped.get(request_ref)
+            return entry[1] if entry is not None and entry[0] == key else None
+
+    def put_stopped(self, request_ref: str, key: tuple[Any, ...], pending: bool) -> None:
+        with self._lock:
+            _set_bounded_cache(self._stopped, request_ref, (key, pending), self._max_entries)
+
+    def drop_request(self, request_ref: str) -> None:
+        with self._lock:
+            self._base.pop(request_ref, None)
+            self._stopped.pop(request_ref, None)
+
+    @staticmethod
+    def build_key_prefix(
+        root: Path, store: Any, row: dict[str, Any], evaluator_id: int,
+    ) -> tuple[Any, Path | None, Path | None, tuple[int, ...] | None, tuple[int, ...] | None]:
+        try:
+            req_path = root / f"{row['request_ref']}.json"
+            turn_path = store._turn_path(row["session_id"], row["turn_id"])
+            req_fp = optional_file_fingerprint(req_path)
+            turn_fp = optional_file_fingerprint(turn_path)
+        except (OSError, ValueError):
+            return None, None, None, None, None
+        if req_fp is None or turn_fp is None:
+            return None, req_path, turn_path, req_fp, turn_fp
+        prefix = (req_fp, turn_fp, row["session_id"], row["turn_id"],
+                  row.get("status"), row.get("command"), evaluator_id)
+        return prefix, req_path, turn_path, req_fp, turn_fp
+
+    def commit(self, request_ref: str, meta_entry: tuple[Any, ...], pending: bool, *,
+               turn_status: str | None = None, stopped: bool = False) -> None:
+        key, req_path, turn_path, req_fp, turn_fp = meta_entry
+        if key is None or req_path is None or turn_path is None:
+            return
+        if (optional_file_fingerprint(req_path), optional_file_fingerprint(turn_path)) != (req_fp, turn_fp):
+            self.drop_request(request_ref)
+            return
+        if stopped:
+            self.put_stopped(request_ref, key, pending)
+        else:
+            self.put_base(request_ref, key, pending, turn_status)
+
+    def get_interrupt(self, session_id: str, turn_id: str, events_fp: tuple[int, ...]) -> bool | None:
+        with self._lock:
+            entry = self._interrupt_events.get((session_id, turn_id))
+            return entry[1] if entry is not None and entry[0] == events_fp else None
+
+    def put_interrupt(self, session_id: str, turn_id: str, events_fp: tuple[int, ...], observed: bool) -> None:
+        with self._lock:
+            _set_bounded_cache(self._interrupt_events, (session_id, turn_id), (events_fp, observed), self._max_entries)
+
+    def drop_interrupt(self, session_id: str, turn_id: str) -> None:
+        with self._lock:
+            self._interrupt_events.pop((session_id, turn_id), None)
+
+
+def observed_turn_interrupt(
+    store: Any,
+    session_id: str,
+    turn_id: str,
+    cache_store: QuotaBacklogObservationCache | None,
+    *,
+    real_events: bool,
+) -> bool:
+    """Check Turn interrupt events with fingerprint/pending-buffer guard on real stores."""
+    interrupt_kinds = {"turn.interrupt_requested", "turn.interrupted"}
+    if not real_events or cache_store is None:
+        return any(e.get("kind") in interrupt_kinds for e in store.events_after(session_id, turn_id, None))
+    key = (session_id, turn_id)
+    try:
+        event_path = store._event_path(session_id, turn_id)
+    except ValueError:
+        return any(e.get("kind") in interrupt_kinds for e in store.events_after(session_id, turn_id, None))
+    flush_lock = store._event_flush_lock(key)
+    fp_before: tuple[int, ...] | None = None
+    if flush_lock.acquire(blocking=False):
+        try:
+            with store._event_lock:
+                has_pending = bool(store._event_pending.get(key))
+            if not has_pending:
+                fp_before = optional_file_fingerprint(event_path)
+                if fp_before is not None:
+                    cached = cache_store.get_interrupt(session_id, turn_id, fp_before)
+                    if cached is not None:
+                        return cached
+        finally:
+            flush_lock.release()
+    observed = any(e.get("kind") in interrupt_kinds for e in store.events_after(session_id, turn_id, None))
+    if fp_before is not None and flush_lock.acquire(blocking=False):
+        try:
+            with store._event_lock:
+                has_pending_after = bool(store._event_pending.get(key))
+            fp_after = None if has_pending_after else optional_file_fingerprint(event_path)
+            if fp_after == fp_before:
+                cache_store.put_interrupt(session_id, turn_id, fp_after, observed)
+            else:
+                cache_store.drop_interrupt(session_id, turn_id)
+        finally:
+            flush_lock.release()
+    return observed
+
+
+def _same_store_method(store: Any, name: str, expected_cls: type[Any]) -> bool:
+    return isinstance(store, expected_cls) and getattr(getattr(store, name, None), "__func__", None) is getattr(expected_cls, name)
+
+
+def observe_quota_backlog_batch(
+    *,
+    root: Path,
+    store: Any,
+    rows: Sequence[dict[str, Any]],
+    build_inputs: Callable[[dict[str, Any]], dict[str, Any]],
+    eval_flags: Callable[[Sequence[dict[str, Any]]], list[bool]],
+    stop_controls: Callable[[], tuple[tuple[Any, Any, datetime], ...]],
+    evaluator_id: int,
+    cache_store: QuotaBacklogObservationCache | None,
+) -> list[bool]:
+    """Evaluate backlog pending flags with optional revision-bound caching."""
+    from ...chat_store import ChatSessionStore
+
+    real_load_turn = cache_store is not None and _same_store_method(store, "load_turn", ChatSessionStore)
+    real_events = cache_store is not None and _same_store_method(store, "events_after", ChatSessionStore)
+    flags: list[bool] = [False] * len(rows)
+    turn_statuses: list[str | None] = [None] * len(rows)
+    params: list[dict[str, Any] | None] = [None] * len(rows)
+    meta: list[tuple[Any, ...]] = [(None, None, None, None, None)] * len(rows)
+    for index, row in enumerate(rows):
+        entry = (cache_store.build_key_prefix(root, store, row, evaluator_id)
+                 if real_load_turn and cache_store is not None else (None, None, None, None, None))
+        meta[index] = entry
+        if entry[0] is not None and cache_store is not None and cache_store.has_base_prefix(row["request_ref"], entry[0]):
+            continue
+        params[index] = build_inputs(row)
+    load_session = store.load_session
+    sessions: dict[str, dict[str, Any] | None] = {}
+    for session_id in dict.fromkeys(row["session_id"] for row in rows):
+        # A transient read failure must not mask a closed Session.
+        session = load_session(session_id) or load_session(session_id)
+        sessions[session_id] = (
+            {key: session[key] for key in ("session_id", "status") if key in session}
+            if session is not None else None
+        )
+    misses: list[tuple[int, dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        session_row = sessions[row["session_id"]]
+        prefix, req_path, turn_path, req_fp, turn_fp = meta[index]
+        if prefix is not None and cache_store is not None:
+            session_status = session_row.get("status") if session_row is not None else None
+            full_key = (*prefix, session_status)
+            meta[index] = (full_key, req_path, turn_path, req_fp, turn_fp)
+            cached = cache_store.get_base(row["request_ref"], full_key)
+            if cached is not None:
+                flags[index], turn_statuses[index] = cached
+                continue
+        values = params[index] if params[index] is not None else build_inputs(row)
+        values["current_session"] = session_row
+        params[index] = values
+        misses.append((index, values))
+    if misses:
+        for (index, values), pending in zip(misses, eval_flags([v for _, v in misses]), strict=True):
+            turn_dict = values["pending_observation"]["turn"]
+            turn_status = turn_dict.get("status") if isinstance(turn_dict, dict) else None
+            flags[index], turn_statuses[index] = pending, turn_status
+            if cache_store is not None:
+                cache_store.commit(rows[index]["request_ref"], meta[index], pending, turn_status=turn_status)
+    stopped_misses: list[tuple[int, dict[str, Any]]] = []
+    for index, (row, pending) in enumerate(zip(rows, flags, strict=True)):
+        if not pending:
+            continue
+        if not observed_turn_interrupt(store, row["session_id"], row["turn_id"], cache_store, real_events=real_events):
+            if turn_statuses[index] not in {"failed", "completed"}:
+                continue
+            row_created = datetime.fromisoformat(row["created_at"])
+            if not any(b == row["binding_id"] and s == row["source"] and c >= row_created
+                       for b, s, c in stop_controls()):
+                continue
+        cache_key = meta[index][0]
+        if cache_store is not None and cache_key is not None:
+            cached_stop = cache_store.get_stopped(row["request_ref"], cache_key)
+            if cached_stop is not None:
+                flags[index] = cached_stop
+                continue
+        values = params[index]
+        if values is None:
+            values = build_inputs(row)
+            values["current_session"] = sessions[row["session_id"]]
+        values["pending_observation"]["stop_observed"] = True
+        stopped_misses.append((index, values))
+    if stopped_misses:
+        for (index, _), pending in zip(stopped_misses, eval_flags([v for _, v in stopped_misses]), strict=True):
+            flags[index] = pending
+            if cache_store is not None:
+                cache_store.commit(rows[index]["request_ref"], meta[index], pending, stopped=True)
+    return flags
 
 
 class FileChatDiscovery:
