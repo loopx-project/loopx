@@ -11,7 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from ...chat_action_store import (
@@ -273,15 +273,15 @@ def _publish(path: Path, text: str) -> None:
             raise ValueError("LoopX attention artifact conflicts with existing bytes")
 
 
-def capture_verified_loopx_human_attention(
+def prepare_verified_loopx_human_attention(
     *,
     runtime_root: Path,
     input_value: Mapping[str, Any],
     source_root: Path,
     start: str,
     end: str,
-) -> dict[str, Any]:
-    """Return a copied trajectory input bound to immutable projected receipts."""
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Compose input and artifacts without mutating the source root."""
 
     input_data = deepcopy(dict(input_value))
     scope = _object(input_data.get("scope"))
@@ -384,7 +384,6 @@ def capture_verified_loopx_human_attention(
     capture_id = "loopx-human-attention-capture-" + capture_digest[:16]
     capture_artifact = f"{capture_id}.json"
 
-    root = source_root.resolve(strict=True)
     existing_ids = {
         str(source.get("id") or "")
         for source in sources
@@ -392,8 +391,6 @@ def capture_verified_loopx_human_attention(
     }
     if existing_ids.intersection({receipt_id, capture_id}):
         raise ValueError("Generated LoopX attention source ID already exists")
-    _publish(root / receipt_artifact, receipt_text)
-    _publish(root / capture_artifact, capture_text)
     additions = [
         {
             "id": receipt_id,
@@ -412,4 +409,27 @@ def capture_verified_loopx_human_attention(
     ]
     input_data["sources"] = [*sources, *additions]
     input_data["human_attention_source_id"] = capture_id
-    return input_data
+    return input_data, {
+        receipt_artifact: receipt_text,
+        capture_artifact: capture_text,
+    }
+
+
+def publish_verified_loopx_human_attention(
+    *,
+    source_root: Path,
+    artifacts: Mapping[str, str],
+) -> None:
+    """Publish already-composed artifacts with digest-idempotent create-only IO."""
+
+    root = source_root.resolve(strict=True)
+    for artifact, text in artifacts.items():
+        relative = PurePosixPath(artifact)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or "\\" in artifact
+            or len(relative.parts) != 1
+        ):
+            raise ValueError("LoopX attention artifact path must be a source filename")
+        _publish(root / artifact, text)

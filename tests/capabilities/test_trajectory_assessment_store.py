@@ -1771,6 +1771,39 @@ def test_authenticated_loopx_card_decisions_capture_through_registration_cli(
         end.isoformat().replace("+00:00", "Z"),
         "--preserve-default",
     ]
+    source_before = {
+        path.relative_to(sources): path.read_bytes()
+        for path in sources.rglob("*")
+        if path.is_file()
+    }
+    runtime_before = {
+        path.relative_to(scope["runtime_root"]): path.read_bytes()
+        for path in scope["runtime_root"].rglob("*")
+        if path.is_file()
+    }
+    invalid_data = json.loads(unchanged_input)
+    invalid_data["sources"][0]["artifact_sha256"] = "0" * 64
+    invalid_input = tmp_path / "attention-input-with-changed-source.json"
+    invalid_input.write_text(json.dumps(invalid_data), encoding="utf-8")
+    invalid_command = [
+        str(invalid_input) if argument == str(input_path) else argument
+        for argument in command
+    ]
+    invalid = subprocess.run(
+        invalid_command, capture_output=True, text=True, check=False
+    )
+    assert invalid.returncode == 1
+    assert json.loads(invalid.stdout)["error"] == "source_changed"
+    assert {
+        path.relative_to(sources): path.read_bytes()
+        for path in sources.rglob("*")
+        if path.is_file()
+    } == source_before
+    assert {
+        path.relative_to(scope["runtime_root"]): path.read_bytes()
+        for path in scope["runtime_root"].rglob("*")
+        if path.is_file()
+    } == runtime_before
     completed = subprocess.run(command, capture_output=True, text=True, check=True)
     registered = json.loads(completed.stdout)
     projection = registered["human_attention"]["projection"]
