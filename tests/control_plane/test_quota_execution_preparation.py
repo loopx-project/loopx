@@ -658,6 +658,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     "after-ready-released-execution", "legacy-same-execution", "legacy-released-execution",
     "reencoded-released-execution", "legacy-marked-released-execution",
     "ssh-same-execution", "delta-only-same-execution",
+    "released-at-delivery", "ssh-released-at-delivery", "delta-released-at-delivery", "replaced-at-delivery",
 ])
 def test_native_hook_replays_the_original_claim_after_guard_timeout(
     tmp_path, monkeypatch, capsys, provider, case,
@@ -665,6 +666,7 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
     import io
     from loopx.cli import main
     from loopx.control_plane.turn_driver import codex_context, codex_execution_preparation
+    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
     from test_quota_settlement_cli import _spend_run_count
 
     tmp_path = tmp_path.resolve()
@@ -679,7 +681,8 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
     capture = tmp_path / "before-claim"
     legacy = case.startswith("legacy-")
     after_ready = case.startswith("after-ready-")
-    released = not case.endswith("same-execution")
+    retire_at_delivery = case.endswith("-at-delivery")
+    released = not case.endswith("same-execution") and not retire_at_delivery
     scenario = "codex_app_ssh_goal" if case.startswith("ssh-") else "codex_app_heartbeat"
     host = ("--runtime-profile", scenario)
     delivery = ("--context-delivery", "off", "--delta-delivery", "auto") if case.startswith("delta-") else (
@@ -808,7 +811,20 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
             assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
         else:
             assert current["active"] and current["lease"] == lease
-        if not after_ready:
+        if after_ready:
+            resume_command = shlex.split(receipt["context"]["recovery_command"])
+            assert resume_command[resume_command.index("--prepared-claim-operation-id") + 1] == original_id
+            replay = subprocess.run(resume_command, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+            recovered = json.loads(replay.stdout)
+            assert recovered["ok"] is (not released)
+            assert replay.returncode == (1 if released else 0)
+            if released:
+                assert "current" in recovered["reason"] and "content" not in recovered
+                history = subprocess.run(shlex.split(recovered["recovery"]["command"]),
+                    cwd=tmp_path, capture_output=True, text=True, check=True, timeout=30)
+                assert selected_context_values(json.loads(history.stdout)["content"])[
+                    "/heartbeat_receipt"]["settlement_identity"] == before["heartbeat_receipt"]["settlement_identity"]
+        else:
             source_marker = native / "claim-source.json"
             marker_before = source_marker.read_bytes()
             guard = shlex.split(receipt["readiness_command"])
@@ -834,22 +850,40 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
                 assert ready["execution_preparation"]["lease_proof"] == {
                     "idempotency_key": lease["idempotency_key"], "expected_version": lease["version"],
                 }
-                projection = receipt["ready_context_command_template"].replace("<capture_sha256>", ready["capture_sha256"])
-                projected = subprocess.run(shlex.split(projection), cwd=tmp_path, capture_output=True, text=True,
-                    check=True, timeout=30)
+                projection = shlex.split(receipt["ready_context_command_template"].replace(
+                    "<capture_sha256>", ready["capture_sha256"]))
+                assert projection[projection.index("--prepared-claim-operation-id") + 1] == original_id
+                if retire_at_delivery:
+                    retired = read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
+                        "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
+                    if case == "replaced-at-delivery":
+                        replacement = read("task-lease", "acquire", "--goal-id", GOAL, "--todo-id", TODO,
+                            "--owner", AGENT, "--expected-version", str(retired["lease"]["version"]),
+                            "--idempotency-key", "replacement-lease", "--ttl-seconds", "3600")
+                        assert replacement["lease"]["lease_epoch"] != lease["lease_epoch"]
+                projected = subprocess.run(projection, cwd=tmp_path, capture_output=True, text=True, timeout=30)
                 view = json.loads(projected.stdout)
-                assert view["ok"] and view["recovery"]["command"]
-                selected = subprocess.run(shlex.split(view["recovery"]["command"]) + [
-                    "--select", "/interaction_contract/cli_channel/settlement_plan/identity",
-                    "--select", "/heartbeat_receipt/settlement_identity",
-                ], cwd=tmp_path, capture_output=True, text=True, check=True, timeout=30)
+                assert view["ok"] is (not retire_at_delivery) and view["recovery"]["command"]
+                assert projected.returncode == (1 if retire_at_delivery else 0)
+                if retire_at_delivery:
+                    assert "current" in view["reason"] and "content" not in view
+                    assert source_marker.read_bytes() == marker_before
+                    assert view["heartbeat_receipt"]["settlement_identity"] == before["heartbeat_receipt"]["settlement_identity"]
+                reader = shlex.split(view["recovery"]["command"])
+                if not retire_at_delivery:
+                    reader += ["--select", "/interaction_contract/cli_channel/settlement_plan/identity",
+                               "--select", "/heartbeat_receipt/settlement_identity"]
+                selected = subprocess.run(reader, cwd=tmp_path, capture_output=True, text=True, check=True, timeout=30)
                 page = json.loads(selected.stdout)
                 assert page["eof"]
-                facts = {entry["pointer"]: entry["value"] for entry in json.loads(page["content"])["selections"]}
-                identity = facts["/interaction_contract/cli_channel/settlement_plan/identity"]
-                assert identity == facts["/heartbeat_receipt/settlement_identity"]
-                assert identity == json.loads(original_bytes)["heartbeat_receipt"]["settlement_identity"]
-                assert hook(tool_response=page) == {}
+                facts = selected_context_values(page["content"])
+                identity = json.loads(original_bytes)["heartbeat_receipt"]["settlement_identity"]
+                if retire_at_delivery:
+                    assert facts["/heartbeat_receipt"]["settlement_identity"] == identity
+                else:
+                    assert facts["/interaction_contract/cli_channel/settlement_plan/identity"] == identity
+                    assert facts["/heartbeat_receipt/settlement_identity"] == identity
+                    assert hook(tool_response=page) == {}
                 assert len(claims) == len(guards) == 1
     readback = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
     assert readback["cursor"] == original["cursor"] and readback["receipts"] == original["receipts"]

@@ -536,8 +536,10 @@ lease match in Goal, Todo, owner, key and version. The same-Turn guard stages a
 private capture separately from the active session journal. Require normal
 delivery, the same Goal, Agent, Todo and Turn, and a ready lease proof with the
 original key and version. Use the returned digest to fill the template from
-that receipt, then read the verified native context. Preserve the original
-receipt if the guard refuses delivery. An authorized retry of the same bound capture reuses its
+that receipt. The recovery projection checks the original claim receipt and
+the current matching lease immediately before publishing. Released, expired
+or replaced leases cannot publish ready context. The original capture and its
+receipt remain available through `quota context-read`. An authorized retry of the same bound capture reuses its
 managed claim operation, and the authority owner checks the original lease on
 replay. The native session keeps the latest eligible live guard digest
 separately from the capture. Presenting the exact saved decision preserves
@@ -562,8 +564,9 @@ ready capture 时，回读会提供 `readiness_command` 和 `ready_context_comma
 先核对原领取回执与活动租约的 Goal、Todo、归属、键和版本，再在原工作目录执行就绪命令。
 同轮检查会在活动会话日志以外生成私有 capture。确认允许正常交付、Goal、Agent、Todo
 及 Turn 一致，且就绪的租约凭证与原键和版本匹配后，用返回的摘要填入同一回执的模板，
-再读取校验通过的原生上下文。若检查拒绝交付，保留原回执。
-对同一绑定 capture 的授权重试复用原受管领取操作，
+再读取校验通过的原生上下文。恢复投影在发布前核对原领取回执和当前匹配的租约。
+租约已释放、到期或被替换时拒绝发布 ready 上下文，原 capture 和回执仍可通过
+`quota context-read` 读取。对同一绑定 capture 的授权重试复用原受管领取操作，
 由权威 owner 验证原租约。原生会话独立保存最新合格准入的摘要，重新展示逐字节一致的
 快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入

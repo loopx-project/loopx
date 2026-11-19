@@ -46,13 +46,17 @@ from .quota_context_reader import (
 def _saved_context_transport_failure(
     error: Exception, *, args: argparse.Namespace, receipt: dict[str, Any],
     recovery: dict[str, Any], reader_argv: list[str], source_unverified: bool = False,
+    authority_unverified: bool = False,
 ) -> dict[str, Any]:
     page_bytes, output_bytes = native_context_page_budget()
     limit = getattr(args, "max_page_output_bytes", None)
     if isinstance(limit, int) and limit > 0:
         output_bytes = min(output_bytes, limit)
         page_bytes = min(page_bytes, output_bytes)
-    if source_unverified:
+    if authority_unverified:
+        instruction = ("Read the original receipt with recovery.command. The saved capture remains readable, "
+                       "but publishing ready work requires the original current lease.")
+    elif source_unverified:
         instruction = (
             "The saved source could not be verified. Use recovery.command for diagnostic receipt readback. "
             "Restore an intact, supported capture and retry context-project with its original Goal, Agent, Turn "
@@ -71,13 +75,20 @@ def _saved_context_transport_failure(
         "heartbeat_receipt": receipt, "capture_sha256": args.capture_sha256,
         "recovery": {**recovery, "command": context_capture_read_command(
             Path(recovery["path"]), recovery["sha256"], page_bytes=page_bytes,
-            max_page_output_bytes=output_bytes, list_fields=not source_unverified,
-            select=["/heartbeat_receipt"] if source_unverified else None, reader_argv=reader_argv)},
+            max_page_output_bytes=output_bytes, list_fields=not (source_unverified or authority_unverified),
+            select=["/heartbeat_receipt"] if source_unverified or authority_unverified else None,
+            reader_argv=reader_argv)},
         "instruction": instruction}
 
 
-def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
-    """Present an immutable already-decided quota capture, without authority IO.
+def project_saved_context_capture(
+    args: argparse.Namespace, *, hook_session: str | None = None,
+    registry_path: Path | None = None, runtime_root_arg: str | None = None,
+) -> dict[str, Any]:
+    """Present an immutable already-decided quota capture.
+
+    Resumed Host preparation rechecks the original claim before publication.
+    Historical capture projection remains independent of live authority.
 
     Publication is delayed until this native tool runs, so the lifecycle owner
     can select its current continuity basis. Optional codec failure returns the
@@ -93,6 +104,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     )
 
     reader_argv = current_loopx_cli_argv()
+    prepared_claim = getattr(args, "prepared_claim_operation_id", None)
     try:
         activation = quota_capture.native_context_activation(args)
         saved_page = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
@@ -110,7 +122,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         if saved_page and args.page_bytes is not None:
             _validate_context_page_window(args.offset, args.page_bytes, output_limit)
         path, _, payload = _read_capture(args.capture_file, args.capture_sha256,
-                                         private=hook_session is not None)
+                                         private=hook_session is not None or prepared_claim is not None)
         if payload.get("ok") is False:
             raise ValueError("The saved capture is diagnostic. Read it with quota context-read.")
         identity = payload.get("agent_identity")
@@ -133,6 +145,21 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     full_reference = dict(reference)
     version = payload.get("schema_version")
     complete = version == COMPLETE_TURN_DECISION_VERSION
+    if prepared_claim is not None:
+        from ..history import load_registry
+        from ..paths import resolve_runtime_root
+        from ..control_plane.turn_driver.codex_execution_preparation import require_native_recovery_lease
+
+        try:
+            if not complete or registry_path is None:
+                raise ValueError("Native readiness recovery requires a bound complete Turn.")
+            assert_complete_turn_decision(payload)
+            runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg).resolve()
+            require_native_recovery_lease(payload, claim_operation_id=prepared_claim,
+                                          registry_path=registry_path.resolve(), runtime_root=runtime_root)
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            return _saved_context_transport_failure(exc, args=args, receipt=receipt,
+                recovery=full_reference, reader_argv=reader_argv, authority_unverified=True)
     try:
         if not complete and not is_legacy_saved_quota_decision(payload):
             if activation["enabled"]:
@@ -142,7 +169,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                     goal_id=args.goal_id, agent_id=args.agent_id, capture_sha256=args.capture_sha256,
                     hook_session=hook_session)
             raise QuotaDecisionTransportError("Unsupported saved quota decision version or mixed Turn binding.")
-        if complete and not activation["enabled"] and not activation["progressive_enabled"]:
+        if complete and prepared_claim is None and not activation["enabled"] and not activation["progressive_enabled"]:
             assert_complete_turn_decision(payload)
     except (QuotaDecisionTransportError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         return _saved_context_transport_failure(exc, args=args, receipt=receipt,
@@ -464,6 +491,10 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     """Dispatch captured reads and native lifecycle IO before quota authority access."""
     from . import quota_capture
 
+    if getattr(args, "prepared_claim_operation_id", None) is not None and args.quota_command != "context-project":
+        print_payload({"ok": False, "reason": "--prepared-claim-operation-id requires quota context-project"},
+                      args.format, str)
+        return 1
     if getattr(args, "complete_turn", False) and (args.quota_command != "should-run" or args.format != "json"):
         print_payload({"ok": False, "reason": "--complete-turn requires JSON quota should-run"}, args.format, str)
         return 1
@@ -549,7 +580,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             )
         return _handle_context_hook(args, activation=activation)
     if args.quota_command == "context-project":
-        payload = project_saved_context_capture(args)
+        payload = project_saved_context_capture(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
         print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
         return 0 if payload["ok"] else 1
     if args.quota_command == "context-read":

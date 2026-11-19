@@ -389,6 +389,65 @@ def _native_readiness_guard(
     ]
 
 
+
+def require_native_recovery_lease(
+    payload: Mapping[str, Any], *, claim_operation_id: str,
+    registry_path: Path, runtime_root: Path,
+) -> None:
+    """Read the original claim and its current lease before publishing ready context."""
+    from ..coordination.local_authority import local_authority_is_promoted
+    from ..effect_runtime import CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS, effect_runtime_result
+    from ..work_items.task_lease import inspect_task_lease
+
+    goal = payload.get("goal_id")
+    preparation = payload.get("execution_preparation")
+    if (not isinstance(preparation, Mapping) or payload.get("normal_delivery_allowed") is not True
+            or preparation.get("schema_version") != "execution_preparation_v0"
+            or preparation.get("state") != "ready" or preparation.get("delivery_allowed") is not True
+            or not _exact_identity(goal)
+            or payload.get("registry") != str(registry_path)
+            or payload.get("runtime_root") != str(runtime_root)
+            or not claim_operation_id.startswith("todo-claim:codex-capture:")
+            or not BARE_SHA256_PATTERN.fullmatch(claim_operation_id.removeprefix("todo-claim:codex-capture:"))):
+        raise ValueError("Native readiness recovery requires the original bound claim.")
+
+    agent, todo = preparation.get("agent_id"), preparation.get("todo_id")
+    proof = preparation.get("lease_proof")
+    if (preparation.get("handoff_mode") != "hard_lease"
+            or not all(_exact_identity(part) for part in (agent, todo))
+            or not isinstance(proof, Mapping)
+            or not _exact_identity(proof.get("idempotency_key"))
+            or type(proof.get("expected_version")) is not int
+            or not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal)):
+        raise ValueError("Native readiness recovery requires an authoritative lease proof.")
+
+    def matches(lease: object) -> bool:
+        return (isinstance(lease, Mapping)
+                and lease.get("status") == "active"
+                and (lease.get("goal_id"), lease.get("todo_id"), lease.get("owner")) == (goal, todo, agent)
+                and lease.get("idempotency_key") == proof["idempotency_key"]
+                and lease.get("version") == proof["expected_version"])
+
+    original = effect_runtime_result("coordination.local_authority.operation_receipt", {
+        "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+        "runtime_root": str(runtime_root), "goal_id": goal, "operation_id": claim_operation_id,
+    }, timeout=CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS)
+    records = original.get("receipts") if isinstance(original, Mapping) and original.get("status") == "found" else None
+    record = records[0] if isinstance(records, list) and len(records) == 1 else None
+    result = record.get("result") if isinstance(record, Mapping) else None
+    if (not isinstance(result, Mapping)
+            or record.get("schema_version") != "loopx_coordination_todo_claim_receipt_v0"
+            or record.get("goal_id") != goal or record.get("operation_id") != claim_operation_id
+            or result.get("claim_operation_id") != claim_operation_id
+            or result.get("execution_managed") is not True
+            or not matches(result.get("lease"))):
+        raise ValueError("Saved readiness does not match the original claim receipt.")
+
+    current = inspect_task_lease(registry_path=registry_path, runtime_root=runtime_root, goal_id=goal, todo_id=todo)
+    if current.get("active") is not True or not matches(current.get("lease")):
+        raise ValueError("The original task lease is no longer current for native readiness recovery.")
+
+
 def codex_execution_preparation_readback_context(
     request: Mapping[str, Any], *, scenario: str, context_directory: str | None, progressive_enabled: bool,
 ) -> str | None:
@@ -418,7 +477,7 @@ def codex_execution_preparation_readback_context(
     }
     guidance = (
         "If a verified ready capture is available, follow its recovery command after matching the original active lease. "
-        "If it returns a projection, follow the returned reader after the projection succeeds. "
+        "The ready projection checks the current lease before delivery. Follow its reader after success. "
     )
     ready_capture = request.get("ready_capture")
     if (
@@ -441,7 +500,7 @@ def codex_execution_preparation_readback_context(
         facts["ready_context_command_template"] = shlex.join([
             *base, "quota", "context-project", "--goal-id", goal, "--agent-id", agent,
             "--turn-instance-id", turn, "--capture-file", str(staged / "decision.json"),
-            "--capture-sha256", "<capture_sha256>",
+            "--capture-sha256", "<capture_sha256>", "--prepared-claim-operation-id", operation_id,
             *_native_context_argv(scenario, session_directory, progressive_enabled=progressive_enabled),
         ])
         guidance = (
@@ -449,7 +508,8 @@ def codex_execution_preparation_readback_context(
             "match in Goal, Todo, owner, key and version. Require normal_delivery_allowed=true and "
             "execution_preparation.state=ready for this same Goal, Agent, Todo and Turn, with lease_proof "
             "matching the original key and version. Only then substitute the returned capture_sha256 for "
-            "<capture_sha256> in this receipt's ready_context_command_template and follow the returned reader before work. "
+            "<capture_sha256> in this receipt's ready_context_command_template. The projection rechecks the lease. "
+            "Follow the returned reader before work. "
         )
     if isinstance(ready_capture, Mapping):
         ready_path = ready_capture.get("path")
@@ -479,6 +539,7 @@ def codex_execution_preparation_readback_context(
                         *base, "quota", "context-project", "--capture-file", str(path),
                         "--capture-sha256", ready_sha256, "--goal-id", goal, "--agent-id", agent,
                         "--turn-instance-id", turn, "--context-delivery", "off", "--delta-delivery", "off",
+                        "--prepared-claim-operation-id", operation_id,
                     ])
                 facts["capture_sha256"] = ready_sha256
                 facts["context"] = {
