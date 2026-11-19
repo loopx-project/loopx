@@ -67,6 +67,17 @@ variable "operator_allowlist_ips" {
   description = "List of authorized operator IP CIDRs allowed to connect to Gateway port 443"
 }
 
+variable "gateway_private_ips" {
+  type        = set(string)
+  description = "Private IPv4 addresses of the gateways that connect to RDS"
+  validation {
+    condition = length(var.gateway_private_ips) > 0 && alltrue([
+      for ip in var.gateway_private_ips : can(cidrnetmask("${ip}/32"))
+    ])
+    error_message = "Provide at least one gateway private IPv4 address without a CIDR prefix."
+  }
+}
+
 provider "volcengine" {
   region = var.region
 }
@@ -110,25 +121,7 @@ resource "volcengine_security_group_rule" "gateway_ingress_https" {
   description       = "Allow inbound TLS 443"
 }
 
-# 4. Security Group for RDS for PostgreSQL (Strict VPC internal only)
-resource "volcengine_security_group" "rds_sg" {
-  security_group_name = "loopx-rds-internal-sg"
-  vpc_id              = volcengine_vpc.coordination_vpc.id
-  description         = "Strict internal security group for RDS PostgreSQL (No public ingress)"
-}
-
-# Ingress: Port 5432 strictly from gateway security group
-resource "volcengine_security_group_rule" "rds_ingress_from_gateway" {
-  security_group_id        = volcengine_security_group.rds_sg.id
-  direction                = "ingress"
-  protocol                 = "tcp"
-  port_start               = 5432
-  port_end                 = 5432
-  source_group_id          = volcengine_security_group.gateway_sg.id
-  description              = "Allow PostgreSQL access from gateway only"
-}
-
-# 5. RDS for PostgreSQL 16 Instance
+# 4. RDS for PostgreSQL 16 Instance
 resource "volcengine_rds_postgresql_instance" "coordination_db" {
   db_engine_version = "PostgreSQL_16"
   instance_name     = "loopx-coordination-rds-pg16"
@@ -146,6 +139,18 @@ resource "volcengine_rds_postgresql_instance" "coordination_db" {
     prevent_destroy = true
     ignore_changes  = [charge_info]
   }
+}
+
+# 5. Database access from the configured gateway addresses
+resource "volcengine_rds_postgresql_allowlist" "gateway_access" {
+  allow_list_name = "loopx-gateway-access"
+  allow_list_type = "IPv4"
+  allow_list      = [for ip in var.gateway_private_ips : "${ip}/32"]
+}
+
+resource "volcengine_rds_postgresql_allowlist_associate" "gateway_access" {
+  instance_id   = volcengine_rds_postgresql_instance.coordination_db.id
+  allow_list_id = volcengine_rds_postgresql_allowlist.gateway_access.id
 }
 
 output "vpc_id" {

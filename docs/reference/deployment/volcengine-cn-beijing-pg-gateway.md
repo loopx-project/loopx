@@ -49,7 +49,7 @@
 ```
 
 ### 核心设计原则
-1. **网络零公网暴露数据库**：PostgreSQL 实例仅绑定 VPC 内网子网，安全组仅对网关 ECS 开放 5432 端口；严禁绑定公网弹性 IP (EIP)。
+1. **数据库仅走 VPC 私网**：为 PostgreSQL 实例绑定独立的访问白名单，仅允许网关的私网 IPv4 地址访问 5432 端口。部署时核对实例的全部关联白名单，确保没有额外来源可访问。严禁为数据库绑定公网弹性 IP (EIP)。[火山引擎 PostgreSQL 白名单](https://docs.volcengine.com/docs/rds-for-pg/adding-an-ip-address-allowlist?lang=zh)
 2. **最小受限角色装配 (`loopx_app`)**：网关服务使用专用的 `loopx_app` 角色连接数据库，仅具备 `SELECT, INSERT, UPDATE` 必要权限，禁止 `DROP TABLE`, `TRUNCATE`, `ALTER ROLE` 等管理员特权。
 3. **端到端 TLS 传输认证**：外部客户端经由 TLS 1.3 连接网关，凭据在网关层做安全哈希对比（`timingSafeEqual`），绝不向数据库传递或持久化明文凭据。
 4. **同地域方舟模型与受限凭据注入**：利用同在 `cn-beijing` 的火山方舟大模型/视频 API 端点（`ark.cn-beijing.volces.com`），由部署者在云端通过环境变量或密钥管理服务为 Worker 单独注入受限模型 API Key 与网关 Bearer 凭据，严禁复用或上传开发机本地私有配置文件。
@@ -63,7 +63,7 @@
 | **VPC** | CIDR: `172.16.0.0/16`, Region: `cn-beijing` | 免费 | 隔离协同云上内网 |
 | **子网 (Subnet)** | 可用区: `cn-beijing-a`, CIDR: `172.16.1.0/24` | 免费 | 数据库与网关部署网段 |
 | **安全组 (Gateway)** | 入方向: 仅放通 443 (TLS) 给授权 IP；出方向: 允许内网访问 RDS | 免费 | 网关流量防护 |
-| **安全组 (RDS)** | 入方向: 仅放通 5432 来自网关安全组；严禁任何 `0.0.0.0/0` | 免费 | 数据库访问收敛 |
+| **白名单 (RDS)** | 绑定到 RDS 实例，仅列出网关私网 IPv4 的 `/32` 地址 | 随实例配置 | 限制数据库访问来源 |
 | **轻量网关 ECS** | 规格: `ecs.g3i.large` (2C4G) 或 `ecs.c3i.large` (2C4G) | 按量计费 / 抢占式 | 运行 Caddy + RemoteAuthorityService |
 | **RDS for PG** | 引擎: PostgreSQL 16，规格: `rds.postgres.1c2g` (1C2G) 或通用型 | 按量计费 (按需开启) | 承载协同权威状态与检查点 |
 | **弹性公网 IP** | 带宽: 1-5 Mbps 按流量计费，绑定至网关 ECS | 按量计费 | 提供 HTTPS 客户端安全接入 |
@@ -107,6 +107,7 @@
 1. **Terraform 编排模板**：`main.tf`
    - 锁定 `volcengine/volcengine` provider 已发布约束（`>= 0.0.186, < 0.1.0`，支持 `PostgreSQL_16`）。
    - 定义 VPC、子网、安全组、`volcengine_rds_postgresql_instance`（使用 `node_spec`、`primary_zone_id`、`secondary_zone_id` 与 `charge_info` 块）及 `rds_endpoints` / `rds_endpoint` 输出。
+   - 通过 `gateway_private_ips` 提供网关实际使用的私网 IPv4 地址。模板为每个地址生成 `/32` 白名单条目并绑定到 PostgreSQL 实例。更换网关地址时同步更新白名单。
    - 所有变量均由部署者显式传入或使用安全默认值（如北京地域 `cn-beijing`、默认仅放通 VPC 内网至 443 端口），并设置 `prevent_destroy = true` 避免误删。
 2. **TLS 网关配置**：`gateway-caddy-tls.Caddyfile`
    - Caddy 自动化 TLS 反向代理至本地 Node 权威服务（`https://127.0.0.1:8443`）。
