@@ -1191,3 +1191,108 @@ test("lease proof and schema must agree before any provider intent is journaled"
   }
   await assert.rejects(readFile(join(runtime, "goals", goalId, "runs", "index.jsonl")), {code: "ENOENT"});
 });
+
+test("overlapping invalid observation fields preserve original first-field diagnostic precedence", async t => {
+  const runtime = await tempRuntime(t);
+  const captureError = async (patch: Record<string, unknown>) => {
+    let caught: unknown = null;
+    await assert.rejects(
+      evaluateQuotaMonitorPollCommit(request({
+        phase: "event",
+        runtime_root: runtime,
+        execute: false,
+        observation: observation(patch),
+      })),
+      error => { caught = error; return true; },
+    );
+    assert.ok(caught instanceof EffectRuntimeRequestError);
+    return { kind: caught.kind, code: caught.code, message: caught.message };
+  };
+
+  const singleActor = await captureError({ actor_agent_id: 11 });
+  const singleTodo = await captureError({ todo_id: "invalid-todo" });
+  const singleTarget = await captureError({ target_key: 42 });
+  const singleSettlement = await captureError({ settlement_todo_id: "invalid-settlement" });
+  const singleSummary = await captureError({ reason_summary: 99 });
+  const singleCapabilities = await captureError({ next_required_capabilities: "bad" });
+
+  assert.equal(singleActor.code, "invalid_request");
+  assert.match(singleActor.message, /observation\.actor_agent_id/);
+  assert.match(singleTodo.message, /observation\.todo_id/);
+  assert.match(singleTarget.message, /observation\.target_key/);
+  assert.match(singleSettlement.message, /observation\.settlement_todo_id/);
+  assert.match(singleSummary.message, /observation\.reason_summary/);
+  assert.match(singleCapabilities.message, /observation\.next_required_capabilities/);
+
+  assert.deepEqual(await captureError({ actor_agent_id: 11, target_key: 42 }), singleActor);
+  assert.deepEqual(await captureError({ todo_id: "invalid-todo", target_key: 42 }), singleTodo);
+  assert.deepEqual(await captureError({ settlement_todo_id: "invalid-settlement", target_key: 42 }), singleSettlement);
+  assert.deepEqual(await captureError({ reason_summary: 99, todo_id: "invalid-todo" }), singleSummary);
+  assert.deepEqual(await captureError({ next_required_capabilities: "bad", next_continuation_policy: 42 }), singleCapabilities);
+  await assert.rejects(readFile(join(runtime, "goals", goalId, "runs", "index.jsonl")), { code: "ENOENT" });
+});
+
+test("pending receipt preserves serialized work_lane_contract and external_evidence_observation", async t => {
+  const runtime = await tempRuntime(t);
+  const effect = "pending-lane-facts-replay";
+  const laneContract = {
+    must_attempt_work: true,
+    monitor_policy: "read_only_observation_then_no_spend_if_unchanged",
+    reason_codes: ["external_evidence_poll_signal"],
+  };
+  const externalObservation = { required: true, must_attempt_observation: true };
+  const params = request({
+    phase: "preflight",
+    runtime_root: runtime,
+    execute: true,
+    effect_id: effect,
+    decision: decision({
+      should_run: true,
+      effective_action: "external_evidence_observe",
+      heartbeat_recommendation: {},
+      work_lane_contract: laneContract,
+      external_evidence_observation: externalObservation,
+    }),
+    observation: observation({ todo_id: "todo_public_monitor", result_hash: "observed-ext" }),
+  });
+  const preflight = await evaluateQuotaMonitorPollCommit(params);
+  assert.equal(preflight.status, "provider_required");
+
+  const receiptPath = join(
+    runtime, "goals", goalId, "runs", ".transactions", "quota-monitor-poll",
+    `${createHash("sha256").update(effect).digest("hex").slice(0, 24)}.json`,
+  );
+  const pending = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.deepEqual(pending.admitted_decision.work_lane_contract, laneContract);
+  assert.deepEqual(pending.admitted_decision.external_evidence_observation, externalObservation);
+
+  const writeback = {
+    schema_version: "monitor_poll_todo_writeback_v0",
+    monitor_effect_id: effect,
+    goal_id: goalId,
+    todo_id: "todo_public_monitor",
+    dry_run: false,
+    target_key: null,
+    result_hash: "observed-ext",
+    material_change: false,
+    material_change_generation: 0,
+    consecutive_no_change: 1,
+    last_checked_at: params.generated_at,
+    next_due_at: null,
+    cadence: null,
+    todo_update: {},
+    next_todos: [],
+    successor_receipts: [],
+  };
+  const committed = await evaluateQuotaMonitorPollCommit({
+    ...params,
+    phase: "commit",
+    provider_receipt: writeback,
+    decision: decision({ effective_action: "normal_delivery", heartbeat_recommendation: {} }),
+  });
+  assert.equal(committed.status, "written");
+  assert.equal(
+    (committed.record?.monitor_event as Record<string, unknown>).monitor_mode,
+    "external_monitor_observed_without_material_transition",
+  );
+});

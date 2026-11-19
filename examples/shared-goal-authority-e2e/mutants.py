@@ -72,7 +72,7 @@ CASES = [
     Case('monitor_route_material_guard_removed', (('loopx/control_plane/scheduler/monitor_successor.ts', replacement(
         'if ((agentTodo || userTodo) && !material)', 'if (false)')),),
          'tests/control_plane_ts/monitor_successor.test.ts', 'invalid successor intent is rejected'),
-    Case('monitor_route_rewrites_fingerprint', (('loopx/control_plane/quota/monitor_poll_commit.ts', replacement(
+    Case('monitor_route_rewrites_fingerprint', (('loopx/control_plane/quota/monitor_poll_codec.ts', replacement(
         '  monitorSuccessorIntent(result);', '  Object.assign(result, monitorSuccessorIntent(result));')),),
          'tests/control_plane_ts/quota_monitor_poll_commit.test.ts', 'preserves the legacy pending observation fingerprint'),
     Case('governance_exclusion_ignored', (('loopx/control_plane/goals/shared_goal_work.ts', replacement(
