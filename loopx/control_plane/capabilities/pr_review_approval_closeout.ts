@@ -72,31 +72,40 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
     grants_approval: false, grants_merge_authority: false,
   };
   if (submitted) {
-    // A complete COMMENTED review can cover a model without a formal opinion.
-    const validCoverageConclusion = (row: ProviderOpinion) => row.conclusion.valid === true
-      || row.state === "COMMENTED" && row.source.review_body_valid === true;
-    const coverage = new Set(active.filter(validCoverageConclusion).map(row => row.id));
     const logins = new Set(active.map(row => row.login));
-    const formalStates = new Map<string, ReviewState>();
-    // Keep attributable formal reviews while the same account and head still
-    // carry that opinion. A follow-up comment leaves the formal history intact.
-    for (const row of submitted.sort((a, b) => b.time - a.time || b.id - a.id)) {
+    const coverage = new Map<string, {
+      formalState?: ReviewState;
+      formalReviewIds: number[];
+      commentedReviewId?: number;
+    }>();
+    // A follow-up preserves the last complete comment and the current formal
+    // opinion. Process oldest first so an opinion change can retire comments
+    // between the old and new formal reviews as well as the old formal reviews.
+    for (const row of submitted.sort((a, b) => a.time - b.time || a.id - b.id)) {
       if (!logins.has(row.login)) continue;
       if (row.head !== head || row.state === "DISMISSED") {
-        logins.delete(row.login);
+        coverage.delete(row.login);
         continue;
       }
-      if (row.state === "COMMENTED") continue;
-      const formalState = formalStates.get(row.login);
-      if (formalState && row.state !== formalState) {
-        logins.delete(row.login);
-        continue;
+      const formal = row.state !== "COMMENTED";
+      let account = coverage.get(row.login);
+      if (!account || (formal && account.formalState !== undefined && account.formalState !== row.state)) {
+        account = {formalReviewIds: []};
+        coverage.set(row.login, account);
       }
-      formalStates.set(row.login, row.state);
-      if (qualifies(row) && validCoverageConclusion(row)) coverage.add(row.id);
+      if (formal) account.formalState = row.state;
+      if (!qualifies(row)) continue;
+      if (formal && row.conclusion.valid === true) {
+        account.formalReviewIds.push(row.id);
+      } else if (!formal && (row.conclusion.valid === true || row.source.review_body_valid === true)) {
+        account.commentedReviewId = row.id;
+      }
     }
     evidence.independent_review_activity_ids = active.map(row => row.id);
-    evidence.independent_coverage_review_ids = [...coverage];
+    evidence.independent_coverage_review_ids = [...coverage.values()].flatMap(
+      ({formalReviewIds, commentedReviewId}) => commentedReviewId === undefined
+        ? formalReviewIds : [...formalReviewIds, commentedReviewId],
+    );
   }
   return evidence;
 }

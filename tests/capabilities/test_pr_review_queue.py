@@ -858,6 +858,67 @@ def test_shared_independent_login_retires_earlier_formal_evidence(intervening: s
 
 
 @pytest.mark.parametrize(
+    "with_formal_opinion", [True, False],
+    ids=["keep-gpt-coverage", "keep-gemini-review-trigger"],
+)
+def test_follow_up_preserves_qualified_commented_review(with_formal_opinion: bool) -> None:
+    login = "shared-peer"
+    if with_formal_opinion:
+        reviews = [
+            _github_model_review(10, login=login, family="Gemini", state="APPROVED"),
+            _github_model_review(11, login=login, family="gpt-6.2-sol"),
+        ]
+        decision = "APPROVED"
+        action = "qualify_pull_request_merge_readiness"
+    else:
+        reviews = [_github_model_review(11, login=login, family="Gemini")]
+        decision = "REVIEW_REQUIRED"
+        action = "rereview_pull_request_exact_head"
+
+    before = _github_model_pr(reviews, reviewDecision=decision)
+    assert _model_queue_row(before)["review_action_kind"] == action
+    follow_up = _github_model_review(12, login=login, family="gpt-6.2-sol")
+    follow_up["body"] = "Thanks for the update. I will check the next revision."
+    after = _github_model_pr([*reviews, follow_up], reviewDecision=decision)
+    row = _model_queue_row(after)
+    ordinary = _model_queue_row(after, family=None)
+    assert row["review_conclusion"] == ordinary["review_conclusion"]
+    assert row["independent_review"] == ordinary["independent_review"]
+    assert row["independent_review"]["review_id"] == 12
+    assert row["review_action_kind"] == action
+
+
+@pytest.mark.parametrize(
+    "intervening", ["dismissal", "changed-formal-opinion", "different-head"],
+)
+def test_commented_review_coverage_retires_at_account_boundary(intervening: str) -> None:
+    login = "shared-peer"
+    approval = _github_model_review(9, login=login, family="Gemini", state="APPROVED")
+    prior = _github_model_review(10, login=login, family="gpt-6.2-sol")
+    if intervening == "changed-formal-opinion":
+        replacement = _github_model_review(11, login=login, family="Gemini", state="CHANGES_REQUESTED")
+        reviews = [approval, prior, replacement]
+        decision = "CHANGES_REQUESTED"
+    else:
+        boundary = (
+            _github_model_review(11, login=login, family="Gemini", state="DISMISSED")
+            if intervening == "dismissal"
+            else _github_model_review(11, login=login, family="Gemini", sha="2" * 40)
+        )
+        replacement = _github_model_review(12, login=login, family="Gemini", state="APPROVED")
+        reviews = [approval, prior, boundary, replacement]
+        decision = "APPROVED"
+    follow_up = _github_model_review(13, login=login, family="Gemini")
+    follow_up["body"] = "I have added a reference to the discussion."
+    pr = _github_model_pr([*reviews, follow_up], reviewDecision=decision)
+    row = _model_queue_row(pr)
+    ordinary = _model_queue_row(pr, family=None)
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert row["review_conclusion"] == ordinary["review_conclusion"]
+    assert row["independent_review"] == ordinary["independent_review"]
+
+
+@pytest.mark.parametrize(
     "invalid_evidence",
     ["association", "bot", "body"],
 )
