@@ -58,9 +58,13 @@ registration. It continues the saved attempt or returns the checked result.
 The `--guided` route remains available for an existing project or an interactive
 host.
 
-Python 3.11+ is required. Import and help do not need Node. Executing governed
-tasks requires a qualified Node runtime (22.22.3+ and the existing SQLite
-reliability checks), an explicitly selected host and its own prerequisites.
+Python 3.11+ is required. Import and help work before Node is installed.
+A fresh `status` read and governed tasks use the TypeScript runtime. On a cold
+start with missing or unsupported Node, the first task reports
+`node_unavailable` before creating Goal state. Install or activate Node.js
+22.22.3+ on PATH, run `loopx doctor --deep`, and repeat the same start command.
+Execution also requires the existing SQLite reliability checks and the selected
+host's prerequisites.
 Use the existing `turn run-once --host generic-cli` entry, a separate validation
 command, `turn inspect-journal` and `--resume-turn-key` for execution and recovery.
 Start with one natural-language goal in your existing model host:

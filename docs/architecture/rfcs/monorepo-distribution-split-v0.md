@@ -342,7 +342,9 @@ Before first registration the native route looks for Codex on PATH. Adapter
 and check commands resolve from the task directory on POSIX and are checked
 for explicitly absolute paths on Windows. An unavailable program is
 reported before creating local Goal state or dispatching work, so the caller
-can correct the launch configuration and retry. The entry uses the existing
+can correct the launch configuration and retry. A cold launch with missing or
+unsupported Node reports `node_unavailable` and directs the caller to repeat
+the original command after runtime setup. The entry uses the existing
 Goal, Todo, lease and Turn owners and defaults to project-local runtime state.
 Registration records the original operation and storage target before the
 initial source is written. The identical request can supply a missing initial

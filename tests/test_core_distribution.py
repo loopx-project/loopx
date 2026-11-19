@@ -747,6 +747,18 @@ def test_installed_core_starts_one_checked_task_from_goal_text(core_python, tmp_
         "--goal-text", objective, "--execute", "--host-adapter-command-json",
         json.dumps([core_python, "-I", "-c", adapter]), "--validation-command-json",
         json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])]
+    empty_path = tmp_path / "no-node"
+    empty_path.mkdir()
+    environment = {"PATH": str(empty_path)}
+    refused = json.loads(_run(core_python, arguments, tmp_path, environment=environment, expected=1).stdout)
+    assert refused["ok"] is False and refused["diagnostic_code"] == "node_unavailable"
+    assert refused["runtime_requirement"]["runtime"] == "node"
+    assert "Node.js" in refused["recommended_action"] and "original command" in refused["recommended_action"]
+    markdown = _run(core_python, ["--format", "markdown", *arguments[2:]],
+                    tmp_path, environment=environment, expected=1).stdout
+    assert "Install or activate Node.js" in markdown and "repeat the original command" in markdown
+    assert not list(project.iterdir())
+
     first = json.loads(_run(core_python, arguments, tmp_path).stdout)
     assert first["status"] == "committed" and first["validation"]["status"] == "passed"
     assert first["goal_id"] == "first-work-goal" and first["agent_id"] == "local-worker"

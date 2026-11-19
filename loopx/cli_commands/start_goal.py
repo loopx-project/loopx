@@ -14,6 +14,7 @@ from ..bootstrap_command_pack import (
     render_start_goal_guided_markdown,
 )
 from ..control_plane.effect_runtime import (
+    EffectRuntimeNodeProbeError,
     EffectRuntimeStartupError,
     MINIMUM_NODE_VERSION_TEXT,
 )
@@ -69,8 +70,13 @@ _EFFECT_RUNTIME_STARTUP_DEFAULT_REMEDIATION = (
 def _effect_runtime_startup_recommended_action(
     diagnostic_code: str,
     message: str,
+    *,
+    guided: bool,
 ) -> str:
     node_action = node_probe_remediation(diagnostic_code)
+    if not guided:
+        action = node_action or "Check the Node.js launcher on PATH, then run `loopx doctor --deep`."
+        return f"{action} Then repeat the original command."
     if node_action is not None:
         return f"{node_action} Then retry `loopx start-goal --guided`."
     if diagnostic_code == "invalid_idle_timeout":
@@ -86,12 +92,13 @@ def _effect_runtime_startup_recommended_action(
 
 def _effect_runtime_startup_failure_payload(
     exc: EffectRuntimeStartupError,
+    *,
+    guided: bool = True,
 ) -> dict[str, object]:
     diagnostic_code = getattr(exc, "diagnostic_code", "runtime_startup_failed")
-    return {
+    payload: dict[str, object] = {
         "ok": False,
-        "schema_version": "loopx_start_goal_guided_v0",
-        "error": "LoopX TypeScript control-plane runtime is unavailable",
+        "error": "LoopX TypeScript control-plane runtime is unavailable" if guided else str(exc),
         "diagnostic_code": diagnostic_code,
         "runtime_requirement": {
             "runtime": "node",
@@ -101,17 +108,22 @@ def _effect_runtime_startup_failure_payload(
         "recommended_action": _effect_runtime_startup_recommended_action(
             diagnostic_code,
             str(exc),
+            guided=guided,
         ),
     }
+    if guided:
+        payload["schema_version"] = "loopx_start_goal_guided_v0"
+    return payload
 
 
-def _render_start_goal_markdown(payload: dict[str, object]) -> str:
+def _render_start_goal_markdown(payload: dict[str, object], *, guided: bool = True) -> str:
     if payload.get("ok") is not False:
         message = payload.get("message")
         if isinstance(message, str):
             return message
         return render_start_goal_guided_markdown(payload)
-    lines = ["# Guided Start Goal", "", f"- error: `{payload.get('error')}`"]
+    heading = "# Guided Start Goal" if guided else "# Start Goal"
+    lines = [heading, "", f"- error: `{payload.get('error')}`"]
     for field in (
         "error_code",
         "diagnostic_code",
@@ -394,12 +406,15 @@ def handle_start_goal_command(
         try:
             payload = execute_managed_start(args, runtime_root_arg=runtime_root_arg,
                                             explicit_registry=explicit_registry)
+        except EffectRuntimeNodeProbeError as exc:
+            payload = _effect_runtime_startup_failure_payload(exc, guided=False)
         except (OSError, RuntimeError, ValueError) as exc:
             payload = {"ok": False, "error": str(exc)}
-            print_payload(payload, args.format, _render_start_goal_markdown)
-            return 1
-        print_payload(payload, args.format, render_managed_start_markdown)
-        return 0 if payload["ok"] else 1
+        else:
+            print_payload(payload, args.format, render_managed_start_markdown)
+            return 0 if payload["ok"] else 1
+        print_payload(payload, args.format, lambda failure: _render_start_goal_markdown(failure, guided=False))
+        return 1
     if any(getattr(args, name, None) is not None for name in (
         "execution_host", "host_adapter_command_json", "validation_command_json", "write_dir",
     )):
