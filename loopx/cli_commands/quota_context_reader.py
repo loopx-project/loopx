@@ -577,9 +577,9 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
         if value is None or isinstance(value, (str, bool, int, float))
         and len(json.dumps(value, ensure_ascii=False).encode("utf-8")) <= 240}
     result["instruction"] = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if progressive_enabled else CONTEXT_CAPTURE_READ_GUIDANCE
-    result["instruction"] += " Use --select or --list with recovery.command for fields in that view."
+    result["instruction"] += " Use --select or --list on recovery.command."
     if progressive_enabled:
-        result["instruction"] += " Use the source in context_details for deferred fields."
+        result["instruction"] += " Deferred fields use context_details."
     if mode != "full":
         result["instruction"] += (" command reads the delta; baseline_reference identifies its exact saved base when file-backed. "
             "recovery.command reads current facts directly without that baseline.")
