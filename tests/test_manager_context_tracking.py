@@ -586,3 +586,201 @@ def test_history_links_are_scoped_and_do_not_hide_other_work(fixture, monkeypatc
     assert "Other receiver's private work" not in json.dumps(foreign)
     with pytest.raises(ValueError, match="must belong"):
         link(root, registry, "research", "worker", ids[1], ["todo_history"], [])
+
+
+
+def test_handoff_query_batches_goal_lifetime_scope_per_goal(fixture, monkeypatch):
+    import loopx.capabilities.manager_context.tracking as tracking
+
+    root, registry, session, turn, target = fixture
+    expected_ids = []
+    for idx in range(3):
+        rid = deliver(
+            root,
+            registry,
+            session=session,
+            turn=dict(turn, client_turn_id=f"batch-{idx}"),
+            request=target,
+        )["request_id"]
+        expected_ids.append(rid)
+    target_dir = next((_root(root) / "entries").iterdir())
+    (target_dir / "corrupt.json").write_text("{damaged", encoding="utf-8")
+
+    real_scope = tracking.collaboration_goal_scope
+    scope_calls = []
+
+    def spy_scope(reg_path, *, goal_id, agents, caller_goal_ref=None, **kwargs):
+        scope_calls.append(goal_id)
+        return real_scope(
+            reg_path,
+            goal_id=goal_id,
+            agents=agents,
+            caller_goal_ref=caller_goal_ref,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(tracking, "collaboration_goal_scope", spy_scope)
+    result = query(root, registry, goal_ids=["research"], owner_scope=True)
+
+    assert scope_calls == ["research"]
+    assert len(result["rows"]) == 3
+    assert {row["request_id"] for row in result["rows"]} == set(expected_ids)
+    assert result["coverage"]["unreadable"] == 1
+
+
+def test_handoff_query_fails_fast_per_goal_on_lock_timeout(tmp_path, monkeypatch):
+    import loopx.capabilities.manager_context.tracking as tracking
+    from loopx.file_lock import LockAcquireTimeoutError
+
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "contended",
+                        "repo": str(tmp_path),
+                        "coordination": {"registered_agents": ["worker"]},
+                    },
+                    {
+                        "id": "healthy",
+                        "repo": str(tmp_path),
+                        "coordination": {"registered_agents": ["worker"]},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = {"session_id": "manager-session", "channel_id": "manager"}
+    for idx in range(5):
+        deliver(
+            tmp_path,
+            registry,
+            session=session,
+            turn={"client_turn_id": f"contended-{idx}", "origin": "web", "message": "Check lock."},
+            request={"goal_id": "contended", "agent_id": "worker"},
+        )
+    healthy_ids = []
+    for idx in range(2):
+        healthy_ids.append(
+            deliver(
+                tmp_path,
+                registry,
+                session=session,
+                turn={"client_turn_id": f"healthy-{idx}", "origin": "web", "message": "Check healthy."},
+                request={"goal_id": "healthy", "agent_id": "worker"},
+            )["request_id"]
+        )
+
+    real_scope = tracking.collaboration_goal_scope
+    calls = []
+
+    def contended_scope(reg_path, *, goal_id, agents, caller_goal_ref=None, **kwargs):
+        calls.append(goal_id)
+        if goal_id == "contended":
+            raise LockAcquireTimeoutError(
+                incident={"holder": {}, "operator_action": {"action": "inspect_lock_holder"}},
+                incident_recorded=True,
+                incident_channel="test",
+            )
+        return real_scope(
+            reg_path,
+            goal_id=goal_id,
+            agents=agents,
+            caller_goal_ref=caller_goal_ref,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(tracking, "collaboration_goal_scope", contended_scope)
+    result = query(tmp_path, registry, goal_ids=["contended", "healthy"], owner_scope=True)
+
+    assert calls.count("contended") == 1
+    assert calls.count("healthy") == 1
+    assert {row["request_id"] for row in result["rows"]} == set(healthy_ids)
+    assert result["coverage"]["unreadable"] == 5
+
+
+def test_handoff_query_batched_source_session_validates_per_row_goal_ref(tmp_path, monkeypatch):
+    import loopx.capabilities.manager_context.tracking as tracking
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
+    instance_a = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    instance_b = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    registry = tmp_path / ".loopx" / "registry.json"
+    with source_session_registry_transaction(
+        registry,
+        operation="test_create_source_registry",
+        create=lambda: {
+            "profile_id": "source_session_v1",
+            "goals": [
+                {
+                    "id": "delivery",
+                    "repo": str(tmp_path),
+                    "status": "active",
+                    "goal_instance_id": instance_a,
+                    "coordination": {"registered_agents": ["worker"]},
+                }
+            ],
+            "session_bindings": [],
+            "session_receipts": [],
+            "lifetime_receipts": [],
+        },
+    ) as transaction:
+        transaction.commit(transaction.payload_copy())
+
+    session = {"session_id": "manager-session", "channel_id": "manager"}
+    valid_ids = []
+    for idx in range(2):
+        valid_ids.append(
+            deliver(
+                tmp_path,
+                registry,
+                session=session,
+                turn={"client_turn_id": f"valid-{idx}", "origin": "web", "message": "Valid instance."},
+                request={"goal_id": "delivery", "agent_id": "worker"},
+            )["request_id"]
+        )
+    stale_id = deliver(
+        tmp_path,
+        registry,
+        session=session,
+        turn={"client_turn_id": "stale", "origin": "web", "message": "Stale instance."},
+        request={"goal_id": "delivery", "agent_id": "worker"},
+    )["request_id"]
+    stale_path = next((_root(tmp_path) / "entries").glob(f"*/{stale_id}.json"))
+    stale_row = _read(stale_path)
+    stale_row["goal_ref"] = {"goal_id": "delivery", "goal_instance_id": instance_b}
+    _write(stale_path, stale_row)
+
+    malformed_id = deliver(
+        tmp_path,
+        registry,
+        session=session,
+        turn={"client_turn_id": "malformed", "origin": "web", "message": "Malformed ref."},
+        request={"goal_id": "delivery", "agent_id": "worker"},
+    )["request_id"]
+    malformed_path = next((_root(tmp_path) / "entries").glob(f"*/{malformed_id}.json"))
+    malformed_row = _read(malformed_path)
+    malformed_row["goal_ref"] = "bad-ref"
+    _write(malformed_path, malformed_row)
+
+    real_scope = tracking.collaboration_goal_scope
+    scope_calls = []
+
+    def spy_scope(reg_path, *, goal_id, agents, caller_goal_ref=None, **kwargs):
+        scope_calls.append(goal_id)
+        return real_scope(
+            reg_path,
+            goal_id=goal_id,
+            agents=agents,
+            caller_goal_ref=caller_goal_ref,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(tracking, "collaboration_goal_scope", spy_scope)
+    result = query(tmp_path, registry, goal_ids=["delivery"], owner_scope=True)
+
+    assert scope_calls == ["delivery"]
+    assert {row["request_id"] for row in result["rows"]} == set(valid_ids)
+    assert result["coverage"]["unreadable"] == 2

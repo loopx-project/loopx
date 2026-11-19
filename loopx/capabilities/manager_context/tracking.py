@@ -5,6 +5,8 @@ Receipts describe transport/consumption, never a second mutable work status.
 
 from __future__ import annotations
 
+from typing import Any
+
 from . import _read, _root, evidence_goal_scope
 from ...control_plane.collaboration.inbox import (
     _entry as _entry,
@@ -16,6 +18,7 @@ from ...control_plane.collaboration.inbox import (
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
+    scope_for_caller_goal_ref,
 )
 from ...control_plane.collaboration.links import read_linked_work
 from ...control_plane.content_digest import (
@@ -61,6 +64,7 @@ def query(
         except (OSError, ValueError, TypeError):
             continue
     rows, unreadable = [], 0
+    candidates_by_goal: dict[str, list[dict[str, Any]]] = {}
     paths = sorted(
         (_root(root) / "entries").glob(
             "*/" + (request_id + ".json" if request_id else "*.json")
@@ -69,7 +73,8 @@ def query(
     for path in paths[:2000]:
         try:
             row = _read(path)
-            if row.get("goal_id") not in goal_ids:
+            gid = row.get("goal_id")
+            if gid not in goal_ids:
                 continue
             if agent_id is not None and row.get("agent_id") != agent_id:
                 continue
@@ -83,27 +88,42 @@ def query(
                     and legacy_channels.get(row.get("source_id")) == {channel_id}
                 ):
                     continue
-            with collaboration_goal_scope(
-                registry_path,
-                goal_id=row["goal_id"],
-                agents=(),
-                caller_goal_ref=row.get("goal_ref"),
-            ) as goal_scope:
-                entry = _entry(
-                    root,
-                    row["goal_id"],
-                    row["agent_id"],
-                    row["request_id"],
-                    scope=goal_scope,
-                )
-                decide_collaboration_lifecycle(
-                    goal_scope,
-                    operation="history_inspect",
-                    record=entry,
-                )
-            rows.append(row)
+            candidates_by_goal.setdefault(gid, []).append(row)
         except (OSError, ValueError, KeyError, TypeError):
             unreadable += 1
+    # Hold each Goal's lifetime fence once per matched Goal rather than once per
+    # handoff entry so lock contention cannot amplify into O(N * timeout) stalls.
+    for gid, group_rows in candidates_by_goal.items():
+        try:
+            with collaboration_goal_scope(
+                registry_path,
+                goal_id=gid,
+                agents=(),
+                caller_goal_ref=None,
+            ) as base_scope:
+                for row in group_rows:
+                    try:
+                        goal_scope = scope_for_caller_goal_ref(
+                            base_scope,
+                            row.get("goal_ref"),
+                        )
+                        entry = _entry(
+                            root,
+                            row["goal_id"],
+                            row["agent_id"],
+                            row["request_id"],
+                            scope=goal_scope,
+                        )
+                        decide_collaboration_lifecycle(
+                            goal_scope,
+                            operation="history_inspect",
+                            record=entry,
+                        )
+                        rows.append(row)
+                    except (OSError, ValueError, KeyError, TypeError):
+                        unreadable += 1
+        except (OSError, ValueError, KeyError, TypeError):
+            unreadable += len(group_rows)
     rows.sort(
         key=lambda row: (row.get("delivered_at") or "", row["request_id"]), reverse=True
     )
