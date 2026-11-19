@@ -701,11 +701,12 @@ Explore writeback and monitor settlement use the exact record rather than a
 removed list alias. No second authority store or selection rule is introduced.
 
 This changes default exact CLI/API output and Heartbeat/Turn context delivery. Regenerate saved expanded heartbeat prompts after installing the
-change. Bootstrap prompts load installed rules on the next wake. TurnEnvelope
-transport remains an explicit projection choice; this change alone neither
-upgrades installed automations nor proves model adoption or token/latency gains.
-To roll back, install the prior revision and regenerate prompts; changing a
-transport flag does not restore the old exact Todo schema.
+change. Bootstrap prompts load installed rules on the next wake. The
+[complete v1 Host entry](protocols/turn-envelope-v0.md#complete-v1-host-entry--完整-v1-host-入口)
+describes the live schema and presentation options. Model adoption and
+token or latency gains require their own evidence. To restore the earlier
+exact Todo schema, use a state-compatible prior release and regenerate its
+prompts.
 
 ## Experimental compaction working memory
 

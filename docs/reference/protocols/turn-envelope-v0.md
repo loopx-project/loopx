@@ -1,43 +1,56 @@
 # TurnEnvelope v0
 
-`loopx_turn_envelope_v0` is an additive, bounded read model over an already
-computed `quota should-run` decision. It gives an agent the next action and its
-safety contract without replaying every diagnostic lane in the full quota
-payload.
+`loopx_turn_envelope_v0` was an additive, bounded view of an already computed
+quota decision. Existing captures keep their original schema and signature.
+In 2.3.0, an ordinary JSON guard returns a quota packet and the explicit
+`--turn-envelope` spelling renders its v0 view.
 
 This page documents the historical representation and its current read and
 recovery boundaries. New quota decisions with an interaction contract compose
 the complete v1 source before capture and encoding. Historical captures retain
 their original schema and signature. An action signature compares its
-registered projection; complete source-clause preservation requires its own
-verification.
+registered projection; full caller qualification also checks source clauses,
+readback and matched use through the actual Host.
 The RFC's [C1 caller replacement](../../architecture/rfcs/controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
-also covers the direct Turn producer and final host prompts. Quota CLI output
+also covers the direct Turn producer and final Host prompts. Quota CLI output
 parity alone cannot qualify those consumers.
 
-中文：本页记录历史版本及当前读回与恢复边界。包含交互契约的新 quota 决策在捕获
-与编码前组合完整 v1 来源。历史捕获保留原 schema 和签名。动作签名比较其注册投影，
-完整来源条款的保留需要独立验证。
-RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
+中文：`loopx_turn_envelope_v0` 是已计算 quota 决策的有界视图，本页记录历史版本及
+当前读回与恢复边界。历史捕获保留原 schema 与签名。2.3.0 的普通 JSON guard 返回
+quota packet，显式使用 `--turn-envelope` 时呈现 v0。
+
+包含交互契约的新 JSON guard 在捕获与编码前组合完整 `loopx_turn_envelope_v1` 来源。
+action signature 比较其注册投影；完整调用方验收还需检查来源条款、读回以及实际
+Host 中的可比用法。RFC 的
+[C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
 也覆盖直接组合契约的 Turn 入口和最终 Host prompt，这两处分别验收。
 
 ### Complete v1 Host entry / 完整 v1 Host 入口
 
-JSON `quota should-run` composes `loopx_turn_envelope_v1` before capture. The
-saved source retains original work, acceptance, Stop, required reads and
-permission facts. When progressive or Delta delivery returns navigation,
-follow its pinned reader for the same admission.
+Ordinary JSON `quota should-run` composes `loopx_turn_envelope_v1` before
+capture. Under the default progressive presentation setting, stdout may return
+a `context_capture_navigation_v1` envelope rather than the inline full document,
+while the saved `decision.json` holds `loopx_turn_envelope_v1`. `--turn-envelope`
+and `--complete-turn` remain mutually exclusive compatibility aliases for saved
+commands, and both compose v1 in the current CLI. The saved source retains
+original work, acceptance, Stop, required reads and permission facts. When
+progressive or Delta delivery returns navigation, follow its pinned reader for
+the same admission.
 
 ```bash
 loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
-  --turn-instance-id <turn-id> --decision-output-dir ./complete-001
+  --turn-instance-id <turn-id> --context-delivery on --delta-delivery off \
+  --decision-output-dir ./complete-001
 ```
 
-`--turn-envelope` and `--complete-turn` remain mutually exclusive inputs
-for saved commands. Both use v1 in the current CLI. With no independent
-Delta request, `--context-delivery off` returns the complete inline v1
-document. Read existing captures with their original digest-bound
-`quota context-read` or `context-project` recovery.
+Use `--context-delivery off --delta-delivery off` for plain inline v1 JSON (or
+`--context-delivery off` when no independent Delta request is set). A Host that
+needs the earlier live contract requires a prior runtime that can read the
+current authority state. Follow the installation owner's [in-place upgrade and
+recovery guidance](../../guides/agent-upgrade.md) and keep compatible backup and
+runtime pairs. Read existing captures with their original digest-bound
+`quota context-read` or `context-project` recovery. On 2.3.0, the parser
+rejects `--complete-turn` before guard execution.
 
 `quota context-project` checks a saved complete decision before presenting it
 as current context, including with Delta alone or with context delivery off.
@@ -61,17 +74,26 @@ the original `settlement_owed` recovery instead of a second debit. Contract
 composition failure preserves the decided receipt and available original
 capture, reports failure, and grants no work or automatic retry.
 
-Newly generated heartbeat and same-Turn commands use the default v1 entry.
-Historical benchmark runs use the recorded runner and contract version.
-User task time requirements remain task context. Caller-private deadlines
-and runtime guidance stay with the caller. Live Host adoption and efficiency
-require separate verification.
+Newly generated heartbeat and same-Turn selection commands use the default v1
+entry. Regenerate expanded prompts against the chosen runtime after an upgrade
+or compatible rollback. Historical benchmark runs use the recorded runner and
+contract version, and profile-specific benchmark runners retain their own input
+validation. Settings, model requests, child workers and execution allowance
+remain governed by their owners. User task time requirements remain task
+context; caller-private current deadlines and runtime guidance stay with the
+caller. Live Host adoption and efficiency require separate verification.
 
-中文：JSON guard 在 capture 前组合完整 v1 来源。新生成的 heartbeat 和同 Turn
-命令直走默认入口，旧命令仍可传入两个互斥别名之一。渐进与差分交付独立控制，
-分页按原摘要读回原准入。保留原验收、Stop、权限、必读和用户任务时间要求。
-原 Todo 计划保留 effect id，原结算由同一 typed owner 投影为一条写回命令。
-部分失败沿原 `settlement_owed` 恢复。
+中文：包含交互契约的新 JSON guard 在 capture 前组合完整 v1 来源；默认渐进呈现下
+stdout 可能返回 `context_capture_navigation_v1` 导航，完整 v1 决策保存在
+`decision.json`。新生成的 heartbeat 和同 Turn 命令直走默认入口，旧命令仍可传入
+`--complete-turn` 与 `--turn-envelope` 两个互斥兼容别名之一。渐进与差分交付独立控制；
+使用 `--context-delivery off --delta-delivery off` 可返回普通内联 v1 JSON，分页按原
+摘要读回原准入。保留原验收、Stop、权限、必读与用户任务时间要求；调用方私有倒计时
+或常驻 runtime 指导由调用方保管。可执行的原 Todo 结算复用同一 typed owner 投影为
+一条写回命令，原 effect id 保留，部分失败沿原 `settlement_owed` 恢复。升级或兼容
+回退后按所选运行时重新生成 prompt；需要旧实时契约时，沿安装 owner 的流程切到能读取
+当前权威状态的旧运行时，并保留匹配的备份和原 reader。2.3.0 会在 guard 执行前拒绝
+`--complete-turn`。
 
 `quota context-project` 先校验已保存的完整决定，再将它呈现为当前上下文。仅开启差分
 或关闭上下文交付时同样校验。来源校验失败或中断时，返回的摘要绑定
@@ -117,9 +139,12 @@ the CLI reports that boundary rather than claiming rollback. An empty capture
 directory is not a usable decision. Omit the option to disable capture; remove
 unneeded local captures through ordinary file management.
 
-In a historical v0 capture, `detail_ref.full_decision` points to the saved
-file using a quoted POSIX `cat --` command. A file-capable host
-can read `detail_ref.captured_decision.path` directly instead. The typed projector
+#### Historical quota and v0 display / 历史 quota 与 v0 展示
+
+In a historical v0 capture (in 2.3.0, requesting both capture and
+`--turn-envelope`), `detail_ref.full_decision` points to the saved file using a
+quoted POSIX `cat --` command. A file-capable Host can read
+`detail_ref.captured_decision.path` directly instead. The typed projector
 includes the expected Goal/Agent/Turn and a reference to the existing canonical
 source-decision hash (a hash of the JSON value, not the formatted file bytes).
 Verify those against the read observation, including `ok`; the link itself does
@@ -134,7 +159,7 @@ coverage. New CLI captures use the complete v1 source described above.
 为补读上下文重跑 guard。读取前核对身份和源哈希；旧观察不提供新的执行权限。
 文件损坏或丢失不能自动重跑，选 Todo、lease 变化等仍需按原契约重新准入。
 
-The default ordinary quota CLI view may replace an exactly identical nested
+The historical quota packet view could replace an exactly identical nested
 `heartbeat_recommendation.blocked_priority_fallback` diagnostic with
 `blocked_priority_fallback_ref="$.blocked_priority_fallback"`. Read the complete
 root field in that same packet; resolving this reference needs no new guard or
@@ -533,16 +558,22 @@ loopx --format json heartbeat-prompt --thin --runtime-profile generic_cli \
 ```
 
 Capture and context delivery are independent. `--decision-output-root` saves
-the complete decision. `--decision-handoff-socket` can hold its output for a
-caller-owned checkpoint. Explicit `--context-delivery off` retains the complete
-inline contract when no independent Delta delivery is requested.
+the complete decision using the runtime's live schema.
+`--decision-handoff-socket` can hold its output for a caller-owned checkpoint.
+Explicit `--context-delivery off` retains the complete inline contract when no
+independent Delta delivery is requested.
 
 New bootstrap, guard, selection and settlement-recovery commands use the
 complete v1 source. Saved callers can still pass `--turn-envelope` or
 `--complete-turn` to the current CLI under their existing input restrictions.
 Saved captures and their original read commands retain the recorded version
 and digest. Follow the original capture for selection, replan or required
-detail. A persistent bootstrap binds each Turn on wake.
+detail. Historical Short prompts used `--turn-envelope` with a pinned runtime
+that returned v0 and `detail_ref.full_decision` for that **same invocation**
+when selection, replan, an `agent_context.detail_ref` or truncation needed the
+full decision; that historical renderer required thin mode, an explicit Turn
+identity, a valid root and an external Host, while replan history keeps its
+existing owner. A persistent bootstrap binds each Turn at wake time.
 
 当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。原先
 保存的两个别名仍可按原输入限制使用，原捕获和读回命令保留其版本与摘要。
@@ -591,10 +622,9 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 源签名，只能补读原观察，不能重跑 quota。证据缺失或失效时暂停依赖它的规划，独立
 工作保留原权限。捕获及后续写入校验仍归原 owner；输入到达不证明模型实际采用。
 
-中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
-`--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-历史 Short 使用曾交付 v0 的产品版本，并保留原请求与捕获。当前 C1 中
-`--turn-envelope` 是完整契约的兼容别名，已有实验按其记录版本解释。
+中文：捕获和模型输入投影独立。`--decision-output-root` 保存该运行时产生的完整决策，
+`--decision-handoff-socket` 保留检查点交接。历史 Short 使用交付 v0 的固定产品版本，
+保留原请求与捕获。当前 `--turn-envelope` 是完整契约的兼容别名，已有实验按记录版本解释。
 
 The benchmark heartbeat worker verifies a historical `turn_envelope` request
 against the pinned CLI's v0 response before launching a model. Its read-only
