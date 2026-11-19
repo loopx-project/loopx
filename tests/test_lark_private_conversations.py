@@ -8178,7 +8178,7 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
     assert "private-body-marker" not in repr(transport._delivery_discovery._completed)
     _atomic_write_json(new, {"status": "pending"})
     assert transport.pending_delivery_paths() == [new, pending]
-    clock[0] += 61
+    clock[0] += 120  # Ineligible recovery probes stagger across [60, 120)s.
     eligible["old"] = True
     assert transport.pending_delivery_paths() == [new, old, pending]
     clock[0] += 61

@@ -358,3 +358,221 @@ def test_private_conversations_caches_historical_repairs_and_staggers_recovery_p
     deadlines = set(transport._context_recovery_probe_at.values())
     assert len(deadlines) > 10
     assert all(160.0 <= value < 220.0 for value in deadlines)
+
+
+def test_reconcile_request_backs_off_repeated_noop_recovery_and_resets_on_change(tmp_path, monkeypatch):
+    import zlib
+    from loopx.extensions.lark import private_conversations as private
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    deliv_dir = tmp_path / "lark-private-deliveries"
+    ext_dir = tmp_path / "external-requests"
+    deliv_dir.mkdir()
+    ext_dir.mkdir()
+
+    ref = _hex_ref(42)
+    deliv_path = deliv_dir / f"{ref}.json"
+    ext_path = ext_dir / f"{ref}.json"
+    deliv_row = {
+        "status": "delivered",
+        "request_ref": ref,
+        "session_id": f"sess_{ref}",
+        "turn_id": f"turn_{ref}",
+        "profile": "fixture",
+        "event": {"message_id": f"om_{ref}"},
+    }
+    _atomic_write_json(deliv_path, deliv_row)
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted"})
+
+    clock = [1000.0]
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(private, "record_event_timing", lambda *_a, **_kw: None)
+
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = deliv_dir
+    transport.reaction_feedback = False
+    transport._context_recovery_probe_at = {}
+    transport._historical_image_probe_at = {}
+    transport._delivery_discovery = PrivateDeliveryDiscovery(deliv_dir)
+    transport._web_projection_paths = lambda: []
+
+    noop_calls = 0
+
+    def fake_recover(_request_ref: str, **_kwargs):
+        nonlocal noop_calls
+        noop_calls += 1
+        return {"request_ref": ref, "status": "accepted", "turn_id": f"turn_{ref}", "delivery_verified": True}
+
+    transport.core = SimpleNamespace(
+        root=ext_dir,
+        context_recovery_observer=lambda: lambda candidate_ref: candidate_ref == ref,
+        context_recovery_candidate=lambda candidate_ref: candidate_ref == ref,
+        recover_failed_request=fake_recover,
+        recover=lambda **_kwargs: None,
+    )
+
+    jitter = zlib.crc32(deliv_path.name.encode("utf-8")) % 60
+
+    # Discovery finds candidate -> first noop reconcile keeps exact +60s retry.
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    assert noop_calls == 1
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 60.0
+
+    # Before +60s, unchanged fingerprints remain backed off.
+    clock[0] = 1059.0
+    assert transport.pending_delivery_paths() == []
+
+    # Second consecutive noop backs off to 120 + jitter; third to 240 + jitter.
+    clock[0] = 1060.0
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    assert transport._context_recovery_probe_at[deliv_path] == 1060.0 + 120.0 + jitter
+
+    clock[0] = 1060.0 + 120.0 + jitter
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 240.0 + jitter
+
+    # Changing the external-request file resets backoff immediately on the next discovery.
+    clock[0] += 5.0
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted", "updated": 1})
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+
+def test_source_request_digests_cache_unchanged_requests_and_detect_mutation(tmp_path, monkeypatch):
+    import loopx.capabilities.native_chat.external_conversations as ext_mod
+
+    core = ChatExternalConversations.__new__(ChatExternalConversations)
+    core.root = tmp_path
+    refs = [_hex_ref(1), _hex_ref(2), _hex_ref(3)]
+    for idx, ref in enumerate(refs):
+        _atomic_write_json(
+            tmp_path / f"{ref}.json",
+            {
+                "request_ref": ref,
+                "binding_id": "binding_one",
+                "source": {"source_ref": "source_one"},
+                "seq": idx,
+            },
+        )
+    target = {"binding_id": "binding_one", "source": {"source_ref": "source_one"}}
+
+    reads: list[Path] = []
+    original_read = ext_mod._read_json
+
+    def counted_read(path: Path):
+        reads.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(ext_mod, "_read_json", counted_read)
+
+    first = core._source_request_digests(target)
+    assert [row["request_ref"] for row in first] == refs
+    assert len(reads) == 3
+
+    reads.clear()
+    second = core._source_request_digests(target)
+    assert second == first
+    assert reads == [], "unchanged external-request files must not be re-read"
+
+    # Mutating a single request invalidates only that file and changes its digest.
+    mutated_path = tmp_path / f"{refs[1]}.json"
+    _atomic_write_json(
+        mutated_path,
+        {
+            "request_ref": refs[1],
+            "binding_id": "binding_one",
+            "source": {"source_ref": "source_one"},
+            "seq": 99,
+        },
+    )
+    third = core._source_request_digests(target)
+    assert reads == [mutated_path]
+    assert third[1]["sha256"] != first[1]["sha256"]
+    assert third[0]["sha256"] == first[0]["sha256"]
+
+
+def test_recovery_discovery_reads_caches_session_user_messages_without_attachments(tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat.external_conversations import _RecoveryDiscoveryReads
+    from loopx.chat_store import ChatSessionStore
+
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-perf-test",
+        agent_id="codex",
+        adapter_kind="codex",
+        upstream_thread_id="thread_perf_1",
+    )
+    sid = session["session_id"]
+    png_1x1 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+    store.append_message(
+        sid,
+        role="user",
+        text="hello",
+        origin="lark",
+        turn_id="turn_1",
+        attachments=[{"id": "att_1", "name": "a.png", "mime_type": "image/png", "size": 68, "data_url": f"data:image/png;base64,{png_1x1}"}],
+    )
+    store.append_message(sid, role="agent", text="reply", turn_id="turn_1")
+
+    core = ChatExternalConversations.__new__(ChatExternalConversations)
+    core.controller = SimpleNamespace(store=store)
+
+    msg_reads = 0
+    original_messages = ChatSessionStore.messages
+
+    def counted_messages(self, session_id: str, *, strict: bool = False):
+        nonlocal msg_reads
+        msg_reads += 1
+        return original_messages(self, session_id, strict=strict)
+
+    monkeypatch.setattr(ChatSessionStore, "messages", counted_messages)
+
+    msgs_pass1 = _RecoveryDiscoveryReads(core).user_messages(sid)
+    assert msg_reads == 1
+    assert [m["text"] for m in msgs_pass1] == ["hello"]
+
+    # Fresh discovery pass must hit fingerprint cache without re-reading messages.jsonl.
+    msgs_pass2 = _RecoveryDiscoveryReads(core).user_messages(sid)
+    assert msg_reads == 1
+    assert len(msgs_pass2) == 1
+    assert msgs_pass2[0]["text"] == "hello"
+    assert "attachments" not in msgs_pass2[0]
+
+    # Appending a new user message updates messages.jsonl fingerprint and refreshes cache.
+    store.append_message(sid, role="user", text="world", origin="lark", turn_id="turn_2")
+    msgs_pass3 = _RecoveryDiscoveryReads(core).user_messages(sid)
+    assert msg_reads == 2
+    assert [m["text"] for m in msgs_pass3] == ["hello", "world"]
+
+
+def test_private_delivery_discovery_caches_retired_triage_captures(tmp_path, monkeypatch):
+    import loopx.extensions.lark.private_delivery_discovery as pdd_mod
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    retired_path = tmp_path / f"{_hex_ref(10)}.json"
+    active_path = tmp_path / f"{_hex_ref(11)}.json"
+    _atomic_write_json(retired_path, {"status": "captured", "triage": {"retired": "card_delivery_expired"}})
+    _atomic_write_json(active_path, {"status": "captured", "profile": "steward"})
+
+    reads: list[Path] = []
+    original_read = pdd_mod._read_json
+
+    def counted_read(path: Path):
+        reads.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(pdd_mod, "_read_json", counted_read)
+
+    discovery = PrivateDeliveryDiscovery(tmp_path)
+    first = {path: row for path, row, _ in discovery.rows()}
+    assert set(first) == {retired_path, active_path}
+    assert sorted(reads) == sorted([retired_path, active_path])
+
+    reads.clear()
+    second = {path: row for path, row, _ in discovery.rows()}
+    assert second[retired_path]["triage"]["retired"] == "card_delivery_expired"
+    assert reads == [active_path], "retired triage capture must stay cached while active capture stays fresh"
