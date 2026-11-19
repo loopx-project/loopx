@@ -40,7 +40,8 @@ class Room:
             payload = {"data": {"bots": [{"app_id": "cli_room_fixture"}]}}
         elif "+messages-send" in args:
             card = json.loads(args[args.index("--content") + 1])
-            message = {"message_id": f"om_room_{len(self.messages)}", "chat_id": "oc_room_fixture",
+            message = {"message_id": f"om_room_{len(self.messages)}",
+                "chat_id": args[args.index("--chat-id") + 1] if "--chat-id" in args else "oc_room_fixture",
                 "sender": {"sender_type": "app", "id": "cli_room_fixture"},
                 "body": {"content": json.dumps(card)}}
             self.messages.append(message)

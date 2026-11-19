@@ -33,7 +33,8 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
             delayed_until = transport_state["delay_chat_get_until"]
             if delayed_until is not None:
                 time.sleep(max(0.0, (delayed_until - datetime.now(timezone.utc)).total_seconds()))
-            payload = {"data": {"tenant_key": "room-fixture-tenant", "chat_id": "oc_room_fixture"}}
+            requested_chat = argv[argv.index("--chat-id") + 1] if "--chat-id" in argv else "oc_room_fixture"
+            payload = {"data": {"tenant_key": "room-fixture-tenant", "chat_id": requested_chat}}
         elif "+chat-members-list" in argv and "--member-types" in argv and argv[argv.index("--member-types") + 1] == "user":
             payload = {"data": {"items": [{"open_id": "ou_room_owner", "tenant_key": "room-fixture-tenant"}]
                 if transport_state["member"] else []}}
@@ -638,3 +639,72 @@ def test_default_budget_rotation_reaches_the_tail_record(offered):
         record = json.loads(f.read_bytes())
         assert record["result_delivery_verified"] is False and record["last_result_card"]
     assert snapshot(args)["provider_revision"] == committed
+
+
+def test_shared_runtime_scopes_keep_independent_recovery_rotation(offered):
+    """Two collectors with different room scopes share one runtime directory.
+    Each scope's rotation cursor must be isolated: alternating rounds under
+    limit=1 still deliver each scope's valid receipt past its own dead prefix,
+    each scope keeps its own progress, and canonical state never advances."""
+    args, room, binding, offer_args, _, event, callback_args, transport = offered
+    binding["bindings"][GOAL]["connections"]["agent-b"]["channel"]["chat_id"] = "oc_room_scope_b"
+    write_goal_channel_binding(args["binding_path"], binding)
+    todos = [TODO]
+    for index in range(3):
+        todos.append(_add_todo(args, f"Shared-scope task {index}"))
+    def event_in_room(result):
+        callback = event(result)
+        message = next(m for m in room.messages if m["message_id"] == json.loads(
+            (args["runtime_root"] / "room-claim-offers" / (result["request_id"] + ".json")).read_bytes()
+        )["delivery"]["message_id"])
+        return {**callback, "chat_id": message["chat_id"]}
+
+    transport["fail_update"] = True
+    packet_by_file = {}
+    revision = snapshot(args)["provider_revision"]
+    for actor, todo_id in (("agent-a", todos[0]), ("agent-a", todos[1]),
+                           ("agent-b", todos[2]), ("agent-b", todos[3])):
+        prepared = ingress.run_room_claim_offer(**offer_args, actor_id=actor, command="offer", execute=True,
+            todo_id=todo_id, expected_revision=revision, idempotency_key=f"room-shared-{actor}-{todo_id[:8]}",
+            principals=["lark:ou_room_owner"], expires_at="2030-01-01T00:00:00Z")
+        pending = ingress.handle_room_claim_callback(event_in_room(prepared), **callback_args)
+        assert pending["canonical_claim_accepted"] and not pending["ok"], pending
+        packet_by_file[args["runtime_root"] / "room-claim-offers" / (prepared["request_id"] + ".json")] = pending
+        revision = snapshot(args)["provider_revision"]
+    committed = revision
+    scope_a, scope_b = {"oc_room_fixture"}, {"oc_room_scope_b"}
+    actors = {"agent-a": scope_a, "agent-b": scope_b}
+    files_by_actor = {actor: sorted(f for f in packet_by_file
+                                    if json.loads(f.read_bytes())["request"]["actor_id"] == actor)
+                      for actor in actors}
+    # dead prefix = each scope's first-sorted record; the other is the valid one.
+    dead = {actor: files_by_actor[actor][0] for actor in actors}
+    valid = {actor: files_by_actor[actor][1] for actor in actors}
+    valid_receipt_id = {actor: packet_by_file[valid[actor]]["receipt"]["receipt_id"] for actor in actors}
+    valid_message_id = {actor: json.loads(valid[actor].read_bytes())["delivery"]["message_id"] for actor in actors}
+    transport["fail_update"] = False
+    transport["fail_update_message_ids"] = tuple(
+        json.loads(f.read_bytes())["delivery"]["message_id"] for f in dead.values())
+
+    def recover(scope):
+        return ingress.recover_room_claim_results(**callback_args, allowed_chat_ids=scope, limit=1)
+
+    assert recover(scope_a) == {"attempted": 1, "delivered": 0, "failed": 1}
+    assert recover(scope_b) == {"attempted": 1, "delivered": 0, "failed": 1}
+    # Independent rotation: each scope's second round must pass its OWN dead
+    # prefix and deliver its valid receipt (a shared cursor would restart
+    # scope A at its dead prefix after scope B's round).
+    assert recover(scope_a) == {"attempted": 1, "delivered": 1, "failed": 0}
+    assert recover(scope_b) == {"attempted": 1, "delivered": 1, "failed": 0}
+    for actor, scope in (("agent-a", scope_a), ("agent-b", scope_b)):
+        message = next(m for m in room.messages if m["message_id"] == valid_message_id[actor])
+        assert message["chat_id"] in scope
+        assert valid_receipt_id[actor] in message["body"]["content"], message["body"]["content"]
+    for actor, f in dead.items():
+        record = json.loads(f.read_bytes())
+        assert record["result_delivery_verified"] is False and record["last_result_card"]
+    assert snapshot(args)["provider_revision"] == committed
+    # Further alternation keeps respecting the per-round cap and stays idle
+    # once both scopes delivered their valid records in this phase.
+    idle_a = recover(scope_a)
+    assert idle_a["attempted"] <= 1 and snapshot(args)["provider_revision"] == committed

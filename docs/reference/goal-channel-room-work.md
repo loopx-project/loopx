@@ -202,7 +202,11 @@ cannot starve the still-valid receipts queued behind it. The per-round
 transport budget also rotates across that order: each round starts after the
 last record that spent a slot in the previous round, so a persistently
 failing prefix cannot monopolize recovery and every eligible record is
-reached within a bounded number of rounds. An unresolved transport failure
+reached within a bounded number of rounds. The rotation cursor is keyed by
+the collector's effective delivery scope (Bot app/profile and allowed
+chats): collectors with different room scopes may share one runtime
+directory, and each keeps its own rotation instead of overwriting the
+other's progress. An unresolved transport failure
 is never terminal — its record, card and receipt evidence are preserved and
 retried on later rounds; only a verified delivery readback exits the queue.
 
@@ -345,7 +349,9 @@ canonical 领取提交后，原卡上的回执号直接由不可变接受事实�
 恢复在记录锁内复核资格，已撤销、已过期或已送达的记录不消耗投递名额，固定扫描
 顺序中的失效前缀不会饿死排在后面的有效回执。每轮投递预算还在该顺序上轮转：新一轮
 从上一轮最后一个消耗名额的记录之后开始，持续失败的前缀无法垄断恢复，每条有资格的
-记录都会在有限轮次内被轮到。传输失败不是终态——记录、卡片与回执证据全部保留并在
+记录都会在有限轮次内被轮到。轮转游标按 collector 的有效投递范围（Bot 应用／profile
+与允许房间）隔离：不同房间范围的 collector 可以共用同一运行目录，各自保留自己的
+轮转进度，互不覆盖。传输失败不是终态——记录、卡片与回执证据全部保留并在
 后续轮次重试，只有经读回确认的投递才退出队列。
 真实房间、多主机、daemon reconnect、授权 artifact 引用和 OpenViking 只读检索仍待联调。
 合成 Lark transport 加真实隔离权威的测试不能宣称三方 RFC 已完成。

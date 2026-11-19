@@ -321,8 +321,14 @@ def recover_room_claim_results(*, runtime_root: Path, profile_app_id: str, allow
     # record is reached within ceil(pending / limit) rounds. Unresolved
     # failures are never terminal: their record, card and receipt evidence
     # stay untouched, and only a verified delivery exits the retry queue.
-    # The cursor is an ordering hint; losing it only repeats this order.
-    cursor_path = runtime_root / "room-claim-offers" / ".recovery-cursor.json"
+    # The cursor is an ordering hint; losing it only repeats this order. It is
+    # keyed by this collector's effective delivery scope (app/profile/chats):
+    # collectors with different room scopes share one runtime directory, and
+    # each must keep its own rotation instead of overwriting the other's.
+    scope_digest = hashlib.sha256(json.dumps({
+        "app_id": profile_app_id, "profile": profile,
+        "chat_ids": sorted(allowed_chat_ids)}, sort_keys=True).encode()).hexdigest()[:16]
+    cursor_path = runtime_root / "room-claim-offers" / f".recovery-cursor-{scope_digest}.json"
     start_index = 0
     try:
         cursor = json.loads(cursor_path.read_text(encoding="utf-8"))
