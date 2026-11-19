@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -175,6 +175,28 @@ def capture_collaboration_goal_ref(
             if scope.exact
             else None
         )
+
+
+def scope_for_caller_goal_ref(
+    scope: CollaborationGoalScope,
+    caller_goal_ref: dict[str, str] | None,
+) -> CollaborationGoalScope:
+    """Bind one entry's caller_goal_ref under an already-held Goal lifetime scope."""
+
+    if not scope.exact:
+        return scope
+    if caller_goal_ref is not None and not isinstance(caller_goal_ref, dict):
+        raise TypeError("source-session caller_goal_ref must be a mapping")
+    if scope.current_goal_ref is None:
+        raise ValueError("source-session Goal scope requires current_goal_ref")
+    return replace(
+        scope,
+        caller_goal_ref=_caller_ref(
+            goal_id=scope.goal_id,
+            requested=caller_goal_ref,
+            current=scope.current_goal_ref,
+        ),
+    )
 
 
 class CollaborationLifecycleRejected(ValueError):

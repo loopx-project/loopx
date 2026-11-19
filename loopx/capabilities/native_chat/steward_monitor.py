@@ -445,13 +445,30 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                     _LOG.warning("An original steward report is unavailable; its window and other work are retained")
             due = service.due_monitors(actor)
             if due:
-                todo = due[0]
-                accepted, created = StewardTurnHost(controller).submit(binding["binding_id"],
-                    turn_instance_id=monitor_turn_id(todo), todo_id=todo["todo_id"], work_kind="monitor",
-                    monitor_deadline=todo["next_due_at"])
-                if created:
-                    changed.append(accepted)
-                continue
+                dispatched = False
+                for todo in due:
+                    try:
+                        accepted, created = StewardTurnHost(controller).submit(
+                            binding["binding_id"],
+                            turn_instance_id=monitor_turn_id(todo),
+                            todo_id=todo["todo_id"],
+                            work_kind="monitor",
+                            monitor_deadline=todo["next_due_at"],
+                        )
+                    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                        _LOG.warning(
+                            "A native steward monitor is unavailable; original work retained"
+                        )
+                        continue
+                    if created:
+                        changed.append(accepted)
+                        dispatched = True
+                        break
+                    if isinstance(accepted, dict) and accepted.get("status") in {"queued", "running"}:
+                        dispatched = True
+                        break
+                if dispatched:
+                    continue
             for adv in service.runnable_advancement_todos(actor):
                 from .steward_turn import native_steward_client_id
                 turn_id_token = advancement_turn_id(adv)
@@ -473,8 +490,9 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                 if all_monitors:
                     soonest = min(all_monitors, key=lambda row: datetime.fromisoformat(row["next_due_at"].replace("Z", "+00:00")))
                     due_dt = datetime.fromisoformat(soonest["next_due_at"].replace("Z", "+00:00"))
-                    remaining = max(0, (due_dt - datetime.now(timezone.utc)).total_seconds())
-                    cache[binding["binding_id"]] = time.monotonic() + min(60, remaining)
+                    remaining = (due_dt - datetime.now(timezone.utc)).total_seconds()
+                    if remaining > 0:
+                        cache[binding["binding_id"]] = time.monotonic() + min(60, remaining)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             # One unreadable conversation or unavailable provider must not starve
             # other native monitors; retain its original data and deadline.

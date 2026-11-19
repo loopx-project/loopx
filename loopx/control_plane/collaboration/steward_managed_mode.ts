@@ -62,10 +62,26 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
     && Array.isArray(basis.phases) && basis.phases.length === 1
     && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
+  // A custom signal monitor may fail inside the read-only external signal
+  // check after manager_context completes and before any poll receipt is written.
+  // Allow at most one bounded recovery when zero-effect proofs hold.
+  let signalUnavailable = false;
+  if (original.error_code === "runtime_error"
+      && original.error === "steward monitor external signal source temporarily unavailable"
+      && requireJsonObject(prior.actor, "original watch actor").schema_version === "loopx_steward_managed_actor_v0"
+      && Array.isArray(basis.contexts) && basis.contexts.length === 1
+      && Array.isArray(basis.phases) && basis.phases.length === 1
+      && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
+      && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1
+      && Array.isArray(events) && events.filter(kind => kind === "manager.context").length === 1) {
+    const context = requireJsonObject(basis.contexts[0], "signal unavailable watch context");
+    signalUnavailable = context.schema_version === "manager_turn_context_v1";
+  }
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
-      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused || identityRefused)
+      || original.status !== "failed"
+      || !(original.error_code === "server_restarted" || scopeRefused || identityRefused || signalUnavailable)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null

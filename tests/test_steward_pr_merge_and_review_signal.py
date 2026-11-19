@@ -202,36 +202,120 @@ def test_summarize_pr_distinguishes_gpt_gemini_fallback_stale_casual_and_conflic
     assert conflicted["review_summary"]["effective_verdict"] == "REQUEST_CHANGES"
 
 
+def _graphql_page(
+    nodes: list[dict[str, Any]], *, has_next_page: bool = False, end_cursor: str | None = None
+) -> dict[str, Any]:
+    return {
+        "data": {
+            "repository": {
+                "pullRequests": {
+                    "pageInfo": {"hasNextPage": has_next_page, "endCursor": end_cursor},
+                    "nodes": nodes,
+                }
+            }
+        }
+    }
+
+
+def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    copied = dict(row)
+    default_contexts = copied.pop("statusCheckRollup", [])
+    rollup_contexts = contexts if contexts is not None else default_contexts
+    copied["reviews"] = {"nodes": copied.get("reviews") or []}
+    copied["commits"] = {
+        "nodes": [
+            {
+                "commit": {
+                    "statusCheckRollup": {
+                        "contexts": {
+                            "nodes": rollup_contexts,
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    return copied
+
+
 def test_observe_github_repository_prs_enriches_signal_summary(monkeypatch) -> None:
-    head = "c" * 40
+    head_99 = "c" * 40
+    head_101 = "1" * 40
     gpt_decl = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
-    payload = [
+    pr_99 = _graphql_node(
         _sample_pr(
             number=99,
-            head_oid=head,
+            head_oid=head_99,
             reviews=[
                 {
                     "id": "PRR_99",
                     "author": {"login": "loopx-agent"},
                     "state": "COMMENTED",
-                    "commit": {"oid": head},
+                    "commit": {"oid": head_99},
                     "submittedAt": "2030-01-01T08:30:00Z",
                     "body": _valid_bilingual_body(
-                        head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl, author_owned=True
+                        head_oid=head_99, verdict="REQUEST_CHANGES", reviewer=gpt_decl, author_owned=True
                     ),
                 }
             ],
         )
-    ]
+    )
+    pr_101 = _graphql_node(
+        _sample_pr(number=101, head_oid=head_101),
+        contexts=[
+            {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"__typename": "StatusContext", "context": "gate", "state": "FAILURE"},
+        ],
+    )
+    seen_cursors: list[str | None] = []
 
     def fake_run(cmd, **_kwargs):
-        assert cmd[:3] == ["gh", "pr", "list"]
-        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        assert cmd[:3] == ["gh", "api", "graphql"]
+        cursor_args = [arg for arg in cmd if arg.startswith("cursor=")]
+        cursor = cursor_args[0].split("=", 1)[1] if cursor_args else None
+        seen_cursors.append(cursor)
+        if cursor is None:
+            body = _graphql_page([pr_101], has_next_page=True, end_cursor="cursor-page-2")
+        else:
+            assert cursor == "cursor-page-2"
+            # Include duplicate PR 101 across page shift + new PR 99 to test deduplication & sorting.
+            body = _graphql_page([pr_101, pr_99], has_next_page=False, end_cursor="cursor-end")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
 
     monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
     observed = _observe_github_repository_prs("org/repo")
-    assert observed["status"] == "ok" and len(observed["items"]) == 1
+    assert seen_cursors == [None, "cursor-page-2"]
+    assert observed["status"] == "ok" and [item["number"] for item in observed["items"]] == [99, 101]
     assert observed["items"][0]["review_summary"]["effective_verdict"] == "REQUEST_CHANGES"
+    assert observed["items"][1]["checks_summary"] == {
+        "total": 2,
+        "pass_count": 1,
+        "fail_count": 1,
+        "pending_count": 0,
+    }
+
+
+def test_observe_github_repository_prs_fails_closed_on_page_error(monkeypatch) -> None:
+    calls = 0
+
+    def fake_run(cmd, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            body = _graphql_page([_graphql_node(_sample_pr(number=10))], has_next_page=True, end_cursor="p2")
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="502 Bad Gateway")
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+    observed = _observe_github_repository_prs("org/repo")
+    assert observed == {"status": "unavailable", "repository": "org/repo"}
+    assert calls == 2
+
+    def graphql_errors_run(cmd, **_kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"errors": [{"message": "timeout"}]}), stderr="")
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", graphql_errors_run)
+    assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
 
 
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:

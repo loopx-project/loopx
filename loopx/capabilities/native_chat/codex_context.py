@@ -99,8 +99,10 @@ def require_session_home(base_home: Path, session: Mapping[str, Any]) -> None:
 
 
 def process_environment(home: Path, *, isolated: bool) -> dict[str, str]:
+    from ..steward_memory.runtime import scrub_openviking_environment
+
     if not isolated:
-        return {**os.environ, "CODEX_HOME": str(home)}
+        return {**scrub_openviking_environment(os.environ), "CODEX_HOME": str(home)}
     host_home = home.parent
     host_home.mkdir(parents=True, exist_ok=True, mode=0o700)
     home.mkdir(exist_ok=True, mode=0o700)

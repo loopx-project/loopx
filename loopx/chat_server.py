@@ -1881,8 +1881,11 @@ def serve_chat(
         raise ValueError("loopx chat requires a loopback --host such as 127.0.0.1")
     resolved_assets = (assets_dir or default_chat_assets_dir()).expanduser().resolve()
     if assets_dir is None:
-        from .presentation.chat_bundle import validate_bundle
-        validate_bundle(resolved_assets, source_root=Path(__file__).resolve().parents[1])
+        from .presentation.chat_bundle import runtime_source_root, validate_bundle
+        validate_bundle(
+            resolved_assets,
+            source_root=runtime_source_root(Path(__file__).resolve().parents[1]),
+        )
     if not (resolved_assets / "index.html").is_file():
         raise FileNotFoundError("LoopX Chat web assets are unavailable; reinstall LoopX or rebuild the chat bundle")
     resolved_registry_path = registry_path or (Path.home() / ".loopx" / "registry.json")
