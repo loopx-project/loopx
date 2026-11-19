@@ -12,8 +12,7 @@
 
 - **命中的数量不说明任何事。** 一个权限概念通常在十几个模块里出现——schema、parser、projection、renderer、decision table、test fixture。它们在同一个概念上扮演完全不同的角色。
 - **文件会移动，协议责任不会。** 迁移把完整 transaction 的语义搬到了另一侧；按目录名建立的直觉会在下一个版本直接失效。
-- **评审看到的是一份函数清单。** 如果 PR 描述只能说“我改了这三个函数”，reviewer 无法判断被破坏的是哪条不变量，也无法判断在什么条件下应该拒绝它。
-- **测试全绿不代表切片正确。** 针对被改模块的回归测试，恰好会为错误的解释背书。
+- **评审看到的是一份函数清单。** 如果 PR 描述只能说“我改了这三个函数”，reviewer 无法判断被破坏的是哪条不变量，也无法判断在什么条件下应该拒绝它。 针对被改模块的回归测试，恰好会为错误的解释背书。
 
 所以需要一条更慢但更稳定的入口：先说清自己正在改变哪份合同，再去找实现。本章给的是这条入口。
 
@@ -30,7 +29,7 @@
   -> 当前实现与验证
 ```
 
-本章给出一张协议优先的源码地图。它不列完整 API，也不要求你记住当前版本的函数名；目标是让你在准备一个 Issue 或 PR 时，先说清自己正在改变哪份合同。
+本章给出一张协议优先的源码地图。目标是让你在准备一个 Issue 或 PR 时，先说清自己正在改变哪份合同。
 
 ## 读完之后你应该能
 
@@ -291,9 +290,9 @@ source facts
 | 操作投影 | status/frontstage/projection owner；renderer 只消费 typed read model |
 | 文档与验证 | owning protocol 文档、`tests/`、`examples/` 或 public-safe fixture |
 
-当前 capability 目录采用 package-owned documentation 与 `catalog_entry.py` 注册。贡献前运行 `loopx capability list --format json` 和 `loopx capability show <capability-id> --format json`，确认 capability 是否真实注册、有哪些 entry command、Provider 边界与 durable validation。仅有 目录或 README 不证明能力已经发布。
+当前 capability 目录采用 package-owned documentation 与 `catalog_entry.py` 注册。贡献前运行 `loopx capability list --format json` 和 `loopx capability show <capability-id> --format json`，确认 capability 是否真实注册、有哪些 entry command、Provider 边界与 durable validation。
 
-`loopx/capabilities/<name>/` 中有代码不自动证明它是公开 Capability；需要显式注册和真实 caller contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：只有独立 provider lifecycle 才属于这里。私有 helper 留在最近的 owner 中，不因为跨了几个文件就升级为新 Capability 或 Extension。
+`loopx/capabilities/<name>/` 中有代码不自动证明它是公开 Capability；需要显式注册和真实 caller contract。`loopx/extensions/` 独立 provider lifecycle 才属于这里。私有 helper 留在最近的 owner 中，不因为跨了几个文件就升级为新 Capability 或 Extension。
 
 ## 函数名是搜索锚点，不是课程目录
 
@@ -381,7 +380,7 @@ acceptance、terminal closure、quota budget 与 monitor cadence 四个可检查
 
 先从 [RFC Index](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/README.md)
 读取正式状态。`Accepted`、`Active research`、`Draft` 与 `Draft integration proposal` 允许的动作
-不同；一份 RFC 或 Discussion 存在，不等于某个实现已经发布，也不自动生成可认领任务。
+不同。
 
 <!-- community-casebook:rfc-community-proposal -->
 
@@ -413,7 +412,7 @@ disposition，并指出 owner、下一产物与复核条件。需要跨方向同
 
 > 重构 status、quota、scheduler 和所有测试。
 
-缩小切片并不等于减少行数，它要保持一条完整因果链：
+缩小切片要保持一条完整因果链：
 
 ```text
 source
@@ -459,10 +458,10 @@ grep -rln "required_decision_scopes" loopx/control_plane/todos/ | head
 
 准备进入源码前，确认下面几条能独立成立：
 
-1. **一条规则的所有者是决定合法转换的模块，不是首次打印相关字样的模块。** 如果无法指出被保护的不变量，这次改动还没有定位到位。
+1. **一条规则的所有者是决定合法转换的模块。** 如果无法指出被保护的不变量，这次改动还没有定位到位。
 2. **PR 描述里必须有一条完整的因果链：source、invariant、decision、projection 或 effect、receipt、validation。** 只能列出函数名的切片无法被评审。
 3. **文档描述责任归属，代码描述当前行为。** 两者冲突时，按冲突类型选择权威，并让这次 PR 把另一方更新掉。
-4. **`loopx/capabilities/<name>/` 下有代码，不证明该 Capability 已经发布。** 注册与真实 caller contract 才是发布判据，用 `loopx capability list --format json` 核对。
+4. 注册与真实 caller contract 才是发布判据，用 `loopx capability list --format json` 核对。
 5. **placement 先于实现。** capability id、provider id 与 built-in/extension-delivered 的选择，必须在写第一行代码之前写下理由。
 6. **任务来自公开入口。** 公开的 Contributor Task、Issue 和 fixture 是可参与工作的唯一来源，live active state 与 maintainer-local 判断都不算。
 

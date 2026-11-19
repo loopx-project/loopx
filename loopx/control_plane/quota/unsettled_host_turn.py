@@ -119,8 +119,7 @@ def restore_receipt_bound_todo_source(
     """Complete a display snapshot from the original binding's provider reader.
 
     Display lane caps cannot decide whether a committed Todo still exists.
-    This only transports provider facts to the existing decision owner; it
-    neither changes lifecycle nor substitutes a new settlement binding.
+    This only transports provider facts to the existing decision owner.
     """
     from ..todos.quota_summary import select_planning_inventory_source_items
 

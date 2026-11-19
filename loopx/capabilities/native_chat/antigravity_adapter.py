@@ -445,7 +445,6 @@ class AntigravityAdapter:
                                        input_anchor: dict[str, Any]) -> dict[str, Any] | None:
         """Read a stable original segment for a read-only answer review only.
 
-        This proves neither absence of effects nor permission to repeat them.
         Retain bounded visible tool results, never private reasoning. Unknown,
         asynchronous, live, truncated or normally answered segments stay held.
         """
@@ -474,8 +473,8 @@ class AntigravityAdapter:
                 return None
             user, terminal = current[0], current[-1]
             # A cleared historical segment can retain visible answer text while
-            # losing its completion marker and tool payloads. It is not a
-            # verified final or evidence that effects did not occur. Only the
+            # losing its completion marker and tool payloads.
+            #  Only the
             # existing restricted answer review may consume this text.
             cleared_answer = (end < total
                 and terminal.get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
@@ -556,7 +555,7 @@ class AntigravityAdapter:
                                   input_anchor: dict[str, Any]) -> dict[str, Any] | None:
         """Prove one native input ended at quota before any model/tool output.
 
-        An unconfirmed cancel is not proof of effects or of their absence. Read
+        Read
         the exact original input twice from a stable idle cascade instead. Only
         the latest two-step input/quota-error sequence qualifies; any output,
         tool, later input, cleared step or unknown native state fails closed.
@@ -1126,8 +1125,7 @@ class AntigravityAdapter:
             except CodexChatAgentError as exc:
                 if exc.error_code != "antigravity_transport_error":
                     raise
-                # A missed observation neither resends the input nor refreshes
-                # the clock. The last observation has no transport retry.
+                                #  The last observation has no transport retry.
                 if final_read_deadline is not None:
                     self._check_interrupted()
                     if deadline is not None and time.monotonic() >= deadline:

@@ -39,8 +39,7 @@ def outbound_guidance_hook(
     resolution, config = resolve_reward_memory_experiment(
         registry_path=registry_path, goal_id=goal_id, agent_id=agent_id
     )
-    # An enabled but unreadable contract is not evidence that recall is off.
-    # Do not inspect invalid config fragments to guess whether reads are required.
+        # Do not inspect invalid config fragments to guess whether reads are required.
     if resolution.get("status") in {"config_invalid", "config_missing"}:
         return _configuration_failure_hook(resolution["status"])
     if config is None or not config["automation"]["automatic_recall"]:

@@ -73,4 +73,4 @@ To check the permission boundary, try the completion step **before the
 valid completion** with the same Todo and Agent, but omit
 `--claim-operation-id "$claim"`. The command must reject the request and
 the Todo must remain open. Restore the original claim argument and complete
-the exercise. A Todo owner name alone does not prove a current claim.
+the exercise.

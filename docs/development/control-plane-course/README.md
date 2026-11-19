@@ -15,7 +15,7 @@ Pack 增加领域泳道。看板只是 projection；canonical state 和 typed tr
 
 贯穿全课的另一种判定是 effect interpreter：模型提出 effect request，harness 解释后返回
 observation，再把 next effect 交回 host。每个状态机都是解释器内部的一张 interpretation
-table，而不是独立产品。
+table。
 
 ## 课程先建立一个递进
 
@@ -30,7 +30,7 @@ table，而不是独立产品。
   -> CLI packet：把当前状态投影成这一次 bounded Turn 的过程协议
 ```
 
-这不是要把全部历史塞回模型，而是让有限上下文每次只接收当前 objective、必要 evidence ref、
+这是让有限上下文每次只接收当前 objective、必要 evidence ref、
 合法 frontier 和 writeback contract。完整推导见[概念导读](00-concept-primer.md)。
 
 ## 三个 Showcase 是课程主线
@@ -62,7 +62,6 @@ Single-Agent Auto ML 还提供一条贯穿第 0、1、2、3、4、5、6、8、9 
 Explore Graph 把假设、实验、支持、反驳和负向结果保存成可追溯证据拓扑；Explore Harness
 读取显式 Graph refs、当前 todo 和资源容量，给出 analysis-only 的候选组合；单个 Agent 仍必须经
 普通 claim、quota、provider effect、monitor、validator 和 promotion gate 才能推进实验。
-Graph 不是执行 DAG，Harness 也不是隐藏 scheduler。
 
 ## 先边界，再逻辑，再代码
 
@@ -78,8 +77,8 @@ Graph 不是执行 DAG，Harness 也不是隐藏 scheduler。
 | Write / replay | transition 在哪里提交，崩溃后从哪个 phase 恢复？ | sequence、journal、state machine |
 | Code / acceptance | 哪个函数实现规则，什么反例证明它没有被绕过？ | 代码领读、smoke、常见错误 |
 
-这套顺序不是排版约定，而是评审方法。架构层没有明确 owner，技术层通常会复制状态机；
-逻辑层没有 receipt，测试往往只能证明函数跑过，不能证明 transition 已提交。
+这套顺序是评审方法。架构层没有明确 owner，技术层通常会复制状态机；
+逻辑层没有 receipt，测试往往只能证明函数跑过。
 
 课程采用一条贯穿始终的架构边界：执行 runtime、memory provider 和 workspace storage
 可以替换或协作，但 goal lifecycle、canonical state contract、验证与恢复闭环由 LoopX
@@ -108,10 +107,10 @@ vision / goal boundary
 6. **回执**：外部动作是否形成了与原 proposal 绑定的 durable receipt？
 7. **延续**：本轮之后是 runnable successor、明确等待、replan、repair，还是满足 terminal closure？
 
-控制面的复杂性通常不是缺少第八个字段，而是这七个问题被压进一个布尔值，导致一层
+控制面的复杂性通常是这七个问题被压进一个布尔值，导致一层
 事实误替另一层做决定。
 
-课程不是 API 枚举。每一讲都包含四类材料：
+每一讲都包含四类材料：
 
 - 一条真实 CLI 或状态执行路径；
 - 一组核心代码领读入口，说明调用顺序、关键分支和不变量；
@@ -177,7 +176,7 @@ todo 和 evidence 的局部规则会在同一轮组合生效。
 | benchmark postcondition + committed Turn + runner readiness | 结果通过为什么不能替代因果归因与控制面回执；测试替身怎样避免改写 meaningful operation 语义？ | 第 6、8 讲 |
 | external write + Turn journal + provider receipt + settlement checkpoint | 远端效果不确定时为何不能盲目 retry；什么时候应 replay provider，什么时候只能恢复 writeback 或 spend？ | 第 6、8、11 讲 |
 
-这些组合不是额外功能清单，而是同一状态图的交叉切面。课程中的 case、decision table 和 smoke 应尽量覆盖交叉项，而不是为每个名词各写一个孤立 happy path。
+这些组合是同一状态图的交叉切面。课程中的 case、decision table 和 smoke 应尽量覆盖交叉项。
 
 ## 版本与边界
 

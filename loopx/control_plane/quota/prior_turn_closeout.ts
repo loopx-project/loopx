@@ -66,16 +66,13 @@ function candidate(
  * Fresh admission requires a verified outstanding writeback for this binding.
  * Explicit pending-closeout discovery can also find admitted replans before
  * writeback, whether their settlement identity is a Todo or an obligation.
- *
  * Every prior Turn is identity-validated, so a conflicting receipt fails the
  * read instead of being hidden behind a newer Turn. Results are newest first
  * and carry at most one effective receipt per Turn, which is the same single
  * binding the caller's recovery decision may act on.
- *
  * On reentry, only Turns first recorded before the current Turn may be its
  * prerequisites. Replays can change recency and upgrade an unbound receipt,
- * but cannot make a later Turn a prerequisite of an earlier one. Turn ids and
- * wall clocks are not an ordering authority.
+ * but cannot make a later Turn a prerequisite of an earlier one.
  */
 export function selectCloseoutCandidates(
   receipts: readonly JsonObject[],

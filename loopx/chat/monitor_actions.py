@@ -52,6 +52,8 @@ class ChatMonitorActionMixin:
                 kwargs.update(status="open")
             else:
                 stop_condition_raw = parameters.get("stop_condition")
+                if parameters.get("task_repository"):
+                    kwargs["task_repository"] = parameters["task_repository"]
                 # Canonical intent contains the cadence, not a fresh timestamp
                 # on every retry. The TS planner derives the due date exactly
                 # once when a new operation commits; receipt recovery skips it.

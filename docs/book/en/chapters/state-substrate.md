@@ -133,7 +133,7 @@ Delivery remains writer-specific. Check the actual command, authority mode, and 
 
 Shared-authority work in `v0.5.4` introduced a provider-neutral TypeScript `AuthorityStore` contract and candidate-provider validation. Later local cutover, fencing, projections, and default-entry adoption have separate milestones.
 
-Historical capabilities are not evidence that current paths stop at that baseline, nor that candidate qualification delivers a remote service. Read the selected Goal to establish its current File/SQLite authority path.
+ Read the selected Goal to establish its current File/SQLite authority path.
 
 Staged candidates such as NoKV/PostgreSQL do not acquire runtime authority automatically. Installing a Provider also does not change an existing Goal's source of truth.
 

@@ -1,6 +1,6 @@
 """OS-isolated shell for the required-vision actor; CLI effects stay supervised.
 
-The shell owns normal command syntax, not a qualification-specific parser.
+The shell owns normal command syntax.
 Only the existing LoopX executor can write the fixture's authority stores.
 """
 from __future__ import annotations

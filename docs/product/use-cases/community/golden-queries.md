@@ -25,8 +25,7 @@ to prescribe tool names or learn LoopX's internal receipt vocabulary.
 The selection uses a bounded reading of authorized community messages, including
 two project discussion streams and a reference technical community. It is
 **not a full-history survey or a frequency ranking**. Cross-posted announcements
-count as one pattern. Bot answers are observations of interaction, not evidence
-that their technical claims or hidden implementations are correct.
+count as one pattern. Bot answers are observations of interaction.
 
 Only generalized intent patterns appear here. No verbatim private transcript,
 sender identity, group identifier, private URL or local operating state is

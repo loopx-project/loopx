@@ -55,8 +55,7 @@ Verification distinguishes diff-visible facts from workspace-derived facts:
 - **AE001/AE002 remain hard gates** in this command; **AE003 stays advisory**.
   `allow_compat_seam=true` turns a retained-but-authorized definition into an
   advisory finding, and it is never listed as retired.
-- The receipt records which sources backed the verdict; a `diff_hash` alone
-  does not prove anything about the task, the sources, or the policy.
+- The receipt records which sources backed the verdict.
 
 ## Single-Task Feedback Loop (Default-Off)
 
@@ -182,4 +181,4 @@ no model runs and measures no agent-runtime behavior.
 - A malformed explicit `retirement_basis` value is inert and fails closed; it cannot activate partial policy and may shadow a later valid declaration in the same carrier.
 - Python identifier identity is NFKC-normalized in the candidate gate and AST matching; fullwidth, ligature and combining-mark names are covered. Other non-ASCII normalization forms should use the same AST-backed identity path.
 - Escaped definition names and escapes outside value-position member/identifier references are outside the reference model.
-- The hand-rolled lexer is not a complete JavaScript/TypeScript parser; closing arbitrary expression syntax requires a real parser and remains a bounded follow-up.
+closing arbitrary expression syntax requires a real parser and remains a bounded follow-up.

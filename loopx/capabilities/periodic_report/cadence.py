@@ -2,7 +2,7 @@
 
 The profile format can describe schedules for other hosts. This evaluator
 deliberately accepts only daily/weekly wall-clock schedules supported locally.
-It calculates boundaries; it neither runs an Automation nor authorizes delivery.
+It calculates boundaries.
 """
 from __future__ import annotations
 

@@ -56,8 +56,7 @@ Agent Turn    no delivery
 validate -> writeback -> optional spend
 ```
 
-The right branch is a legal outcome, and it is the common one. It means no work was due for **this** turn; it
-does not mean the Goal frontier is closed. A settled turn's replay returns `should_run=false` while preserving
+The right branch is a legal outcome, and it is the common one. It means no work was due for **this** turn. A settled turn's replay returns `should_run=false` while preserving
 the current cadence and deferring evaluation to a fresh Turn identity. Landing there often is therefore not
 evidence that the cadence should slow down. Apply the four steps below only when the current `scheduler_hint`
 proposes a change (`apply_needed=true`).
@@ -106,8 +105,7 @@ before the Todos exist, and each wake receives a Goal with no frontier yet. Writ
 very first wake already has a defined candidate.
 
 You do not have to run every internal command yourself, but you should be able to see these transitions in
-the Agent's report. A natural-language plan is not proof that project state exists, and a guided packet is
-not proof that a heartbeat has been installed. Each needs its own readback.
+the Agent's report. Each needs its own readback.
 
 ## Every wake still passes the quota Gate
 
@@ -194,14 +192,13 @@ something that settles as fast as assigning a local variable.
 both exit successfully. Telling them apart requires the writeback and spend history, not the heartbeat log.
 
 **Boundary one: a heartbeat does not create a frontier.** A Goal with no Todos will not produce a next step
-because it was woken more often. The App guarantees someone looks; it does not guarantee there is anything
-to do. With no runnable candidate, enter wait or monitor and let the cadence slow.
+because it was woken more often. With no runnable candidate, enter wait or monitor and let the cadence slow.
 
-**Boundary two: the automation is not a second control plane.** Do not copy the quota state machine into
+Do not copy the quota state machine into
 the automation prompt, and do not let it resolve runnable Todos on its own. The stable prompt carries
 protocol; the judgment belongs to the packet read on each wake.
 
-**Boundary three: switching Hosts requires ownership checks.** App and CLI may read one Goal. Check the old instance, current claims/leases, and writer-fence mode. Use lifecycle handoff where required; a newly started Host does not authorize concurrent work on the same item.
+**Boundary three: switching Hosts requires ownership checks.** App and CLI may read one Goal. Check the old instance, current claims/leases, and writer-fence mode. Use lifecycle handoff where required.
 
 ## When to choose App, and when to choose CLI
 
@@ -264,7 +261,7 @@ repeat reminders so that a wait does not become a high-frequency notification.
    this turn's receipt is grounds to slow the cadence. Slowing happens when the current `scheduler_hint`
    proposes it (`apply_needed=true`), through the four steps below.
 4. **A cadence change needs all four steps**: proposal, host apply, host readback, ACK.
-5. **A local ACK ledger does not prove Host state.** Only a Host readback that matches the target closes the
+5. Only a Host readback that matches the target closes the
    loop; a mismatch is repaired as `drift_detected`.
 6. **Switching Hosts needs explicit handoff.** Shared Goal reads do not replace current authority, claim/lease, and fence checks.
 

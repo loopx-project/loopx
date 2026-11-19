@@ -33,7 +33,7 @@ try {
     store_identity: cfg.store_identity, todo_id: cfg.probe_todo_id,
   });
   const response = await callRemoteAuthority(cfg.endpoint, cfg.credential, request, {ca: await readCa(cfg.ca_file), timeoutMs: 3000});
-  // A missing Todo is not proof of usable access to the expected authority.
+
   process.stdout.write(response.status === "found" ? "verified\n" : "unavailable\n");
 } catch {
   process.stdout.write("unavailable\n");

@@ -30,7 +30,7 @@ LoopX 能记录 Goal、acceptance、工作队列、权限和证据，也能通�
 
 [状态底座](state-substrate.md)负责工作生命周期事实。LoopX 也有带来源、范围和撤销语义的 Agent 偏好，以及 decision context、reward memory、turn recall 等能力或接入边界。
 
-这些能力不等于任意聊天都自动进入永久知识库。偏好不是 action authority，召回内容需要检查来源、新鲜度和适用范围；是否可用还取决于当前版本、配置与 provider。
+召回内容需要检查来源、新鲜度和适用范围；是否可用还取决于当前版本、配置与 provider。
 
 **使用判断：** 要保存的是 Todo/回执、明确的用户偏好，还是外部知识材料？先选择已有 owner，再决定保存与召回方式，避免把全部聊天塞进 active state。
 

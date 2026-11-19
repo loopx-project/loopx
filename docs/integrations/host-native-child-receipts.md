@@ -35,7 +35,7 @@ versions may omit collaboration items from that history.
 `native-child record` 仍是主 Agent 上报入口，不能指定宿主来源。托管 Codex CLI
 与启用操作工具的 app-server Turn 会在自身连接上直接观察原生协作事件，
 把实际启动、宿主失败和观察到的结果写入同一事件流。结果完成之后仍须由主
-Agent 明确记录验收；宿主完成不代表证据已被采纳。
+Agent 明确记录验收；
 
 共享投影区分宿主观察、主 Agent 上报、混合来源和未知；仅全部决策均来自
 宿主时 `host_attested` 为真。Codex 的失败协作项没有容量错误码，适配器保留
@@ -157,8 +157,7 @@ keep the normal native-child policy and closeout steps.
 合法恢复 deferred Todo 后，以同一显式 Turn 和 Todo 重跑 `quota should-run`。
 原绑定 guard 曾拒绝交付、当前 guard 明确准入工作时，quota 在事件流锁内追加
 工作资格回执，保留原事件、结算身份、工作区因果和语义门禁；再次进入复用该回执。
-不完整或否定事实、身份冲突和已开始结算均不能升级资格。这不授予执行 lease、
-宿主 child 调用或额外 quota；仍须取得要求的 fresh lease，遵守原生 child 策略和结算步骤。
+不完整或否定事实、身份冲突和已开始结算均不能升级资格。仍须取得要求的 fresh lease，遵守原生 child 策略和结算步骤。
 
 Example / 示例：
 

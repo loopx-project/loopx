@@ -146,7 +146,7 @@ class ChatIngressStore:
     @cached_property
     def _terminal_turn_discovery(self) -> FileChatDiscovery:
         # Queue discovery and client lookup share this hint. Concurrent first use
-        # may build two empty observers; neither holds execution authority.
+        # may build two empty observers.
         return FileChatDiscovery()
 
     def _turn_discovery_rows(

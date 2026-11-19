@@ -1,6 +1,6 @@
 """Explicit native Goal continuation inside an existing read-only Goal Chat.
 
-This is Codex transport supervision, not a LoopX scheduler or acceptance owner.
+This is Codex transport supervision.
 One local Chat turn observes multiple native turns; ordinary messages never
 activate this driver. Native usage is retained by Codex across explicit resumes.
 """
@@ -244,7 +244,7 @@ class CodexGoalDriver:
                 if command.operation == "resume" and on_resume_activated is not None:
                     on_resume_activated()
             except Exception:
-                # A lost response does not prove that activation failed.
+
                 self._stop_owned_transport_on_failure()
                 raise
         try:

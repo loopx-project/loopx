@@ -310,12 +310,12 @@ def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_own
     assert MANAGED_SKILL_CURRENT_MARKER in skill.read_text()
     assert "standalone explanation or opinion request" in skill.read_text()
     assert "finish that response before separate repair" in skill.read_text()
-    assert "A previous handoff proves where a request was sent, not who owns its subject" in skill.read_text()
-    assert "A corrected handoff does not retract a delivered misroute" in skill.read_text()
+    assert "verify that\nroute before preserving an alleged established owner" in skill.read_text()
+    assert "and correction receipts. Reuse a correction already delivered to the right" in skill.read_text()
     turn = _turn_prompt("A follow-up about existing work.", runtime_profile=profile)
     assert "do not end at agreement or design advice" in turn
     assert "never resend merely because reading or adoption is unrecorded" in turn
-    assert "A role alias or matching Agent id is a discovery lead" in turn
+    assert "Compare ALL plausible existing work items before selecting" in turn
     assert "no new delivery audience" in skill.read_text()
 
 

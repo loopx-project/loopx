@@ -12,8 +12,7 @@ benchmark heartbeat callers when no machine preference is saved. Saved or explic
 off disables it; ordinary CLI, other hosts and unsupported platforms inherit full
 delivery.
 
-A saved setting is not proof that a host is ready,
-that a particular response used a delta, or that the model understood it. The
+The
 complete C1 caller migration and long-horizon cost/outcome qualification remain
 open. Broad default adoption and old-path retirement need the evidence below.
 
@@ -65,7 +64,6 @@ The shared implementation starts at
 uses the [exact codec](../../loopx/control_plane/quota/context_delivery.ts), and
 leaves native files, locking and lifecycle IO to the
 [Codex adapter](../../loopx/control_plane/turn_driver/codex_context.py).
-One shared preparation call does not prove that every final caller has migrated.
 
 ### Keep three meanings of reuse separate
 
@@ -94,13 +92,12 @@ complete `vision_authoring` in a durable-writeback step. The existing TypeScript
 Turn owner chooses an exact owner and resolves it for ordinary and captured
 readers. Dangling references, reference chains, conflicting inline values and
 references to another kind of step are rejected. A small or different value
-stays inline. Sharing neither changes the original settlement identity nor
-establishes cross-Turn retention or net cost savings.
+stays inline.
 
 Semantic summarization is another operation: it can change wording or meaning.
 The exact codec is not a semantic summary. A controller-authored brief remains
 a separate proposed workflow with its own retained-requirement and outcome
-tests. Neither shorter wording nor a provider cache hit validates that proposal.
+tests.
 
 Explicit confirmed-input clients also have a retained-input contract. Do not
 replace that contract with native Codex's saved-file assumption, or require
@@ -126,8 +123,7 @@ supporting evidence when the decision needs it. A broader replan or whole-Goal
 acceptance needs a correspondingly broader reading scope.
 
 The native saved-file basis can inherit unchanged fields, including controls.
-An omission from a delta is not evidence that a constraint disappeared, or that
-the model has retained it. Retrieve necessary current facts when uncertain.
+Retrieve necessary current facts when uncertain.
 Default-off and signed-envelope callers retain their own read contracts; the
 progressive native example does not relax them.
 
@@ -139,8 +135,7 @@ states and new controls invalidate their containing criterion and remain visible
 An exact unchanged criterion needs no metadata split. Splitting a container adds addresses
 and recovery guidance, so the reader keeps the complete presentation when the
 split would not save enough bytes. This tool-delivery assumption is separate
-from file deltas and provider caching; it does not prove model retention or
-lower total cost. Partial reads and lost continuity cannot qualify this reuse.
+from file deltas and provider caching; Partial reads and lost continuity cannot qualify this reuse.
 Explicit same-capture selections always recover the complete current value.
 
 An unchanged Goal narrative can also be referenced after an exact read of the
@@ -210,8 +205,7 @@ There is no separate Goal configuration to duplicate:
 - **No explicit choice:** uses the saved machine preference when present.
 - **No machine preference:** supported native Codex callers default on; other
   callers keep full delivery.
-- **Worker `LOOPX_CONTEXT_DELIVERY=off`:** overrides inheritance; environment on
-  alone does not enable native delivery.
+- **Worker `LOOPX_CONTEXT_DELIVERY=off`:** overrides inheritance.
 - **Turn the App switch off:** saves off through the same transaction; it does
   not reverse task effects or rewrite old captures.
 
@@ -263,8 +257,7 @@ switching:
 Captures and journals may contain private tasks and evidence. Native storage
 uses a private runtime directory and per-session journals, with restrictive
 permissions and unsafe-path rejection. Do not attach raw captures, local paths
-or journals to a public issue. Share a permitted redacted reproducer. Turning
-off presentation is not a retention-policy change or a request to delete logs.
+or journals to a public issue. Share a permitted redacted reproducer.
 
 ## Qualify default adoption and retirement
 
@@ -364,5 +357,4 @@ because the new path exists.
 
 The [roadmap](../architecture/rfcs/loopx-overall-roadmap-v0.md#unified-contract-and-controllerexecutor-delivery)
 and RFC retain the owners and remaining C1/C2/C9 work. Documentation can ship
-before model experiments; neither a merged guide nor a smaller packet completes
-those runtime, adoption or benefit requirements.
+before model experiments.

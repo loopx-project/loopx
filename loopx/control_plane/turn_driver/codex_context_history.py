@@ -3,8 +3,8 @@
 SessionStart(resume) is emitted after native history reconstruction. Reuse still
 assumes the qualified native host replays its selected append-only source. Bind
 that source to the current baseline's reader interval, verify every completed
-read and reject unknown/lossy replay tails. Earlier unrelated history is not a
-dependency of this baseline and its size is not an eligibility condition.
+read and reject unknown/lossy replay tails.
+
 This is not a scan of model inputs or a certificate from a session ID/journal.
 """
 from __future__ import annotations

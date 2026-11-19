@@ -81,7 +81,7 @@ def _source_facts(source: dict[str, Any], *, local: bool) -> list[dict[str, Any]
 
 def _verify_source_facts(request: dict[str, Any], source: dict[str, Any]) -> None:
     # Old windows retain their original input and validation contract. The
-    # marker belongs to this frozen IO format, not a new source/access policy.
+    # marker belongs to this frozen IO format.
     if "source_fact_binding" not in request and "source_fact_binding" not in source:
         return
     if (request.get("source_fact_binding") not in {"frozen_source_v1", "frozen_source_v2"}

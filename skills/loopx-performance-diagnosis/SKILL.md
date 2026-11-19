@@ -51,7 +51,6 @@ Do not choose a tool from popularity or claim one profiler covers every layer.
    owning contract; do not skip freshness, authority checks or decision inputs.
 7. Repeat the original uninstrumented workload and semantic checks after a fix.
    Preserve passed, failed and untested results and update the existing checkpoint.
-   Readback of a stack does not prove root cause, improvement or provider admission.
 
 Do not add a new receipt/approval requirement or automatically mutate scheduling,
 Goal state or telemetry. Stop invoking the workflow to disable it; remove optional

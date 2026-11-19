@@ -9,7 +9,7 @@ import {boundConversationExecutorMatches, normalizeProjectContext, normalizeStew
 import {bindStewardManagedActor, normalizeStewardManagedActor} from "./steward_managed_mode.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
- * opaque identity observations; neither a message nor a model selects them.
+ * opaque identity observations;
  * Ordinary project bindings carry no Goal. A verified personal steward can
  * read the registered owner portfolio; legacy selected scopes stay bounded.
  */

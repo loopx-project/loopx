@@ -61,8 +61,7 @@ normal setup and execute the seven bounded model phases. Only explicit
 phase, inspect its evidence, and use the documented repair path before continuing.
 
 This example covers **same-host, same-Goal collaboration**, including dependent
-artifacts, independent review, revised acceptance and result return. It is not a
-live Claude/Codex cross-runtime test or an autonomous team scheduler. Its
+artifacts, independent review, revised acceptance and result return. Its
 initial owner request is seeded by the controller. The example's browser
 screenshots are separate synthetic UI fixtures, not screenshots of live model
 outputs. See its [boundaries and recovery](../../../../examples/collaboration-delivery/README.md#boundaries-and-recovery)
@@ -101,7 +100,7 @@ reviewer 独立复核；用户随后修改约束，团队重新计算、再次�
 
 问题包含六个订单、有限库存、区域容量、需求量和预算。第一轮应得到价值
 **84**、成本 **1000**；用户修订后应为价值 **83**、成本 **990**。这是演示
-输入的验收值，不是性能指标；完整分配向量和校验命令见案例说明。
+输入的验收值；完整分配向量和校验命令见案例说明。
 
 每个阶段启动全新 dsh 会话，持久身份、Inbox 和版本化文件连接前后工作。
 控制器明确启动各阶段，并通过 Git 交接指定文件；Agent 自己读取和判断请求、
@@ -120,7 +119,7 @@ worktree，不使用你的活跃 Goal，也不调用模型。
 
 这个例子覆盖的是**同主机、同 Goal 的产物依赖、独立审阅、要求修订和结果回传**，
 不是 Claude/Codex 跨 runtime 实测，也不是无人值守团队调度器。初始请求由
-控制器写入；配套浏览器截图是独立的合成 UI fixture，不是实际模型运行截图。
+控制器写入；配套浏览器截图是独立的合成 UI fixture。
 停用工具、停止执行及完整边界见[恢复说明](../../../../examples/collaboration-delivery/README.md#boundaries-and-recovery)。
 
 进一步阅读：[语义交办与同伴审阅](../../../../loopx/capabilities/manager_context/README.md#semantic-delegation-and-peer-review)、

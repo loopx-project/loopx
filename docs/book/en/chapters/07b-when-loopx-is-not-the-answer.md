@@ -22,7 +22,7 @@ Before onboarding, identify the observation that would support completion. Explo
 
 ### Two: governance costs work; measure performance through the real path
 
-Reading state, admission, validation, and writeback add work. Avoiding repeated execution and unnecessary wakes can reduce total cost. Measure single-turn latency and end-to-end completion separately; neither must necessarily get worse.
+Reading state, admission, validation, and writeback add work. Avoiding repeated execution and unnecessary wakes can reduce total cost. Measure single-turn latency and end-to-end completion separately.
 
 A control plane does not directly make a model response faster. It may improve a journey whose delays come from rebuilding context, unattended waits, or repeated work.
 
@@ -32,7 +32,7 @@ A control plane does not directly make a model response faster. It may improve a
 
 The [state substrate](state-substrate.md) owns work-lifecycle facts. LoopX also supports source-bound, scoped, revocable Agent preferences, alongside decision context, reward memory, and turn-recall capabilities or integration boundaries.
 
-This does not make arbitrary chats a permanent knowledge base. Preferences grant no action authority. Recalled content needs source, freshness, and scope checks; availability depends on release, configuration, and provider.
+Recalled content needs source, freshness, and scope checks; availability depends on release, configuration, and provider.
 
 **Usage question:** are you retaining a Todo or receipt, an explicit user preference, or external knowledge material? Select its existing owner before deciding how to store and recall it, rather than putting every conversation in active state.
 

@@ -49,7 +49,7 @@ export type OperationReviewFrame = OperationReviewFrameBase & (
       attentionKind: "authority";
       interactionMode: "confirm_reject";
       decisions: readonly ["confirm", "reject"];
-      /** Canonical transport receipt, not proof of confirmation or execution. */
+
       confirmationDeliveryVerified: boolean;
     }
   | {
@@ -94,16 +94,16 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   decisionFrame?: DecisionReviewFrame;
   /** Recover this exact canonical command; generating a new preview loses its receipt identity. */
   retryOriginal?: true;
-  /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
+
   creationProgress?: GoalCreationProgress;
   creationOutcome?: GoalCreationOutcome;
   /** New Session routing only. Recorded Sessions recover through creationProgress;
-   * this identity decision does not certify Task acceptance or execution. */
+   *  */
   creationSession?: {managedAgentId: string};
   /** Explicit fresh creation intent; admission and effective approval are
    * independently checked before the original native Task is dispatched. */
   creationExecution?: GoalCreationExecutionReview;
-  /** Accepted dispatch bound to its original Turn. It does not establish a result. */
+  /** Accepted dispatch bound to its original Turn. */
   taskExecution?: { goalId: string; todoId: string; sessionId: string; turnId: string };
 };
 

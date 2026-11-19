@@ -1,7 +1,6 @@
 # Experimental Planner-Worker Mode
 
-Status: **experimental**, opt-in, provider-neutral. This is not a resident
-scheduler and not LoopX's default multi-agent runtime. One call runs one
+Status: **experimental**, opt-in, provider-neutral. One call runs one
 bounded Planner → Worker → validation slice and returns a typed receipt.
 
 Use the shipped fake adapters in

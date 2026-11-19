@@ -53,8 +53,8 @@ def manager_failure_reply(
         "hard_timeout": "处理超过时间限制",
         "interrupted": "处理已中断",
         "manager_authorization_unavailable": "当前连接的授权范围不可用",
-        # host_gate is a generic host failure. It does not establish whether
-        # quota, authentication, configuration, or another host condition failed.
+        # host_gate is a generic host failure.
+
         "host_gate": "执行器未能完成本次调用，请检查管家执行器的具体错误",
         "upstream_invalid_request": "上游拒绝了请求参数，请检查所选模型与 Codex CLI、账户的兼容性",
         "server_restarted": "管家服务在处理过程中重启",

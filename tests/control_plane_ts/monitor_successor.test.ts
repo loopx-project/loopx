@@ -33,6 +33,9 @@ test("invalid successor intent is rejected as a whole, not partly normalized awa
   ]) assert.throws(() => plan(invalid));
   assert.throws(() => monitorSuccessorIntent({material_change: false, next_claimed_by: "agent-a"}), /require --next-agent-todo/);
   assert.throws(() => plan({}, "git:github.com/example/source"), /require explicit --next-task-repository/);
+  const nonDelivery = plan({next_continuation_policy: "same_agent_non_delivery", next_action_kind: "triage"}, "git:github.com/example/source");
+  assert.equal((nonDelivery.agent_route as Record<string, unknown>).task_repository, null);
+  assert.equal((nonDelivery.agent_route as Record<string, unknown>).continuation_policy, "same_agent_non_delivery");
 });
 
 test("repository transport codecs agree with explicit scheme-specific port expectations", () => {

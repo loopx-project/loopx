@@ -13,8 +13,7 @@ same original-message download route.
 ## Source and byte checks / 来源与字节校验
 
 - History joins the original Session, Turn and return route, then reuses
-  `inspect_result_identity` and the TypeScript result-publication owner. The
-  projection changes neither the message journal nor publication receipts.
+  `inspect_result_identity` and the TypeScript result-publication owner.
 - A download repeats those checks and uses `read_result_file` to verify the
   bounded, no-follow immutable snapshot's size and SHA-256. A mutable workspace
   file is never the download source. An unavailable snapshot returns HTTP 503;

@@ -142,7 +142,7 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
 
 
 class QueuedSourcePump:
-    """Bounded recovery inside the existing Chat service, not a work scheduler.
+    """Bounded recovery inside the existing Chat service.
 
     Only already-persisted Chat execution intents are candidates. A context-only
     Inbox row, operator/MCP operation or uncertain started Turn cannot enroll.
@@ -174,8 +174,8 @@ class QueuedSourcePump:
                 if self._resume(path, cancelled):
                     break
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                # Keep the original intent. Unknown/revoked sources neither
-                # become empty nor create another request or execution.
+                # Keep the original intent.
+
                 continue
 
     def _resume(self, path: Path, cancelled: Callable[[], bool]) -> bool:

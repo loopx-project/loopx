@@ -31,8 +31,7 @@ def recorded_provider(home: Path, thread_id: str | None) -> str | None:
     """Read only the original thread's metadata in its already bound store.
 
     Provider identity survives account transport changes. Native Codex checks
-    both the process and resume against it; rebuilding/importing history is
-    neither necessary nor an authentication fallback.
+    both the process and resume against it.
     """
     if not thread_id:
         return None

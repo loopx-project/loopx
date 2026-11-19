@@ -56,8 +56,8 @@ def _recover_todo_execution_once(
     """Consume only the typed, claim-only lifecycle recovery in one CLI call.
 
     The TypeScript lifecycle owner decides whether a new ordinary claim is a
-    legal repair.  This adapter neither infers eligibility from prose nor
-    replaces explicit proof.  Recovery that requires reconciliation/inspection
+    legal repair.
+    Recovery that requires reconciliation/inspection
     remains visible to the caller instead of being silently rebased.
     """
 

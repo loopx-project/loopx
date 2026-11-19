@@ -294,7 +294,7 @@ def _store_codex_cli_session(
 
 @dataclass(frozen=True)
 class ManagedOperationSession:
-    """Selected file snapshot and its initialization commit, not an authority.
+    """Selected file snapshot and its initialization commit.
 
     Both transports retain the existing session file/schema. The Goal admission
     owner checks selection and acceptance; the file lock fences replacement

@@ -198,8 +198,7 @@ identity rank or default permission. Concrete authority comes from
 ### `task_lease_v0`
 
 This optional local file-backed concurrency contract is shipped through
-`loopx task-lease acquire|renew|transfer|release|inspect`. It does not replace
-the default soft `claimed_by` route or participate in quota decisions. The
+`loopx task-lease acquire|renew|transfer|release|inspect`. The
 pending key is per todo: `(goal_id, todo_id)`. Do not serialize an entire
 goal just because one todo is claimed; independent todos under the same goal
 should remain independently claimable when gates and write scopes allow it.

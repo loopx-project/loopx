@@ -129,7 +129,7 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
 }
 
 /** Compare a pure edit result using the same original number spellings.
- * References are IO lineage, not an alternate context/hash or decision owner. */
+ * References are IO lineage. */
 export function contextProjectionIdentity(source: JsonObject, projected: JsonObject,
     supplied?: unknown, sourceValues?: ProjectionSourceValues): string {
   if (supplied === undefined) return JSON.stringify(canonicalAuthorityJson(projected));

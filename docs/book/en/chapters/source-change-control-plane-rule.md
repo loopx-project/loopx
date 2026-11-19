@@ -319,8 +319,7 @@ Replay executes the real decision path. It is more than a fixture-shape test.
 ### 5. Risk-based canary
 
 For quota, scheduler, Todo/Gate, or Agent-facing output changes, let the canary planner select affected
-surfaces from the Git diff. Canary adds cross-boundary confidence. It does not replace the named focused
-regression.
+surfaces from the Git diff. Canary adds cross-boundary confidence.
 
 ## Step 8: Define failure and recovery
 
@@ -475,8 +474,7 @@ states, typed reasons, and ordered transitions.
 **Fixing policy in the renderer.** Editing prose cannot repair a source or authority defect; conversely, policy
 should not depend on Markdown strings.
 
-**Refactoring every adjacent module.** A protocol chain crossing several bounded contexts does not mean
-this PR should include every possible cleanup. Change only the complete chain this invariant requires.
+**Refactoring every adjacent module.** Change only the complete chain this invariant requires.
 
 **Adding an empty adapter for a future Host.** An adapter without a real caller, capability, and receipt
 only adds maintenance surface, and it looks like a shipped capability.

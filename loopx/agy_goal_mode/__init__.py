@@ -141,7 +141,7 @@ def build_antigravity_sidecar_template(
         "每次唤醒先执行：\n"
         f"```sh\n{shlex.join(heartbeat_args)}\n```\n"
         "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
-        '一次操作不代表结束；通知与执行分开，等待按当前调度契约（遇到 waiting_external / CI 等待时使用原生 schedule(DurationSeconds=..., TimerCondition="any") 挂起，不跑 shell sleep 空查）。'
+        '通知与执行分开，等待按当前调度契约（遇到 waiting_external / CI 等待时使用原生 schedule(DurationSeconds=..., TimerCondition="any") 挂起，不跑 shell sleep 空查）。'
         "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
     )
     interval_minutes = max(1, int(interval_seconds) // 60)

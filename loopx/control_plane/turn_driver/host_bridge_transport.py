@@ -150,7 +150,7 @@ class GuardedHostBridge:
     def close_output(self) -> None:
         self._stop_reading.set()
         # No caller remains to consume frames after cleanup fails. Release the
-        # one blocked producer before joining; this does not certify Host exit.
+        # one blocked producer before joining.
         try:
             self.pending.get_nowait()
         except queue.Empty:

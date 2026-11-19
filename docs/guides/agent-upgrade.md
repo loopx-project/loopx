@@ -46,8 +46,7 @@ If an upgrade primitive fails, preserve the source and name that specific gap.
 ## Reuse the owner for the observed state
 
 Inspect the actual installation's `--help` before executing commands. These
-operations have different owners; a successful package update does not prove
-that existing Goal data have been upgraded.
+operations have different owners.
 
 | Observed state | Existing entry | Required readback |
 | --- | --- | --- |
@@ -56,7 +55,7 @@ that existing Goal data have been upgraded.
 | Existing Goal still uses Markdown authority | `coordination-shadow inspect-source`, `prepare-import`, `apply-import` | Full source records and settled history imported into the reviewed provider; original paths remain. Recover the same import with `recover-import`. |
 | Canonical Goal retains historical `legacy` policy | `handoff-mode plan-migration`, `handoff-mode migrate` | Verified backup, preserved assignments and an explicit supported policy. Recover the same plan after a lost response. |
 
-An expired lease is not proof that its writer stopped. `--writers-stopped`
+`--writers-stopped`
 attests a fact already established through the owning Host; it does not stop
 one. An already current canonical Goal needs no import. Setting new-Goal
 defaults does not upgrade existing Goals. Storage and ownership policy remain

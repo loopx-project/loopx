@@ -143,7 +143,7 @@ class StewardManagedMode:
                     "scheduling_enabled": False, "model_invoked": False}
 
     def health(self, binding_id: str) -> dict[str, Any]:
-        """Metadata projection only; it neither verifies grants nor enables work."""
+        """Metadata projection only."""
         try:
             binding = next(row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id)
             actor = binding.get("managed_actor")
@@ -360,7 +360,7 @@ class ManagedSessionTurn:
     def _original_task_entry(self, session_id: str) -> dict[str, Any]:
         """Observe the existing creation/validation owners without any effects.
 
-        The returned plan does not claim a Task or authorize a model. Native
+        Native
         submit still rechecks current admission and every validation source.
         """
         from ...control_plane.effect_runtime import effect_runtime_result
