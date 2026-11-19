@@ -727,3 +727,72 @@ def test_real_manager_switches_core_and_preserves_original_workspace(tmp_path, m
     finally:
         for kind in ports:
             original_run(["launchctl", "bootout", f"{domain}/{alias}.{kind}"], capture_output=True)
+
+
+
+def test_verify_services_allows_production_startup_past_legacy_15s_cutoff_and_enforces_45s_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    identity = {
+        "schema_version": "loopx_runtime_identity_v1",
+        "package_version": "2.4.0",
+        "release_id": "20261120T000000Z",
+        "source_revision": "deadbeef",
+    }
+    services = {
+        tmp_path / "com.loopx.status.plist": 18766,
+        tmp_path / "com.loopx.chat.plist": 18767,
+    }
+    clock = [0.0]
+
+    class _FakeResponse(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+            return False
+
+    class _FakeOpener:
+        def open(self, url: str, timeout: float = 0.5):
+            if clock[0] < 22.0:
+                raise ConnectionRefusedError("starting up")
+            if url.endswith("/?readiness=1"):
+                payload = {
+                    "ok": True,
+                    "source": "serve-status",
+                    "readiness": {"state": "ready"},
+                    "runtime_identity": identity,
+                }
+            else:
+                payload = {
+                    "ok": True,
+                    "schema_version": "loopx_chat_readiness_v1",
+                    "state": "ready",
+                    "runtime_identity": identity,
+                }
+            return _FakeResponse(json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr(managed_runtime.urllib.request, "build_opener", lambda *_: _FakeOpener())
+    monkeypatch.setattr(managed_runtime.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        managed_runtime.time,
+        "sleep",
+        lambda _seconds: clock.__setitem__(0, clock[0] + 1.0),
+    )
+
+    managed_runtime._verify_services(services, identity)
+    assert clock[0] == 22.0
+
+    clock[0] = 0.0
+
+    class _NeverReadyOpener:
+        def open(self, url: str, timeout: float = 0.5):
+            raise ConnectionRefusedError("still unavailable")
+
+    monkeypatch.setattr(managed_runtime.urllib.request, "build_opener", lambda *_: _NeverReadyOpener())
+    with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+        managed_runtime._verify_services(services, identity)
+    assert clock[0] == 45.0
