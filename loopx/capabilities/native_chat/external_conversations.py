@@ -13,6 +13,7 @@ from pathlib import Path
 import hashlib
 import json
 import re
+import threading
 from datetime import datetime as datetime, timezone as timezone
 from typing import Any
 
@@ -21,7 +22,12 @@ from ...chat_ingress import (
     ensure_external_admission_scope,
     resolve_external_admission_source,
 )
-from ...chat_store import _atomic_write_json as _atomic_write_json, _read_json as _read_json, RESUMABLE_SESSION_STATES
+from ...chat_store import (
+    ChatSessionStore,
+    _atomic_write_json as _atomic_write_json,
+    _read_json as _read_json,
+    RESUMABLE_SESSION_STATES,
+)
 from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane import effect_runtime
 from ...control_plane.quota.automation_cadence_readback import (
@@ -31,7 +37,14 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock as exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, recovery_journal_fields, source_control_fields
+from .file_discovery import (
+    FileChatDiscovery,
+    external_source_route_path,
+    file_change_fingerprint,
+    later_equivalent_source_input,
+    recovery_journal_fields,
+    source_control_fields,
+)
 from .steward_commands import ExternalStewardCommissionMixin
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
@@ -53,6 +66,24 @@ def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
         return {"count": len(images), "sha256": hashlib.sha256(encoded).hexdigest()}
     except (ValueError, TypeError, OverflowError):
         return None
+
+
+def _project_source_request_digest(_path: Path, item: dict[str, Any]) -> dict[str, Any]:
+    canonical = json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return {
+        "request_ref": item.get("request_ref"),
+        "binding_id": item.get("binding_id"),
+        "source": item.get("source"),
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
+def _project_user_message_hint(message: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: message[key]
+        for key in ("role", "turn_id", "text", "origin", "created_at")
+        if key in message
+    }
 
 
 class _RecoveryDiscoveryReads:
@@ -77,8 +108,7 @@ class _RecoveryDiscoveryReads:
 
     def user_messages(self, session_id: str) -> list[dict[str, Any]]:
         if session_id not in self.histories:
-            self.histories[session_id] = [message for message in self.core.controller.store.messages(session_id)
-                if message.get("role") == "user"]
+            self.histories[session_id] = list(self.core._cached_user_messages(session_id))
         return self.histories[session_id]
 
     def source_controls(self) -> list[dict[str, Any]]:
@@ -102,8 +132,11 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
         self._source_control_discovery = FileChatDiscovery()
+        self._source_request_discovery = FileChatDiscovery()
         self._backlog_request_discovery = FileChatDiscovery()
         self._recovery_discovery = FileChatDiscovery()
+        self._user_messages_lock = threading.Lock()
+        self._session_user_messages_cache: dict[str, tuple[tuple[int, ...], tuple[dict[str, Any], ...]]] = {}
         self.actions: Any | None = None
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -269,6 +302,73 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
     def _source_requests(self, row: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in self.pending()
                 if item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"]]
+
+    def _source_request_digests(self, row: dict[str, Any]) -> list[dict[str, Any]]:
+        discovery = getattr(self, "_source_request_discovery", None)
+        if discovery is None:
+            discovery = FileChatDiscovery()
+            self._source_request_discovery = discovery
+        binding_id, source = row["binding_id"], row["source"]
+        return [
+            item for _, item in discovery.rows(
+                self.root, self._request_paths(), read=_read_json, project=_project_source_request_digest,
+            )
+            if item.get("binding_id") == binding_id and item.get("source") == source
+        ]
+
+    def _cached_user_messages(self, session_id: str) -> tuple[dict[str, Any], ...]:
+        store = self.controller.store
+        is_real_store = (
+            isinstance(store, ChatSessionStore)
+            and getattr(store.messages, "__func__", None) is ChatSessionStore.messages
+        )
+        if not is_real_store:
+            return tuple(
+                _project_user_message_hint(message)
+                for message in store.messages(session_id)
+                if message.get("role") == "user"
+            )
+        try:
+            msg_path = store._session_dir(session_id) / "messages.jsonl"
+            before = file_change_fingerprint(msg_path)
+        except (OSError, ValueError):
+            before = None
+            msg_path = None
+        lock = getattr(self, "_user_messages_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._user_messages_lock = lock
+        cache_map = getattr(self, "_session_user_messages_cache", None)
+        if cache_map is None:
+            cache_map = {}
+            self._session_user_messages_cache = cache_map
+        if before is None:
+            with lock:
+                cache_map.pop(session_id, None)
+            if msg_path is None:
+                return ()
+            return tuple(
+                _project_user_message_hint(message)
+                for message in store.messages(session_id)
+                if message.get("role") == "user"
+            )
+        with lock:
+            saved = cache_map.get(session_id)
+            if saved is not None and saved[0] == before:
+                return saved[1]
+        rows = tuple(
+            _project_user_message_hint(message)
+            for message in store.messages(session_id)
+            if message.get("role") == "user"
+        )
+        try:
+            unchanged = msg_path is not None and file_change_fingerprint(msg_path) == before
+        except OSError:
+            unchanged = False
+        if unchanged:
+            with lock:
+                cache_map[session_id] = (before, rows)
+        return rows
 
     def _codex_quota_route_capacity(self, session: dict[str, Any]) -> dict[str, Any] | None:
         from ...chat_manager import manager_session_quota_route
@@ -462,7 +562,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                                else checked_session_home(self.controller.codex_home, session))
             context = self.controller.project_contexts.session_context(session)
 
-            requests = self._source_requests(row)
+            requests = self._source_request_digests(row)
             # The read-only native client can consume its entire RPC deadline.
             # Retain this request's fence, but let new source input/control in.
             # Its observation is only usable if the original local state still
@@ -564,7 +664,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                         or self.controller.store.load_turn(row["session_id"], current_turn["turn_id"]) != current_turn
                         or (plan.get("completed_review_turn_id") or plan.get("original_result_turn_id"))
                         and self.controller.store.load_turn(row["session_id"], turn["turn_id"]) != turn
-                        or self._source_requests(row) != requests):
+                        or self._source_request_digests(row) != requests):
                     return row
                 plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
                     selected_binding=selected["binding"], preparation_scope_available=scope_available,
@@ -725,7 +825,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                                turn: dict[str, Any], source_observation: Callable) -> dict[str, Any]:
         """Adopt an original provider result, without reopening/dispatching a Turn."""
         store = self.controller.store
-        requests = self._source_requests(row)
+        requests = self._source_request_digests(row)
         context = self.controller.project_contexts.session_context(session)
         recovered = row.get("native_result_recovery")
         proof = self._original_native_result(row, session, turn, context) if recovered is None else recovered.get("native_observation")
@@ -741,7 +841,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             selected = self.bindings._resolve_observed(current, selected["binding"], selected["observation"], row["source"])
             if (store.load_session(session["session_id"]) != session
                     or store.load_turn(session["session_id"], turn["turn_id"]) != turn
-                    or self._source_requests(row) != requests):
+                    or self._source_request_digests(row) != requests):
                 return row
             plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
                                                selected_binding=selected["binding"])
@@ -973,7 +1073,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             error_message="The original source, grant or queue changed; metadata review is held.",
             require_empty_queue=True,
         )
-        refs = sorted(item["request_ref"] for item in self._source_requests(row))
+        refs = sorted(item["request_ref"] for item in self._source_request_digests(row))
         native_session = self._original_native_session(current, [continuation["native_observation"]])
         if (native_session.get("agent_id") != "antigravity"
                 or native_session.get("upstream_thread_id") != continuation["native_observation"]["thread_id"]
