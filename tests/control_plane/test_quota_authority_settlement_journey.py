@@ -660,6 +660,17 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     assert code == 0 and next_wake["decision"] == "run", next_wake
     assert next_wake["selected_todo"]["todo_id"] == cli.TODO_ID
     assert next_wake["effective_action"] != "unsettled_host_turn_recovery"
+    code, newer = run("todo", "claim", "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
+                      "--claimed-by", cli.AGENT_ID)
+    assert code == 0 and newer["execution_managed"], newer
+    code, inspected = run("task-lease", "inspect", "--todo-id", cli.TODO_ID)
+    assert code == 0 and inspected["active"], inspected
+    newer_epoch = inspected["lease"]["lease_epoch"]
+    assert newer_epoch > acquired["lease"]["lease_epoch"]
+    code, qualified = _guard(project, runtime, registry, turn_id="turn-after-policy-migration")
+    assert code == 0 and qualified["normal_delivery_allowed"], qualified
+    assert qualified["execution_preparation"]["lease_epoch"] == newer_epoch
+    assert qualified["heartbeat_receipt"]["settlement_identity"] == next_wake["heartbeat_receipt"]["settlement_identity"]
     assert cli._spend_run_count(runtime) == 1
 
 

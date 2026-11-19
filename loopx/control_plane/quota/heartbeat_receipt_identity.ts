@@ -12,6 +12,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import {executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { jsonObject } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
@@ -235,7 +236,7 @@ export function heartbeatPreparedLease(details: JsonObject): HeartbeatPreparedLe
   const version = details.prepared_lease_version;
   const epoch = details.prepared_lease_epoch;
   if (key === undefined && version === undefined && epoch === undefined) return null;
-  if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
+  if (typeof key !== "string" || !BARE_SHA256_PATTERN.test(key) ||
       typeof version !== "number" || !Number.isSafeInteger(version) || version < 1 ||
       (epoch !== undefined && (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 1))) {
     throw new EffectRuntimeRequestError("Turn readiness has a malformed lease proof", "malformed_settlement_state");

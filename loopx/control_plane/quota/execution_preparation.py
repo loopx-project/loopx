@@ -214,14 +214,19 @@ def guard_first_writeback_execution(
                 # advance to a later version without a recorded generation.
                 lease_epoch = (current.get("lease_epoch")
                                if prepared_lease and "prepared_lease_epoch" in prepared_lease else None)
-                # Recovery after an authoritative lifecycle transition can read
-                # the original retired proof from the same locked snapshot.
+                # Recovery can read the retired proof from the same locked
+                # snapshot, including a renewal within the admitted generation.
                 proof = current_proof if not todo_open and requested_proof is None else requested_proof
-                execution_bound = (
-                    proof is not None
-                    and current_proof == proof
-                    and prepared_lease == prepared_lease_receipt_fields(proof, lease_epoch=lease_epoch)
-                )
+                execution_bound = False
+                if prepared_lease is not None and proof is not None and proof == current_proof:
+                    observed = prepared_lease_receipt_fields(proof, lease_epoch=lease_epoch)
+                    admitted_version = prepared_lease["prepared_lease_version"]
+                    if (
+                        not todo_open and lease_epoch is not None
+                        and observed["prepared_lease_version"] > admitted_version
+                    ):
+                        observed["prepared_lease_version"] = admitted_version
+                    execution_bound = prepared_lease == observed
             else:
                 # Older admitted closeouts may predate persisted lease readiness.
                 # Their retired holder still has to match the original binding.

@@ -1,7 +1,7 @@
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {HANDOFF_MODE_RETIRED_REASON, retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
 import type {JsonObject} from "../effect_program.ts";
-import {leaseEpoch} from "./task_lease_acquire.ts";
+import {leaseEpoch} from "./task_lease_record.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {
   optionalNonEmptyString,
