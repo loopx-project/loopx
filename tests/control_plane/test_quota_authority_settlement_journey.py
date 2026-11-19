@@ -194,11 +194,11 @@ def test_failed_canonical_read_cannot_fall_back_to_markdown(tmp_path):
 
 
 
-def _refresh(project: Path, runtime: Path, registry: Path, *extra: str):
+def _refresh(project: Path, runtime: Path, registry: Path, *extra: str, outcome: str = "outcome_progress"):
     return cli._run_cli(
         registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
         "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
-        "--delivery-outcome", "outcome_progress", "--agent-id", cli.AGENT_ID,
+        "--delivery-outcome", outcome, "--agent-id", cli.AGENT_ID,
         "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID,
         "--no-global-sync", "--suppress-external-sinks", *extra, cwd=project,
     )
@@ -722,6 +722,69 @@ def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, prov
     assert result is not None and result.identity.value is not None
     assert result.identity.value.as_dict() == guard["heartbeat_receipt"]["settlement_identity"]
     assert not result.writeback.receipts and not result.spend.receipts
+    assert cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("replace_lease", [False, True])
+@pytest.mark.parametrize("retire_for_blocker", [False, True])
+def test_first_blocked_writeback_checks_original_lease(
+    tmp_path, provider, replace_lease, retire_for_blocker,
+):
+    project, runtime, registry, _, _ = _source(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+        extra=f"claimed_by={cli.AGENT_ID}",
+    )
+    scope = ("--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
+
+    def run(*args):
+        return cli._run_cli(registry, runtime, *args, *scope, cwd=project)
+
+    code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
+    assert code == 0 and claim["execution_managed"], claim
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0 and guard["normal_delivery_allowed"], guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    proof = guard["execution_preparation"]["lease_proof"]
+    proof_args = (
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"]),
+    )
+    if replace_lease:
+        code, released = run("task-lease", "release", "--owner", cli.AGENT_ID,
+                             "--idempotency-key", proof["idempotency_key"],
+                             "--expected-version", str(proof["expected_version"]))
+        assert code == 0 and released["released"], released
+        prior_claim = claim["claim_operation_id"]
+        code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
+        assert code == 0 and claim["claim_operation_id"] != prior_claim, claim
+    if retire_for_blocker:
+        code, updated = run("todo", "update", "--status", "blocked", "--agent-id", cli.AGENT_ID,
+                            "--reason", "The fixture's dependency requires a later decision.",
+                            "--claim-operation-id", claim["claim_operation_id"])
+        assert code == 0 and updated["ok"], updated
+    arguments = (
+        "--progress-result-class", "blocked", "--progress-blocker-id", "blocker:fixture-dependency",
+        "--progress-evidence-id", "evidence:fixture-dependency", "--settle-turn", "--settlement-receipt",
+    )
+    journal = rollout_event_log_path(runtime, cli.GOAL_ID)
+    before = journal.read_bytes()
+    if replace_lease:
+        for supplied_proof in ((), proof_args):
+            code, refused = _refresh(project, runtime, registry, *arguments, *supplied_proof, outcome="outcome_gap")
+            assert code == 1 and refused["error_code"] == "refresh_task_lease_unavailable", refused
+            assert refused["appended"] is False
+        assert journal.read_bytes() == before
+        assert cli._classification_count(runtime, "validated_progress") == 0
+    else:
+        arguments += () if retire_for_blocker else proof_args
+        code, closed = _refresh(project, runtime, registry, *arguments, outcome="outcome_gap")
+        assert code == 0 and closed["settlement_identity"] == identity, closed
+        assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+        code, replay = _refresh(project, runtime, registry, *arguments, outcome="outcome_gap")
+        assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+        assert closed["settlement_result"] == replay["settlement_result"]
+        assert cli._classification_count(runtime, "validated_progress") == 1
     assert cli._spend_run_count(runtime) == 0
 
 

@@ -1599,7 +1599,14 @@ def refresh_state_run(
             if not dry_run:
                 if (
                     settlement_identity is not None and settlement_identity.todo_id
-                    and not checkpoint_supplement and blocked_retry is None
+                    and not checkpoint_supplement
+                    # An administrative closeout can report inability to start.
+                    # A prepared Turn's blocker is still a first writeback.
+                    and (
+                        blocked_retry is None
+                        or task_lease_proof is not None
+                        or (settlement_readback is not None and settlement_readback.prepared_lease is not None)
+                    )
                 ):
                     usage_booking_guard.enter_context(guard_first_writeback_execution(
                         runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,

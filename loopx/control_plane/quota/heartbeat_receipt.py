@@ -207,6 +207,7 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
     quota_spend_source: str | None = None,
     task_lease_proof: Mapping[str, object] | None = None,
+    task_lease_epoch: int | None = None,
     prepared_lease_required: bool = False,
     goal_ref: Mapping[str, object] | None = None,
     before_bind: Callable[[], None] | None = None,
@@ -323,7 +324,7 @@ def ensure_turn_heartbeat_settlement_receipt(
         if task_lease_proof is not None and identity.todo_id is not None:
             from .execution_preparation import prepared_lease_receipt_fields
 
-            details.update(prepared_lease_receipt_fields(task_lease_proof))
+            details.update(prepared_lease_receipt_fields(task_lease_proof, lease_epoch=task_lease_epoch))
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""

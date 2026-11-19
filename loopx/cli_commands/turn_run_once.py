@@ -765,6 +765,7 @@ def execute_turn_run_once(
                 ),
                 goal_ref=goal_ref,
                 task_lease_proof=task_lease_proof,
+                task_lease_epoch=execution_context.get("task_lease_epoch"),
             )
 
         managed_cadence = managed_cadence_start(
