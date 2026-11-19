@@ -31,6 +31,7 @@ from .. import runtime_activation as activation
 _OBSERVER_LABEL = "com.loopx.codex-native-accounts"
 _OBSERVER_MODULE = "loopx_codex_provider_routing.native"
 _RUNTIME_BINDING = {"schema_version": "loopx_managed_runtime_binding_v1"}
+_SERVICE_READINESS_TIMEOUT_SECONDS = 90.0
 
 
 def _literal_arguments(command: str) -> list[str]:
@@ -339,13 +340,18 @@ def _start_order(paths):
     return sorted(paths, key=lambda path: path.stem != _OBSERVER_LABEL)
 
 
-def _verify_services(services: dict[Path, int], identity: dict) -> None:
+def _verify_services(
+    services: dict[Path, int],
+    identity: dict,
+    *,
+    timeout_seconds: float = _SERVICE_READINESS_TIMEOUT_SECONDS,
+) -> None:
     #  Read back the
     # exact HTTP runtime before committing the handoff; a failed start restores
     # the original manager configuration instead of leaving the App spinning.
     pending = dict(services)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + timeout_seconds
     while pending and time.monotonic() < deadline:
         for path, port in list(pending.items()):
             status = path.stem.endswith(".status")
