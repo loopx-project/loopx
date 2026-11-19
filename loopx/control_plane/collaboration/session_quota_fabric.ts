@@ -1,7 +1,6 @@
 /** L0 Session & Quota Fabric additive codecs, read-only projections, and fence-bound handover checks. */
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
-  isStringLiteral,
   optionalNonEmptyString,
   requireBoolean,
   requireJsonObject,
@@ -11,107 +10,65 @@ import {
   type JsonObject,
 } from "../runtime_decode.ts";
 import { parseIsoTimestamp } from "../runtime_timestamp.ts";
+import {
+  assertPublicSafeFabricText,
+  decodeSshHostObservationWith,
+  GOVERNED_SESSION_HANDOVER_PROPOSAL_SCHEMA,
+  GOVERNED_SESSION_HANDOVER_RESULT_SCHEMA,
+  isSafeHostAlias,
+  requireSafeHostAlias,
+  SAFE_HOST_ALIAS,
+  SESSION_FABRIC_HANDOVER_DISPOSITIONS,
+  SESSION_FABRIC_QUOTA_AVAILABILITIES,
+  SESSION_FABRIC_SSH_CONNECTION_STATES,
+  SESSION_FABRIC_SSH_FAILURE_CODES,
+  SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+  SESSION_MODES,
+  SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA,
+  type GovernedSessionHandoverResult,
+  type HandoverDisposition,
+  type QuotaWindowAvailability,
+  type SessionMode,
+  type SessionQuotaWindowObservation,
+  type SshConnectionState,
+  type SshFailureCode,
+  type SshHostObservation,
+} from "./session_quota_fabric_contract.ts";
 
-export const SESSION_FABRIC_SSH_OBSERVATION_SCHEMA = "session_fabric_ssh_observation_v0";
-export const SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA = "session_quota_window_observation_v0";
-export const GOVERNED_SESSION_HANDOVER_PROPOSAL_SCHEMA = "governed_session_handover_proposal_v0";
-export const GOVERNED_SESSION_HANDOVER_RESULT_SCHEMA = "governed_session_handover_result_v0";
+export {
+  GOVERNED_SESSION_HANDOVER_PROPOSAL_SCHEMA,
+  GOVERNED_SESSION_HANDOVER_RESULT_SCHEMA,
+  isSafeHostAlias,
+  SAFE_HOST_ALIAS,
+  SESSION_FABRIC_HANDOVER_DISPOSITIONS,
+  SESSION_FABRIC_QUOTA_AVAILABILITIES,
+  SESSION_FABRIC_SSH_CONNECTION_STATES,
+  SESSION_FABRIC_SSH_FAILURE_CODES,
+  SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+  SESSION_MODES,
+  SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA,
+  type GovernedSessionHandoverResult,
+  type HandoverDisposition,
+  type QuotaWindowAvailability,
+  type SessionMode,
+  type SessionQuotaWindowObservation,
+  type SshConnectionState,
+  type SshFailureCode,
+  type SshHostObservation,
+};
 
-export const SESSION_FABRIC_SSH_CONNECTION_STATES = [
-  "connected",
-  "degraded",
-  "disconnected",
-  "unknown",
-] as const;
-
-export const SESSION_FABRIC_SSH_FAILURE_CODES = [
-  "no_ssh",
-  "host_key",
-  "auth",
-  "unreachable",
-  "ssh_failed",
-  "daemon_missing",
-  "forward_denied",
-] as const;
-
-export const SESSION_FABRIC_QUOTA_AVAILABILITIES = [
-  "available",
-  "near_limit",
-  "exhausted",
-  "unknown",
-] as const;
-
-export const SESSION_FABRIC_EXECUTION_MODES = ["managed_runtime", "attached_host"] as const;
-
-export const SESSION_FABRIC_HANDOVER_DISPOSITIONS = [
-  "no_handover_needed",
-  "user_gate_required",
-  "await_turn_fence",
-  "ready_for_lease_reacquisition",
-] as const;
-
-export type SshConnectionState = (typeof SESSION_FABRIC_SSH_CONNECTION_STATES)[number];
-export type SshFailureCode = (typeof SESSION_FABRIC_SSH_FAILURE_CODES)[number];
-export type QuotaWindowAvailability = (typeof SESSION_FABRIC_QUOTA_AVAILABILITIES)[number];
-export type SessionFabricExecutionMode = (typeof SESSION_FABRIC_EXECUTION_MODES)[number];
-export type HandoverDisposition = (typeof SESSION_FABRIC_HANDOVER_DISPOSITIONS)[number];
-
-const SAFE_HOST_ALIAS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 const OPAQUE_PROFILE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
-const FORBIDDEN_SECRET_PATTERNS = ["/Users/", "/home/", ".ssh/", "sk-", "ghp_", "bearer "];
 
-export interface SshHostObservation extends JsonObject {
-  schema_version: typeof SESSION_FABRIC_SSH_OBSERVATION_SCHEMA;
-  alias: string;
-  connection_state: SshConnectionState;
-  failure_code: SshFailureCode | null;
-  checked_at: string | null;
-  tunnel_latency_ms: number | null;
-}
-
-export interface SessionQuotaWindowObservation extends JsonObject {
-  schema_version: typeof SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA;
-  profile_id: string;
-  availability: QuotaWindowAvailability;
-  used_ratio: number | null;
-  resets_at: string | null;
-  eligible_models: string[];
-  handover_eligible: boolean;
-}
-
-export interface GovernedSessionHandoverResult extends JsonObject {
-  schema_version: typeof GOVERNED_SESSION_HANDOVER_RESULT_SCHEMA;
-  goal_id: string;
-  todo_id: string;
-  agent_id: string;
-  session_mode: SessionFabricExecutionMode;
-  from_profile_id: string;
-  to_profile_id: string;
-  availability: QuotaWindowAvailability;
-  used_ratio: number | null;
-  threshold_ratio: number;
-  disposition: HandoverDisposition;
-  gate_required: boolean;
-  turn_fence_satisfied: boolean;
-  ready_for_reacquisition: boolean;
-  reason: string;
+function failFabricRequest(message: string): never {
+  throw new EffectRuntimeRequestError(message);
 }
 
 function assertPublicSafeText(value: string, label: string): string {
-  const trimmed = value.trim();
-  const lowered = trimmed.toLowerCase();
-  if (FORBIDDEN_SECRET_PATTERNS.some((pattern) => lowered.includes(pattern))) {
-    throw new EffectRuntimeRequestError(`${label} must not contain private paths or credentials`);
-  }
-  return trimmed;
+  return assertPublicSafeFabricText(value, label, failFabricRequest);
 }
 
 function requireHostAlias(value: unknown, label: string): string {
-  const alias = assertPublicSafeText(requireNonEmptyString(value, label), label);
-  if (alias.includes("..") || !SAFE_HOST_ALIAS.test(alias)) {
-    throw new EffectRuntimeRequestError(`${label} must be an explicit safe OpenSSH Host alias`);
-  }
-  return alias;
+  return requireSafeHostAlias(value, label, failFabricRequest);
 }
 
 function requireOpaqueProfileId(value: unknown, label: string): string {
@@ -133,42 +90,10 @@ function optionalIsoTimestamp(value: unknown, label: string): string | null {
 }
 
 export function decodeSshHostObservation(value: unknown): SshHostObservation {
-  const raw = requireJsonObject(value, "ssh_host_observation");
-  if (raw.schema_version !== SESSION_FABRIC_SSH_OBSERVATION_SCHEMA) {
-    throw new EffectRuntimeRequestError("ssh_host_observation schema_version mismatch");
-  }
-  const alias = requireHostAlias(raw.alias, "ssh_host_observation.alias");
-  const connectionState = requireStringLiteral(
-    raw.connection_state,
-    SESSION_FABRIC_SSH_CONNECTION_STATES,
-    "ssh_host_observation.connection_state",
-  );
-  const rawFailure = optionalNonEmptyString(raw.failure_code, "ssh_host_observation.failure_code");
-  let failureCode: SshFailureCode | null = null;
-  if (connectionState === "degraded" || connectionState === "disconnected") {
-    if (rawFailure === null || !isStringLiteral(rawFailure.trim(), SESSION_FABRIC_SSH_FAILURE_CODES)) {
-      throw new EffectRuntimeRequestError(
-        "degraded or disconnected SSH host observations require a valid failure_code",
-      );
-    }
-    failureCode = rawFailure.trim() as SshFailureCode;
-  } else if (rawFailure !== null) {
-    throw new EffectRuntimeRequestError(
-      "connected or unknown SSH host observations must not carry a failure_code",
-    );
-  }
-  const latency = raw.tunnel_latency_ms ?? null;
-  if (latency !== null && (typeof latency !== "number" || !Number.isSafeInteger(latency) || latency < 0)) {
-    throw new EffectRuntimeRequestError("ssh_host_observation.tunnel_latency_ms must be a non-negative integer");
-  }
-  return {
-    schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
-    alias,
-    connection_state: connectionState,
-    failure_code: failureCode,
-    checked_at: optionalIsoTimestamp(raw.checked_at, "ssh_host_observation.checked_at"),
-    tunnel_latency_ms: latency,
-  };
+  return decodeSshHostObservationWith(value, {
+    fail: failFabricRequest,
+    parseTimestamp: parseIsoTimestamp,
+  });
 }
 
 /** Merge optional L0 readiness observations into `ssh_host_catalog_v0`.
@@ -208,6 +133,23 @@ export function projectSshHostCatalogPayload(
       return observation ? { alias, observation } : { alias };
     }),
   };
+}
+
+export function projectSshHostCatalogRequest(value: unknown): JsonObject {
+  const raw = requireJsonObject(value, "ssh_host_catalog_projection_request");
+  const configuredAliases = requireStringArray(
+    raw.configured_aliases,
+    "ssh_host_catalog_projection_request.configured_aliases",
+  );
+  const observations = raw.observations === undefined || raw.observations === null
+    ? []
+    : raw.observations;
+  if (!Array.isArray(observations)) {
+    throw new EffectRuntimeRequestError(
+      "ssh_host_catalog_projection_request.observations must be an array",
+    );
+  }
+  return projectSshHostCatalogPayload(configuredAliases, observations);
 }
 
 export function decodeSessionQuotaWindowObservation(
@@ -273,12 +215,12 @@ export function evaluateGovernedSessionHandover(
   }
   const fromMode = requireStringLiteral(
     raw.from_session_mode,
-    SESSION_FABRIC_EXECUTION_MODES,
+    SESSION_MODES,
     "governed_session_handover.from_session_mode",
   );
   const toMode = requireStringLiteral(
     raw.to_session_mode,
-    SESSION_FABRIC_EXECUTION_MODES,
+    SESSION_MODES,
     "governed_session_handover.to_session_mode",
   );
   if (fromMode !== toMode) {
@@ -299,11 +241,14 @@ export function evaluateGovernedSessionHandover(
   const fenceSatisfied = currentTurnFenced && previousLeaseReleased;
   let disposition: HandoverDisposition;
   let reason: string;
-  if (observation.availability === "unknown" || (observation.used_ratio ?? 0) < threshold) {
+  if (!observation.handover_eligible) {
     disposition = "no_handover_needed";
     reason = observation.availability === "unknown"
       ? "quota window is unknown; fail closed with no switch"
-      : "observed quota usage is below handover threshold";
+      : "observed quota window is available; no handover needed";
+  } else if (observation.availability === "near_limit" && (observation.used_ratio ?? 0) < threshold) {
+    disposition = "no_handover_needed";
+    reason = "observed quota usage is below handover threshold";
   } else if (askBeforeSwitch) {
     disposition = "user_gate_required";
     reason = "handover requires confirmation on the shared Goal Inbox/Gate projection";

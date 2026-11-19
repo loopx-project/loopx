@@ -2,11 +2,11 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Partial. The additive L0 codecs and handover guard (`session_quota_fabric.ts`) ship on this baseline; host runtime adapters and dashboard UI composition remain staged follow-on slices.
+- **Delivery maturity:** Partial. The additive L0 codecs, zero-import frontend/control-plane contract (`session_quota_fabric_contract.ts`), `effect_runtime_handlers.ts` registrations, optional `ssh_host_catalog_v0` observation pass-through, and handover guard (`session_quota_fabric.ts`) ship on this baseline; host runtime adapters and dashboard UI composition remain staged follow-on slices.
 - **Authors / owners:** Architecture convergence workgroup; control-plane ownership, package boundaries, and merge authorization belong to LoopX maintainers
 - **Created:** 2026-11-17
-- **Last normative revision:** 2026-11-17
-- **Implementation baseline:** `31944d8354`
+- **Last normative revision:** 2026-11-20
+- **Implementation baseline:** `45c015ffd9`
 - **Related contracts:**
   [Agent session execution modes](agent-session-execution-modes-v0.md),
   [Desktop execution frontends](desktop-execution-frontends-v0.md),
@@ -111,12 +111,18 @@ single Goal Workbench.
 - Bypassing `loopx/presentation/codex_attached_api.py` ownership boundaries or
   shipping concrete OpenSSH child-process supervisors inside this RFC slice.
 
-## 4. Current-system contract (baseline `31944d8354`)
+## 4. Current-system contract (baseline `45c015ffd9`)
 
 - **SSH catalog:** [`ssh_host_catalog.py`](../../../loopx/control_plane/status/ssh_host_catalog.py)
-  serves `/ssh-hosts` with `{ ok: true, schema_version: "ssh_host_catalog_v0", hosts: [{ alias }] }`.
+  serves `/ssh-hosts` with `{ ok: true, schema_version: "ssh_host_catalog_v0", hosts: [{ alias }] }`
+  and exposes an optional `project_ssh_host_catalog` / `observations` helper
+  wired through `effect_runtime_handlers.ts` while leaving the default
+  no-observation output byte-identical.
 - **Dashboard SSH client:** [`ssh-host-catalog.ts`](../../../apps/presentation/dashboard/src/data/ssh-host-catalog.ts)
-  already parses `ssh_host_catalog_v0` and invokes `/api/ssh-source/ensure` and
+  reuses `isSafeHostAlias` (`SAFE_HOST_ALIAS`) and `decodeSshHostObservationWith`
+  from [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts),
+  preserving optional validated `observation` metadata when present and bare
+  `{ alias }` entries when absent, and invokes `/api/ssh-source/ensure` and
   `/api/ssh-source/goal-lifecycle`.
 - **Attached sessions & Goal UI:**
   [`codex_attached_api.py`](../../../loopx/presentation/codex_attached_api.py)
@@ -124,9 +130,14 @@ single Goal Workbench.
   while [`attached-agent-conversations.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/attached-agent-conversations.tsx)
   and [`goal-agent-work-page.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/goal-agent-work-page.tsx)
   render bound attached and managed conversations inside one Goal view.
-- **L0 contract module (delivered in this baseline):**
+- **L0 contract & semantic registration (delivered in this baseline):**
   [`session_quota_fabric.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric.ts)
-  provides zero-I/O validated projections and handover state transitions.
+  and [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts)
+  provide zero-I/O validated projections and handover state transitions
+  registered under `effect_runtime_handlers.ts` (`collaboration.session_fabric.project_ssh_host_catalog`,
+  `collaboration.session_fabric.evaluate_governed_session_handover`) and
+  converged in [`vocabulary_v0.json`](../../../loopx/semantics/vocabulary_v0.json)
+  (reusing canonical `session_mode` owned by `loopx/chat_store.py`).
 
 ## 5. Proposed architecture
 
@@ -149,15 +160,18 @@ single Goal Workbench.
    observations strictly to known `ssh_host_catalog_v0` aliases and leaves
    un-observed hosts as bare `{ alias }`.
 2. `session_quota_window_observation_v0`: validates opaque `profile_id`
-   (forbidding `@`, `/`, `.ssh/`, `sk-`, `ghp_`, `bearer`), `availability`
+   (forbidding `@`, `/`, private paths, and boundary-anchored credential prefixes
+   such as `sk-...`, `ghp_...`, `github_pat_...`, `Bearer ...`), `availability`
    (`available | near_limit | exhausted | unknown`), `used_ratio` (`[0, 1]` or
-   strictly `null` when `unknown`), `resets_at`, and `eligible_models`.
+   strictly `null` when `unknown`), `resets_at`, and `eligible_models`, deriving
+   `handover_eligible` strictly for `near_limit` and `exhausted`.
 3. `governed_session_handover_proposal_v0`: rejects cross-mode switches
    (`from_session_mode !== to_session_mode`), rejects `from_profile_id === to_profile_id`,
-   returns `no_handover_needed` when `unknown` or below `threshold_ratio`,
-   `user_gate_required` when `ask_before_switch=true`, `await_turn_fence` when
-   fencing/release is incomplete, and `ready_for_lease_reacquisition` only when
-   all preconditions hold.
+   returns `no_handover_needed` when `!observation.handover_eligible` (`unknown`
+   or `available`) or when `availability === "near_limit"` below `threshold_ratio`,
+   evaluates `exhausted` regardless of `used_ratio`, returns `user_gate_required`
+   when `ask_before_switch=true`, `await_turn_fence` when fencing/release is
+   incomplete, and `ready_for_lease_reacquisition` only when all preconditions hold.
 
 ## 6. Alternatives and design choices
 
@@ -173,11 +187,16 @@ Directly answers open convergence review question D1/D2 across #8778, #8782–#8
 
 - **Default-off parity:** Absence of L0 observation payloads keeps `ssh_host_catalog_v0`
   output identical to `loopx/control_plane/status/ssh_host_catalog.py`.
-- **Credential & path fail-closed:** `session_quota_fabric.ts` rejects any
-  SSH alias or quota `profile_id` / model string carrying `/Users/`, `/home/`,
-  `.ssh/`, `@`, `/`, `sk-`, `ghp_`, or `bearer`.
-- **Unknown availability safety:** Missing/unknown quota observations force
-  `handover_eligible=false` and `disposition="no_handover_needed"`.
+- **Credential & path fail-closed:** `session_quota_fabric_contract.ts` /
+  `session_quota_fabric.ts` rejects private home/SSH paths (`/Users/`, `/home/`,
+  `/private/`, `~/`, `.ssh/`) and boundary-anchored credential prefixes (`sk-...`,
+  `sk_live_...`, `ghp_...`, `github_pat_...`, `Bearer ...`) without falsely
+  rejecting valid OpenSSH host aliases or identifiers such as `desk-box`,
+  `task-worker`, `disk-01`, or `kiosk-2`.
+- **Unknown and available window safety:** Missing/unknown and `available`
+  quota observations force `handover_eligible=false` and
+  `disposition="no_handover_needed"`, while `exhausted` remains handover-eligible
+  even if `used_ratio < threshold_ratio`.
 
 ## 8. Migration and rollback
 
@@ -205,7 +224,7 @@ Goal-scoped projections; failures emit deterministic typed errors.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| **M0 Convergence RFC + L0 Contract** | Bilingual RFC (`session-and-quota-fabric-v0`) + `session_quota_fabric.ts` + TS unit tests | Baseline `31944d8354` | `session_quota_fabric.test.ts`, `docs-governance-smoke.py`, `semantic-vocabulary-drift-smoke.py` | Revert RFC & module |
+| **M0 Convergence RFC + L0 Contract** | Bilingual RFC (`session-and-quota-fabric-v0`) + `session_quota_fabric_contract.ts` / `session_quota_fabric.ts` + `effect_runtime_handlers.ts` wiring + `ssh_host_catalog.py` / `ssh-host-catalog.ts` pass-through + `vocabulary_v0.json` registration | Baseline `45c015ffd9` | `session_quota_fabric.test.ts`, `status-source-catalog-smoke.ts`, `test_status_server_ssh_hosts.py`, `docs-governance-smoke.py`, `test_semantic_vocabulary_drift.py` | Revert RFC, registration & L0 handlers |
 | **M1 Attached API & Host Provider** | Generalize `codex_attached_api.py` `host_surface` routing + opt-in SSH probe wiring into `ssh_host_catalog_v0` | M0 merged | Feature-off parity test + seven SSH failure-code fixture tests | Disable provider flag |
 | **M2 Single Goal Workbench UI & Handover Wire-up** | Embed host readiness, quota window badge, and Gate-bound handover trigger inside `GoalAgentWorkPage` (`apps/presentation/dashboard`) | M1 merged | Playwright desktop/narrow viewport smoke + visual evidence + turn-fence handoff integration test | Revert UI panel slice |
 
