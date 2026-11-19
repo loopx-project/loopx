@@ -10,12 +10,14 @@ import {
   compactDecision,
   compactProviderWriteback,
   exactBlockedWait,
+  monitorLaneFacts,
   monitorTarget,
   optionalTrimmed,
   QUOTA_MONITOR_POLL_CLASSIFICATION,
   QUOTA_MONITOR_POLL_COMMIT_RECEIPT_SCHEMA,
   successorReceipts,
   type MonitorDecision,
+  type MonitorLaneFacts,
   type MonitorObservation,
   type MonitorRequest,
 } from "./monitor_poll_codec.ts";
@@ -42,14 +44,6 @@ export interface Admission {
   external: boolean;
 }
 
-function stringSet(value: unknown): Set<string> {
-  return new Set(
-    Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
-      : [],
-  );
-}
-
 function blockedSuccessorAllowed(decision: MonitorDecision): boolean {
   return ([
     AgentScopeFrontierAction.AGENT_SCOPE_WAIT, EffectiveAction.MONITOR_QUIET_SKIP,
@@ -59,27 +53,26 @@ function blockedSuccessorAllowed(decision: MonitorDecision): boolean {
     !decision.requires_user_action && exactBlockedWait(decision) !== null;
 }
 
-function externalMonitorAllowed(decision: MonitorDecision): boolean {
+function externalMonitorAllowed(decision: MonitorDecision, facts: MonitorLaneFacts): boolean {
   if (decision.requires_user_action || !decision.should_run) return false;
-  const external = decision.external_evidence_observation;
-  if (external.required === true && external.must_attempt_observation === true) return true;
-  const lane = decision.work_lane_contract;
-  const reasonCodes = stringSet(lane.reason_codes);
-  if (lane.must_attempt_work !== true) return false;
-  if (!EXTERNAL_MONITOR_POLICIES.has(String(lane.monitor_policy ?? ""))) return false;
-  if ([...reasonCodes].some((code) => EXTERNAL_MONITOR_REASON_CODES.has(code))) return true;
-  return Object.keys(external).length > 0;
+  if (facts.external_observation_required) return true;
+  if (!facts.must_attempt_work) return false;
+  if (!EXTERNAL_MONITOR_POLICIES.has(facts.monitor_policy)) return false;
+  if ([...facts.reason_codes].some((code) => EXTERNAL_MONITOR_REASON_CODES.has(code))) return true;
+  return facts.has_external_observation;
 }
 
-function dueMonitorAllowed(decision: MonitorDecision, observation: MonitorObservation): boolean {
-  const lane = decision.work_lane_contract;
-  if (lane.must_attempt_work !== true) return false;
-  const reasonCodes = stringSet(lane.reason_codes);
+function dueMonitorAllowed(
+  decision: MonitorDecision,
+  observation: MonitorObservation,
+  facts: MonitorLaneFacts,
+): boolean {
+  if (!facts.must_attempt_work) return false;
   const candidate = decision.due_monitor_candidates.find((item) => candidateMatches(item, observation));
-  if (lane.obligation === "attempt_due_monitor") return Boolean(candidate);
-  if (reasonCodes.has("due_monitor_context") && candidate) return true;
+  if (facts.obligation === "attempt_due_monitor") return Boolean(candidate);
+  if (facts.reason_codes.has("due_monitor_context") && candidate) return true;
   const registry = decision.registry_due_monitor;
-  return reasonCodes.has("due_monitor_context") && registry.due === true &&
+  return facts.reason_codes.has("due_monitor_context") && registry.due === true &&
     registry.claimed_by === decision.agent_id && candidateMatches(registry, observation);
 }
 
@@ -160,7 +153,8 @@ async function auxiliaryMonitorAllowed(
   const monitor = decision.registry_due_monitor;
   // Retain ordinary quota/due-work admission and capability/gate projections;
   // lifecycle lookup must not become a second should-run bypass.
-  return monitorGateAllowsObservation(decision) && dueMonitorAllowed(decision, observation) &&
+  return monitorGateAllowsObservation(decision) &&
+    dueMonitorAllowed(decision, observation, monitorLaneFacts(decision)) &&
     monitor.due === true && candidateMatches(monitor, observation) &&
     (monitor.claimed_by == null || monitor.claimed_by === decision.agent_id);
 }
@@ -187,10 +181,11 @@ export async function admission(
       );
     }
   }
+  const laneFacts = monitorLaneFacts(request.decision);
   const blocked = blockedSuccessorAllowed(request.decision);
-  const external = externalMonitorAllowed(request.decision);
+  const external = externalMonitorAllowed(request.decision, laneFacts);
   const auxiliary = await auxiliaryMonitorAllowed(request, historicalAdmission);
-  const due = auxiliary ?? dueMonitorAllowed(request.decision, request.observation);
+  const due = auxiliary ?? dueMonitorAllowed(request.decision, request.observation, laneFacts);
   if (auxiliary === false) {
     throw new EffectRuntimeRequestError(
       "auxiliary monitor-poll requires its own due Monitor target", "monitor_poll_admission_rejected",

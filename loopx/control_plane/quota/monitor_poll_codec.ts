@@ -53,18 +53,23 @@ export const MONITOR_SOURCES = ["heartbeat", "controller", "adapter", "visible-g
 
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const TODO_ID = /^todo_[a-z0-9_-]{3,64}$/;
-const TRIMMED_SHARED_STRING_FIELDS = [
+const SHARED_OBSERVATION_KEYS = [
+  "todo_id",
   "target_key",
+  "material_change",
   "cadence",
   "next_due_at",
+  "reason_summary",
+  "next_agent_todo",
   "next_action_kind",
   "next_task_repository",
+  "next_required_capabilities",
   "next_continuation_policy",
   "next_target_key",
+  "next_user_todo",
   "next_user_task_class",
   "next_claimed_by",
 ] as const;
-const RAW_SHARED_STRING_FIELDS = ["reason_summary", "next_agent_todo", "next_user_todo"] as const;
 
 export type MonitorPhase = (typeof MONITOR_PHASES)[number];
 export type MonitorSource = (typeof MONITOR_SOURCES)[number];
@@ -255,23 +260,37 @@ export function successorReceipts(providerReceipt: JsonObject | null): JsonObjec
     : [];
 }
 
-function decodeSharedStrings(source: JsonObject, prefix: string): Record<string, string | null> {
-  const out: Record<string, string | null> = {};
-  for (const key of TRIMMED_SHARED_STRING_FIELDS) out[key] = optionalTrimmed(source[key], `${prefix}.${key}`);
-  for (const key of RAW_SHARED_STRING_FIELDS) out[key] = optionalString(source[key], `${prefix}.${key}`);
-  return out;
+function decodeSuccessorRouteFields(
+  source: JsonObject,
+  prefix: string,
+  trimCapabilities: boolean,
+): Record<string, unknown> {
+  const trim = (key: string): string | null => optionalTrimmed(source[key], `${prefix}.${key}`);
+  const raw = (key: string): string | null => optionalString(source[key], `${prefix}.${key}`);
+  const nextAgentTodo = raw("next_agent_todo");
+  const nextActionKind = trim("next_action_kind");
+  const nextTaskRepository = trim("next_task_repository");
+  const rawCapabilities = requireStringArray(
+    trimCapabilities ? (source.next_required_capabilities ?? []) : source.next_required_capabilities,
+    `${prefix}.next_required_capabilities`,
+  );
+  return {
+    next_agent_todo: nextAgentTodo,
+    next_action_kind: nextActionKind,
+    next_task_repository: nextTaskRepository,
+    next_required_capabilities: trimCapabilities
+      ? rawCapabilities.map((item) => item.trim()).filter(Boolean)
+      : rawCapabilities,
+    next_continuation_policy: trim("next_continuation_policy"),
+    next_target_key: trim("next_target_key"),
+    next_user_todo: raw("next_user_todo"),
+    next_user_task_class: trim("next_user_task_class"),
+    next_claimed_by: trim("next_claimed_by"),
+  };
 }
 
 export function sharedObservationValues(source: MonitorSharedObservationFields): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    todo_id: source.todo_id,
-    material_change: source.material_change,
-    next_required_capabilities: source.next_required_capabilities,
-  };
-  for (const key of [...TRIMMED_SHARED_STRING_FIELDS, ...RAW_SHARED_STRING_FIELDS]) {
-    out[key] = source[key];
-  }
-  return out;
+  return Object.fromEntries(SHARED_OBSERVATION_KEYS.map((key) => [key, source[key]]));
 }
 
 export function collapsedSummary(value: unknown, limit = 160): string {
@@ -393,6 +412,33 @@ export function decisionObject(value: unknown): MonitorDecision {
   };
 }
 
+export interface MonitorLaneFacts {
+  must_attempt_work: boolean;
+  obligation: string | null;
+  monitor_policy: string;
+  reason_codes: ReadonlySet<string>;
+  external_observation_required: boolean;
+  has_external_observation: boolean;
+}
+
+export function monitorLaneFacts(decision: MonitorDecision): MonitorLaneFacts {
+  const lane = decision.work_lane_contract;
+  const external = decision.external_evidence_observation;
+  const reasonCodes = new Set(
+    Array.isArray(lane.reason_codes)
+      ? lane.reason_codes.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+      : [],
+  );
+  return {
+    must_attempt_work: lane.must_attempt_work === true,
+    obligation: typeof lane.obligation === "string" ? lane.obligation : null,
+    monitor_policy: String(lane.monitor_policy ?? ""),
+    reason_codes: reasonCodes,
+    external_observation_required: external.required === true && external.must_attempt_observation === true,
+    has_external_observation: Object.keys(external).length > 0,
+  };
+}
+
 export function observationObject(value: unknown): MonitorObservation {
   const observation = requiredObject(value, "observation");
   const proof = decodeTaskLeaseProof(observation.lease_proof);
@@ -405,20 +451,21 @@ export function observationObject(value: unknown): MonitorObservation {
   if (materialChangeScope !== null && !materialChange) {
     throw new EffectRuntimeRequestError("material_change_scope requires material_change=true");
   }
-  const shared = decodeSharedStrings(observation, "observation");
+  const trim = (key: string): string | null => optionalTrimmed(observation[key], `observation.${key}`);
   const result = {
     ...observation,
-    ...shared,
-    actor_agent_id: optionalTrimmed(observation.actor_agent_id, "observation.actor_agent_id"),
+    actor_agent_id: trim("actor_agent_id"),
     settlement_todo_id: normalizedTodoId(observation.settlement_todo_id, "observation.settlement_todo_id"),
+    reason_summary: optionalString(observation.reason_summary, "observation.reason_summary"),
     todo_id: normalizedTodoId(observation.todo_id, "observation.todo_id"),
-    result_hash: optionalTrimmed(observation.result_hash, "observation.result_hash"),
+    target_key: trim("target_key"),
+    result_hash: trim("result_hash"),
     material_change: materialChange,
     ...(materialChangeScope === null ? {} : { material_change_scope: materialChangeScope }),
+    cadence: trim("cadence"),
+    next_due_at: trim("next_due_at"),
     ...monitorSuccessorPriorities(observation),
-    next_required_capabilities: requireStringArray(
-      observation.next_required_capabilities ?? [], "observation.next_required_capabilities",
-    ).map((item) => item.trim()).filter(Boolean),
+    ...decodeSuccessorRouteFields(observation, "observation", true),
   } as MonitorObservation;
   if (materialChange && !result.todo_id && !result.target_key) {
     throw new EffectRuntimeRequestError("`quota monitor-poll --material-change` requires --todo-id or --target-key");
@@ -506,6 +553,7 @@ export function providerPlanObject(value: unknown): MonitorProviderPlan {
   if ((plan.schema_version === LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA) !== (proof !== null)) {
     throw new EffectRuntimeRequestError("Monitor provider plan lease proof/schema mismatch");
   }
+  const trim = (key: string): string | null => optionalTrimmed(plan[key], `provider_plan.${key}`);
   return {
     schema_version: plan.schema_version,
     ...(plan.legacy_batch_version === 1 ? { legacy_batch_version: 1 } : {}),
@@ -518,15 +566,18 @@ export function providerPlanObject(value: unknown): MonitorProviderPlan {
     generated_at: requiredString(plan.generated_at, "provider_plan.generated_at"),
     execute: requireBoolean(plan.execute, "provider_plan.execute"),
     todo_id: normalizedTodoId(plan.todo_id, "provider_plan.todo_id"),
+    target_key: trim("target_key"),
     result_hash: requiredString(plan.result_hash, "provider_plan.result_hash").trim(),
     material_change: requireBoolean(plan.material_change, "provider_plan.material_change"),
     ...(Object.hasOwn(plan, "material_change_scope") ? {
-      material_change_scope: optionalTrimmed(plan.material_change_scope, "provider_plan.material_change_scope"),
+      material_change_scope: trim("material_change_scope"),
     } : {}),
-    ...decodeSharedStrings(plan, "provider_plan"),
+    cadence: trim("cadence"),
+    next_due_at: trim("next_due_at"),
+    reason_summary: optionalString(plan.reason_summary, "provider_plan.reason_summary"),
     ...monitorSuccessorPriorities(plan),
-    next_required_capabilities: requireStringArray(plan.next_required_capabilities, "provider_plan.next_required_capabilities"),
-    agent_id: optionalTrimmed(plan.agent_id, "provider_plan.agent_id"),
+    ...decodeSuccessorRouteFields(plan, "provider_plan", false),
+    agent_id: trim("agent_id"),
   } as MonitorProviderPlan;
 }
 
