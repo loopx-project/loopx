@@ -253,6 +253,7 @@ def register_quota_command(
     # immutable view after the model's lifecycle hooks establish continuity.
     quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
     quota_parser.add_argument("--prepared-capture-reference", action="store_true", help=argparse.SUPPRESS)
+    quota_parser.add_argument("--prepared-claim-operation-id", help=argparse.SUPPRESS)
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,

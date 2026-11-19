@@ -529,10 +529,21 @@ readback for the original claim receipt, current lease and any verified ready
 capture without repeating the claim or guard. A Hook response alone does not
 prove delivery. For this session the repeat hint is suppressed after a tool
 read is verified against the recorded ready capture.
-Follow the captured readiness check for the same Todo and Turn once the active
-lease matches. An authorized retry of the same bound capture reuses its
-managed claim operation, and the authority owner checks the original lease on
-replay. The native session keeps the latest eligible live guard digest
+If the hook has no recorded ready capture, its readback provides
+`readiness_command` and `ready_context_command_template`. Run the readiness
+command from the original workspace after the claim receipt and the active
+lease match in Goal, Todo, owner, key and version. The same-Turn guard stages a
+private capture separately from the active session journal. Require normal
+delivery, the same Goal, Agent, Todo and Turn, and a ready lease proof with the
+original key and version. Use the returned digest to fill the template from
+that receipt. After staging, the native publisher checks the original claim
+receipt and matching active lease under the same local writer lock used by
+lease release and replacement. It holds that lock through the journal
+commit. If the lease has retired, return the original receipt readback.
+The original capture remains readable through `quota context-read`.
+An authorized retry of the same bound capture reuses its managed claim
+operation, and the authority owner checks the original lease on replay.
+The native session keeps the latest eligible live guard digest
 separately from the capture. Presenting the exact saved decision preserves
 that binding. Older captures and copies with different bytes remain readable.
 Preserve any original claim receipt and use `quota should-run` with the same
@@ -550,8 +561,14 @@ reader. Quota still checks ownership and lease expiry before reporting readiness
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
 及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
-观察到针对原 ready capture 的已验证工具读取后，同会话才停止重复提示。活动租约匹配后，
-沿同一 Todo 与 Turn 完成就绪检查。对同一绑定 capture 的授权重试复用原受管领取操作，
+观察到针对原 ready capture 的已验证工具读取后，同会话才停止重复提示。Hook 尚未登记
+ready capture 时，回读会提供 `readiness_command` 和 `ready_context_command_template`。
+先核对原领取回执与活动租约的 Goal、Todo、归属、键和版本，再在原工作目录执行就绪命令。
+同轮检查会在活动会话日志以外生成私有 capture。确认允许正常交付、Goal、Agent、Todo
+及 Turn 一致，且就绪的租约凭证与原键和版本匹配后，用返回的摘要填入同一回执的模板，
+再读取校验通过的原生上下文。暂存完成后，发布端在租约释放和换代共用的本地写锁内核对
+原领取回执和当前活动租约，并持锁提交会话日志。租约已退役时提供原回执读回。
+原 capture 仍可通过 `quota context-read` 读取。对同一绑定 capture 的授权重试复用原受管领取操作，
 由权威 owner 验证原租约。原生会话独立保存最新合格准入的摘要，重新展示逐字节一致的
 快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
