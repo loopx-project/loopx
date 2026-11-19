@@ -22,7 +22,8 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
     source["goals"][0]["source_registry"] = str(args["registry_path"])
     (args["runtime_root"] / "registry.global.json").write_text(json.dumps(source))
     monkeypatch.setattr(ingress, "resolve_extension_activation", lambda *a, **k: {"enabled": True})
-    transport_state = {"fail_update": False, "readable": True, "member": True, "delay_chat_get_until": None}
+    transport_state = {"fail_update": False, "readable": True, "member": True, "delay_chat_get_until": None,
+        "fail_update_message_ids": ()}
 
     def runner(argv, cwd, timeout):
         payload = None
@@ -39,15 +40,17 @@ def offered(room_setup, monkeypatch):  # noqa: F811 - pytest fixture dependency
         elif "api" in argv and "GET" in argv:
             payload = {"data": {"items": room.messages if transport_state["readable"] else []}}
         elif "api" in argv and "POST" in argv:
-            if transport_state["fail_update"]:
-                return {"returncode": 1, "stdout": "", "stderr": "", "timed_out": True}
             data = json.loads(argv[argv.index("--data") + 1])
             mid = data["token"].removeprefix("callback:")
+            if transport_state["fail_update"] or mid in (transport_state.get("fail_update_message_ids") or ()):
+                return {"returncode": 1, "stdout": "", "stderr": "", "timed_out": True}
             target = next(m for m in room.messages if m["message_id"] == mid)
             target["body"]["content"] = json.dumps(data["card"])
             payload = {}
         elif "messages" in argv and "patch" in argv:
             mid = argv[argv.index("--message-id") + 1]
+            if mid in (transport_state.get("fail_update_message_ids") or ()):
+                return {"returncode": 1, "stdout": "", "stderr": "", "timed_out": True}
             data = json.loads(argv[argv.index("--data") + 1])
             next(m for m in room.messages if m["message_id"] == mid)["body"]["content"] = data["content"]
             payload = {}
@@ -486,12 +489,18 @@ def _offer_on(offer_args, todo_id, revision, key):
         principals=["lark:ou_room_owner"], expires_at="2030-01-01T00:00:00Z")
 
 
-def _add_second_todo(args):
+def _add_todo(args, text):
+    before = {todo["todo_id"] for todo in snapshot(args)["todos"]}
     proc = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
         "--format", "json", "todo", "add", "--goal-id", GOAL, "--role", "agent",
-        "--text", "Second independently claimable task"], cwd=ROOT, text=True, capture_output=True)
+        "--text", text], cwd=ROOT, text=True, capture_output=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    return next(todo["todo_id"] for todo in snapshot(args)["todos"] if todo["todo_id"] != TODO)
+    assert "PRIVATE_" not in proc.stdout
+    return next(iter({todo["todo_id"] for todo in snapshot(args)["todos"]} - before))
+
+
+def _add_second_todo(args):
+    return _add_todo(args, "Second independently claimable task")
 
 
 @pytest.mark.parametrize("limit", [1, 2])
@@ -540,3 +549,92 @@ def test_revoked_offer_cannot_starve_valid_receipt_recovery(offered, limit):
     assert snapshot(args)["provider_revision"] == committed
     assert ingress.recover_room_claim_results(**callback_args,
         allowed_chat_ids={"oc_room_fixture"}, limit=limit)["attempted"] == 0
+
+
+def test_persistent_dead_prefix_cannot_monopolize_recovery_budget(offered):
+    """Repro A: the front-sorted original message persistently fails to
+    update. The per-round transport budget must rotate so the still-valid
+    receipt behind the dead prefix gets its attempt, while the unresolved
+    record keeps its card and receipt evidence forever."""
+    args, room, _, offer_args, _, event, callback_args, transport = offered
+    second = _add_second_todo(args)
+    base = snapshot(args)["provider_revision"]
+    first_offer = _offer_on(offer_args, TODO, base, "room-dead-prefix-first")
+    transport["fail_update"] = True
+    first_pending = ingress.handle_room_claim_callback(event(first_offer), **callback_args)
+    assert first_pending["canonical_claim_accepted"] and not first_pending["ok"], first_pending
+    mid = snapshot(args)["provider_revision"]
+    second_offer = _offer_on(offer_args, second, mid, "room-dead-prefix-second")
+    second_pending = ingress.handle_room_claim_callback(event(second_offer), **callback_args)
+    assert second_pending["canonical_claim_accepted"] and not second_pending["ok"], second_pending
+    committed = snapshot(args)["provider_revision"]
+    files = {name: args["runtime_root"] / "room-claim-offers" / (result["request_id"] + ".json")
+             for name, result in (("first", first_offer), ("second", second_offer))}
+    dead_name, valid_name = sorted(files, key=lambda name: str(files[name]))
+    dead_file, valid_file = files[dead_name], files[valid_name]
+    dead_message_id = json.loads(dead_file.read_bytes())["delivery"]["message_id"]
+    valid_message_id = json.loads(valid_file.read_bytes())["delivery"]["message_id"]
+    valid_receipt_id = (first_pending if valid_name == "first" else second_pending)["receipt"]["receipt_id"]
+    # Transport works again except for the dead prefix message itself.
+    transport["fail_update"] = False
+    transport["fail_update_message_ids"] = (dead_message_id,)
+    round_one = ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"}, limit=1)
+    assert round_one == {"attempted": 1, "delivered": 0, "failed": 1}, round_one
+    # Rotation must move the next round past the dead prefix.
+    round_two = ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"}, limit=1)
+    assert round_two == {"attempted": 1, "delivered": 1, "failed": 0}, round_two
+    valid_message = next(m for m in room.messages if m["message_id"] == valid_message_id)
+    assert valid_receipt_id in valid_message["body"]["content"], valid_message["body"]["content"]
+    dead_record = json.loads(dead_file.read_bytes())
+    assert dead_record["result_delivery_verified"] is False and dead_record["last_result_card"]
+    assert snapshot(args)["provider_revision"] == committed
+    # The dead record is retried periodically, never finalized by failure.
+    round_three = ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"}, limit=1)
+    assert round_three == {"attempted": 1, "delivered": 0, "failed": 1}, round_three
+    assert json.loads(dead_file.read_bytes())["result_delivery_verified"] is False
+    assert snapshot(args)["provider_revision"] == committed
+
+
+def test_default_budget_rotation_reaches_the_tail_record(offered):
+    """Repro B: 21 committed claims, the first 20 card updates persistently
+    fail. Under the default limit of 20 the tail record must still receive its
+    transport attempt on the next recovery round, and the failing records
+    keep their evidence."""
+    args, room, _, offer_args, _, event, callback_args, transport = offered
+    todos = [TODO]
+    for index in range(20):
+        todos.append(_add_todo(args, f"Tail-reach task {index}"))
+    transport["fail_update"] = True
+    pendings = {}
+    revision = snapshot(args)["provider_revision"]
+    for index, todo_id in enumerate(todos):
+        prepared = _offer_on(offer_args, todo_id, revision, f"room-tail-{index:02d}")
+        pending = ingress.handle_room_claim_callback(event(prepared), **callback_args)
+        assert pending["canonical_claim_accepted"] and not pending["ok"], pending
+        pendings[prepared["request_id"]] = pending
+        revision = snapshot(args)["provider_revision"]
+    committed = revision
+    files = sorted(args["runtime_root"].glob("room-claim-offers/rc_*.json"))
+    assert len(files) == 21
+    dead, tail = files[:20], files[20]
+    tail_id = tail.stem
+    tail_message_id = json.loads(tail.read_bytes())["delivery"]["message_id"]
+    tail_receipt_id = pendings[tail_id]["receipt"]["receipt_id"]
+    transport["fail_update"] = False
+    transport["fail_update_message_ids"] = tuple(
+        json.loads(f.read_bytes())["delivery"]["message_id"] for f in dead)
+    round_one = ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"})
+    assert round_one == {"attempted": 20, "delivered": 0, "failed": 20}, round_one
+    round_two = ingress.recover_room_claim_results(**callback_args,
+        allowed_chat_ids={"oc_room_fixture"})
+    assert round_two == {"attempted": 20, "delivered": 1, "failed": 19}, round_two
+    tail_message = next(m for m in room.messages if m["message_id"] == tail_message_id)
+    assert tail_receipt_id in tail_message["body"]["content"], tail_message["body"]["content"]
+    for f in dead:
+        record = json.loads(f.read_bytes())
+        assert record["result_delivery_verified"] is False and record["last_result_card"]
+    assert snapshot(args)["provider_revision"] == committed

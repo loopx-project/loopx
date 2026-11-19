@@ -313,8 +313,29 @@ def recover_room_claim_results(*, runtime_root: Path, profile_app_id: str, allow
     cli_bin: str, profile: str, runner: CommandRunner = default_subprocess_runner, limit: int = 20) -> dict[str, int]:
     """Retry only recorded public result-card transport, never a work transition."""
     stats = {"attempted": 0, "delivered": 0, "failed": 0}
-    for path in sorted((runtime_root / "room-claim-offers").glob("rc_*.json")):
-        if stats["attempted"] >= min(max(limit, 1), 100):
+    cap = min(max(limit, 1), 100)
+    paths = sorted((runtime_root / "room-claim-offers").glob("rc_*.json"))
+    # Rotate the fixed scan order: a round starts after the last record that
+    # spent a transport slot in the previous round. A persistently failing
+    # prefix then cannot monopolize the per-round budget — every eligible
+    # record is reached within ceil(pending / limit) rounds. Unresolved
+    # failures are never terminal: their record, card and receipt evidence
+    # stay untouched, and only a verified delivery exits the retry queue.
+    # The cursor is an ordering hint; losing it only repeats this order.
+    cursor_path = runtime_root / "room-claim-offers" / ".recovery-cursor.json"
+    start_index = 0
+    try:
+        cursor = json.loads(cursor_path.read_text(encoding="utf-8"))
+        after = cursor.get("after") if isinstance(cursor, dict) else None
+        if isinstance(after, str):
+            start_index = sum(1 for existing in paths if existing.name <= after)
+        if start_index >= len(paths):
+            start_index = 0
+    except Exception:
+        start_index = 0
+    last_attempted_name: str | None = None
+    for path in paths[start_index:] + paths[:start_index]:
+        if stats["attempted"] >= cap:
             break
         try:
             p = _read(path)
@@ -341,6 +362,7 @@ def recover_room_claim_results(*, runtime_root: Path, profile_app_id: str, allow
                 # A slot is spent only on an actual transport attempt after
                 # every eligibility recheck passed under the record lock.
                 stats["attempted"] += 1
+                last_attempted_name = path.name
                 result = patch_result_card(runner=runner, cli_bin=cli_bin, profile=profile,
                     card=p["last_result_card"], message_id=d["message_id"], chat_id=d["chat_id"], app_id=profile_app_id)
                 p["result_delivery_verified"] = result.get("readback_verified") is True
@@ -348,4 +370,10 @@ def recover_room_claim_results(*, runtime_root: Path, profile_app_id: str, allow
                 stats["delivered" if p["result_delivery_verified"] else "failed"] += 1
         except Exception:
             stats["failed"] += 1
+    if last_attempted_name is not None:
+        try:
+            write_private_json_atomic(cursor_path,
+                {"after": last_attempted_name, "updated_at": _now()})
+        except Exception:
+            pass  # The next round simply repeats this order.
     return stats

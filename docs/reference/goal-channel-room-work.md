@@ -198,7 +198,13 @@ message and never executes another canonical claim. The current binding and
 offer scope still govern recovery. Permanently ineligible records — revoked,
 expired or already delivered — are rechecked under the record lock and never
 consume a recovery delivery slot, so a dead prefix in the fixed scan order
-cannot starve the still-valid receipts queued behind it.
+cannot starve the still-valid receipts queued behind it. The per-round
+transport budget also rotates across that order: each round starts after the
+last record that spent a slot in the previous round, so a persistently
+failing prefix cannot monopolize recovery and every eligible record is
+reached within a bounded number of rounds. An unresolved transport failure
+is never terminal — its record, card and receipt evidence are preserved and
+retried on later rounds; only a verified delivery readback exits the queue.
 
 Validation uses synthetic Lark transport and real disposable File/SQLite
 providers, including source CLI preview and the production collector dispatch
@@ -337,6 +343,9 @@ canonical 领取提交后，原卡上的回执号直接由不可变接受事实�
 不会把它替换成无回执的摘要卡；未确认接受时保留诚实的未确认提示，不伪造回执号。
 已提供单次授权的 IM 领取按钮、显式撤销和结果卡片恢复；默认不启用 collector。
 恢复在记录锁内复核资格，已撤销、已过期或已送达的记录不消耗投递名额，固定扫描
-顺序中的失效前缀不会饿死排在后面的有效回执。
+顺序中的失效前缀不会饿死排在后面的有效回执。每轮投递预算还在该顺序上轮转：新一轮
+从上一轮最后一个消耗名额的记录之后开始，持续失败的前缀无法垄断恢复，每条有资格的
+记录都会在有限轮次内被轮到。传输失败不是终态——记录、卡片与回执证据全部保留并在
+后续轮次重试，只有经读回确认的投递才退出队列。
 真实房间、多主机、daemon reconnect、授权 artifact 引用和 OpenViking 只读检索仍待联调。
 合成 Lark transport 加真实隔离权威的测试不能宣称三方 RFC 已完成。
