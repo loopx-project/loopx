@@ -147,6 +147,7 @@ def archive_runtime_goal(
     _validate_archive_destination(source, destination)
 
     closeout: dict[str, Any] | None = None
+    closeout_request: dict[str, Any] | None = None
     if execute:
         from .control_plane.coordination.shadow_management import (
             runtime_artifact_lock_target,
@@ -246,31 +247,35 @@ def archive_runtime_goal(
             _validate_archive_destination(source, destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
-            from .lifecycle.goal_closeout import run_goal_closeout
-
             archived_state_file = destination / "ACTIVE_GOAL_STATE.md"
             declared_state_file = (
                 archive_goal.get("state_file") if archive_goal else None
             )
-            closeout = run_goal_closeout(
-                runtime_root=runtime_root,
-                goal_id=safe_goal_id,
-                repo=(
+            # Resolve the hook facts under the snapshot, but run the operator
+            # command only after every canonical lock is released.
+            closeout_request = {
+                "runtime_root": runtime_root,
+                "goal_id": safe_goal_id,
+                "repo": (
                     str(archive_goal.get("repo"))
                     if archive_goal and archive_goal.get("repo")
                     else None
                 ),
-                state_file=(
+                "state_file": (
                     str(archived_state_file)
                     if archived_state_file.exists()
                     else str(declared_state_file)
                     if declared_state_file
                     else None
                 ),
-                terminal_reason="archived",
-                trigger="archive-runtime",
-                ledger_dir=destination,
-            )
+                "terminal_reason": "archived",
+                "trigger": "archive-runtime",
+                "ledger_dir": destination,
+            }
+    if closeout_request is not None:
+        from .lifecycle.goal_closeout import run_goal_closeout
+
+        closeout = run_goal_closeout(**closeout_request)
 
     return {
         "ok": True,

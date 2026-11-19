@@ -55,6 +55,76 @@ def _configure_closeout(root: Path, payload_path: Path) -> None:
     )
     assert payload["ok"], payload
 
+_LOCK_PROBE = r"""
+import pathlib
+import sys
+
+repo_root, runtime_root, goal_id, registry_path, output_path = sys.argv[1:6]
+sys.path.insert(0, repo_root)
+
+from loopx.control_plane.coordination.shadow_management import (
+    runtime_artifact_lock_target,
+)
+from loopx.file_lock import exclusive_cross_runtime_file_lock
+
+
+def probe(target):
+    try:
+        with exclusive_cross_runtime_file_lock(target, timeout_seconds=0):
+            return "FREE"
+    except Exception:
+        return "HELD"
+
+
+lines = [
+    probe(runtime_artifact_lock_target(pathlib.Path(runtime_root), goal_id)),
+    probe(pathlib.Path(registry_path)),
+]
+pathlib.Path(output_path).write_text("\n".join(lines), encoding="utf-8")
+"""
+
+
+def _configure_lock_probe_closeout(
+    root: Path,
+    *,
+    output_path: Path,
+    goal_id: str,
+    registry_path: Path,
+) -> None:
+    configuration = {
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {
+            "goal_closeout": {
+                "schema_version": GOAL_CLOSEOUT_CONFIGURATION_SCHEMA,
+                "command": [
+                    sys.executable,
+                    "-c",
+                    _LOCK_PROBE,
+                    str(Path(__file__).resolve().parents[2]),
+                    str(root),
+                    goal_id,
+                    str(registry_path),
+                    str(output_path),
+                ],
+                "timeout_seconds": 10,
+            }
+        },
+    }
+    registry = build_builtin_machine_configuration_registry()
+    preview = configure_machine_configuration(
+        runtime_root=root,
+        configuration=configuration,
+        registry=registry,
+    )
+    payload = configure_machine_configuration(
+        runtime_root=root,
+        configuration=configuration,
+        registry=registry,
+        execute=True,
+        expected_plan_revision=preview["plan_revision"],
+    )
+    assert payload["ok"], payload
+
 
 def _ledger(root: Path, goal_id: str) -> list[dict[str, object]]:
     path = root / "goals" / goal_id / GOAL_CLOSEOUT_LEDGER_FILENAME
@@ -215,3 +285,46 @@ def test_archive_runs_closeout_after_move_without_recreating_source(tmp_path: Pa
     assert payload["goal_id"] == "archived-goal"
     assert payload["terminal_reason"] == "archived"
     assert payload["state_file"] == str(archive_path / "ACTIVE_GOAL_STATE.md")
+
+
+def test_archive_runs_closeout_after_canonical_locks_are_released(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    registry_path = project / ".loopx" / "registry.json"
+    runtime_root = project / ".loopx" / "runtime"
+    source = runtime_root / "goals" / "locked-goal"
+    source.mkdir(parents=True)
+    (source / "ACTIVE_GOAL_STATE.md").write_text("state\n", encoding="utf-8")
+    _write_json(
+        registry_path,
+        {
+            "schema_version": 1,
+            "common_runtime_root": ".loopx/runtime",
+            "goals": [
+                {
+                    "id": "locked-goal",
+                    "display_name": "Archive lock fixture",
+                    "repo": str(project),
+                    "state_file": ".loopx/runtime/goals/locked-goal/ACTIVE_GOAL_STATE.md",
+                }
+            ],
+        },
+    )
+    probe_path = tmp_path / "lock-probe.txt"
+    _configure_lock_probe_closeout(
+        runtime_root,
+        output_path=probe_path,
+        goal_id="locked-goal",
+        registry_path=registry_path,
+    )
+
+    result = archive_runtime_goal(
+        registry_path=registry_path,
+        runtime_root_override=None,
+        goal_id="locked-goal",
+        archive_root=None,
+        allow_registered=True,
+        execute=True,
+    )
+    assert result["ok"] is True, result
+    assert result["closeout"]["status"] == "success", result
+    assert probe_path.read_text(encoding="utf-8").splitlines() == ["FREE", "FREE"]
