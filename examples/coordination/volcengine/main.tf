@@ -10,7 +10,7 @@ terraform {
   required_providers {
     volcengine = {
       source  = "volcengine/volcengine"
-      version = "~> 0.1.20"
+      version = ">= 0.0.186, < 0.1.0"
     }
   }
 }
@@ -24,7 +24,13 @@ variable "region" {
 variable "availability_zone" {
   type        = string
   default     = "cn-beijing-a"
-  description = "Volcengine availability zone"
+  description = "Primary Volcengine availability zone"
+}
+
+variable "secondary_availability_zone" {
+  type        = string
+  default     = ""
+  description = "Secondary Volcengine availability zone for RDS PostgreSQL (defaults to availability_zone)"
 }
 
 variable "vpc_cidr" {
@@ -39,16 +45,20 @@ variable "subnet_cidr" {
   description = "Subnet CIDR block for coordination services"
 }
 
-variable "db_instance_type" {
+variable "db_node_spec" {
   type        = string
-  default     = "rds.pg.s1.small"
-  description = "RDS for PostgreSQL 16 instance specification (1C 2GB)"
+  default     = "rds.postgres.1c2g"
+  description = "RDS for PostgreSQL 16 node specification (1C 2GB)"
 }
 
 variable "db_storage_gb" {
   type        = number
   default     = 20
-  description = "Allocated storage size in GB"
+  description = "Allocated storage size in GB (range [20, 3000], step 10)"
+  validation {
+    condition     = var.db_storage_gb >= 20 && var.db_storage_gb <= 3000 && var.db_storage_gb % 10 == 0
+    error_message = "db_storage_gb must be between 20 and 3000 GB in steps of 10."
+  }
 }
 
 variable "operator_allowlist_ips" {
@@ -122,16 +132,19 @@ resource "volcengine_security_group_rule" "rds_ingress_from_gateway" {
 resource "volcengine_rds_postgresql_instance" "coordination_db" {
   db_engine_version = "PostgreSQL_16"
   instance_name     = "loopx-coordination-rds-pg16"
-  instance_type     = var.db_instance_type
+  node_spec         = var.db_node_spec
+  primary_zone_id   = var.availability_zone
+  secondary_zone_id = var.secondary_availability_zone != "" ? var.secondary_availability_zone : var.availability_zone
   storage_space     = var.db_storage_gb
-  storage_type      = "LocalSSD"
-  vpc_id            = volcengine_vpc.coordination_vpc.id
   subnet_id         = volcengine_subnet.coordination_subnet.id
-  charge_type       = "PostPaid" # Pay-as-you-go
+
+  charge_info {
+    charge_type = "PostPaid" # Pay-as-you-go
+  }
 
   lifecycle {
     prevent_destroy = true
-    ignore_changes  = [charge_type]
+    ignore_changes  = [charge_info]
   }
 }
 
@@ -145,7 +158,12 @@ output "subnet_id" {
   description = "Coordination Subnet ID"
 }
 
+output "rds_endpoints" {
+  value       = volcengine_rds_postgresql_instance.coordination_db.endpoints
+  description = "PostgreSQL endpoint records exported by the Volcengine RDS instance"
+}
+
 output "rds_endpoint" {
-  value       = volcengine_rds_postgresql_instance.coordination_db.endpoint
-  description = "Internal PostgreSQL endpoint for RemoteAuthorityService connection"
+  value       = try(volcengine_rds_postgresql_instance.coordination_db.endpoints[0].address[0].domain, "")
+  description = "Primary internal PostgreSQL domain endpoint for RemoteAuthorityService connection"
 }

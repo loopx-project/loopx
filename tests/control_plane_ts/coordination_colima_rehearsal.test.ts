@@ -71,6 +71,14 @@ function assertAllRehearsalSteps(
   assert.equal(step6.detail.previous_lease_epoch, 1);
   assert.equal(step6.detail.new_lease_epoch, 2);
   assert.equal(step6.detail.stale_actor_fenced, true);
+  // Prove takeover is driven from observed expires_at via controlled service clock rather than wall-clock sleep.
+  const observedExpiresMs = Date.parse(String(step3.detail.expires_at));
+  const advancedClockMs = Date.parse(String(step6.detail.advanced_service_clock));
+  assert.ok(Number.isFinite(observedExpiresMs));
+  assert.ok(Number.isFinite(advancedClockMs));
+  assert.ok(observedExpiresMs - Date.now() > 60_000, "canonical lease expires ~2700s in the future");
+  assert.equal(step6.detail.observed_expires_at, step3.detail.expires_at);
+  assert.equal(advancedClockMs, observedExpiresMs + 1_000);
 
   // Step 7: Actor B task completion + historical recovery readback
   const step7 = stepsByName.get("actor_b_task_completion");

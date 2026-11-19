@@ -128,15 +128,43 @@ def test_volcengine_deployment_artifacts() -> None:
     assert "operator.local" in doc_content
     assert "worker.cloud" in doc_content
 
+    # Verify public-boundary neutrality: no machine-specific or pre-existing local credential files
+    for forbidden in (
+        "operations-ark-video.json",
+        "复用本机",
+        "macOS Apple Silicon dev",
+        "gateway.loopx.bj.volces.com",
+    ):
+        assert forbidden not in doc_content, f"Non-public local assumption {forbidden!r} in deployment doc"
+    assert "EnvironmentFile" in doc_content or "环境变量" in doc_content
+    assert "LOOPX_AUTHORITY_CREDENTIAL" in doc_content
+    assert "ARK_API_KEY" in doc_content
+
     volc_dir = REPO_ROOT / "examples" / "coordination" / "volcengine"
     assert volc_dir.is_dir()
 
-    # Terraform template
+    # Terraform template: check valid published provider series (< 0.1.0) and real resource fields
     tf_path = volc_dir / "main.tf"
     assert tf_path.exists()
     tf_content = tf_path.read_text(encoding="utf-8")
     assert 'variable "region"' in tf_content
+    assert 'source  = "volcengine/volcengine"' in tf_content
+    assert "~> 0.1.20" not in tf_content
+    assert ">= 0.0.186, < 0.1.0" in tf_content
     assert "volcengine_rds_postgresql_instance" in tf_content
+    assert "node_spec" in tf_content
+    assert "primary_zone_id" in tf_content
+    assert "secondary_zone_id" in tf_content
+    assert "charge_info" in tf_content
+    assert ".endpoints" in tf_content
+    # Guardrail: computed-only or non-schema root attributes must not appear as instance arguments
+    rds_block = tf_content.split('resource "volcengine_rds_postgresql_instance"')[1].split("output ")[0]
+    for invalid_arg in ("instance_type ", "storage_type ", "vpc_id ", "charge_type ="):
+        # charge_type inside charge_info block is valid, so check root-level indentation (2 spaces)
+        if invalid_arg == "charge_type =":
+            assert "\n  charge_type " not in rds_block
+        else:
+            assert f"\n  {invalid_arg}" not in rds_block
     assert "prevent_destroy = true" in tf_content
 
     # Caddyfile
@@ -150,6 +178,8 @@ def test_volcengine_deployment_artifacts() -> None:
     assert svc_path.exists()
     svc_content = svc_path.read_text(encoding="utf-8")
     assert "DynamicUser=yes" in svc_content
+    assert "EnvironmentFile=/etc/loopx/authority.env" in svc_content
+    assert "REPLACE_WITH_RESTRICTED_APP_PASSWORD" not in svc_content
     assert "remote-authority-service.ts" in svc_content
 
     # Least privilege IAM policy
