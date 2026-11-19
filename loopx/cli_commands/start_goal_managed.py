@@ -34,16 +34,25 @@ def _first_turn_args(
         or args.available_capabilities or args.capability_route or args.fine_grained
         or args.include_command_pack_detail or args.slash_command_arguments is not None
     ):
-        raise ValueError("start-goal --execute takes a local --goal-text and a configured adapter and validator")
-    if not args.host_adapter_command_json or not args.validation_command_json:
-        raise ValueError("start-goal --execute requires --host-adapter-command-json and --validation-command-json")
+        raise ValueError("start-goal --execute takes a local --goal-text and an independent check")
+    host = args.execution_host or "generic-cli"
+    if not args.validation_command_json:
+        raise ValueError("start-goal --execute requires --validation-command-json")
+    host_args = []
+    if host == "generic-cli":
+        if not args.host_adapter_command_json:
+            raise ValueError("Select --host codex-cli or supply --host-adapter-command-json for a generic adapter.")
+        host_args = [
+            "--host-adapter-request-schema", COMPLETE_TURN_HOST_REQUEST_SCHEMA,
+            "--host-adapter-command-json", args.host_adapter_command_json,
+        ]
+    elif args.host_adapter_command_json is not None:
+        raise ValueError("An adapter command requires --host generic-cli.")
     parser = argparse.ArgumentParser(prog="loopx", add_help=False)
     register_turn_commands(parser.add_subparsers(dest="command"), add_subcommand_format)
     return parser.parse_args([
         "turn", "run-once", "--goal-id", goal_id, "--agent-id", agent_id,
-        "--project", str(project), "--host", "generic-cli",
-        "--host-adapter-request-schema", COMPLETE_TURN_HOST_REQUEST_SCHEMA,
-        "--host-adapter-command-json", args.host_adapter_command_json,
+        "--project", str(project), "--host", host, *host_args,
         "--validation-command-json", args.validation_command_json, "--no-global-sync", "--execute",
     ])
 
@@ -116,12 +125,13 @@ def execute_managed_start(
         turn_args, native_host_runner=None, native_session_binding_resolver=None,
         native_task_validator=None, validator_builder=build_loopx_turn_command_validator,
     )
-    assert host_argv is not None
-    host_argv = normalize_host_argv(host_argv)
+    host_argv = normalize_host_argv(host_argv) if host_argv is not None else None
     validator_argv = json.loads(args.validation_command_json)
     registry = read_json_if_exists(registry_path)
     if not registry:
-        if not _first_task_executable_available(host_argv[0], project):
+        if host_argv is None and shutil.which(turn_args.codex_bin) is None:
+            raise ValueError("The Codex CLI executable is unavailable. Put codex on PATH and retry.")
+        if host_argv is not None and not _first_task_executable_available(host_argv[0], project):
             raise ValueError("The task runner executable is unavailable. Check --host-adapter-command-json and retry.")
         if not _first_task_executable_available(validator_argv[0], project):
             raise ValueError("The independent checker executable is unavailable. Check --validation-command-json and retry.")
@@ -130,10 +140,14 @@ def execute_managed_start(
         runtime_root_arg, registry_path=registry_path,
     ).resolve()
     display_name = args.display_name or derive_goal_display_name(objective)
+    launch_identity = (
+        {"adapter": host_argv} if host_argv is not None
+        else {"host": turn_args.host, "binary": turn_args.codex_bin, "sandbox": turn_args.codex_sandbox}
+    )
     digest = canonical_digest({
         "project": str(project), "runtime_root": str(runtime_root),
         "goal_id": goal_id, "agent_id": agent_id, "goal": objective, "title": display_name,
-        "adapter": host_argv, "validator": validator_argv,
+        **launch_identity, "validator": validator_argv,
     })
     operation_id = "start-" + digest.removeprefix("sha256:")[:32]
     _register_first_goal(

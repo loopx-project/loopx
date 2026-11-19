@@ -16,19 +16,29 @@ uv pip install --python /tmp/loopx-core-env/bin/python /tmp/loopx-core-dist/loop
 /tmp/loopx-core-env/bin/loopx doctor --installation-only --deep --format json
 ```
 
-For a fresh local project with an approved v1 CLI adapter and independent
-checker, start the first task from the goal text in one invocation.
+For a fresh project with Codex CLI on PATH and an approved independent check,
+start a read-only task from the goal text. The existing Codex installation
+supplies the model and login.
+
+```sh
+loopx start-goal --execute --host codex-cli --project . \
+  --goal-text "Read the inventory and check the total." \
+  --validation-command-json '["./check-inventory"]'
+```
+
+Use an existing project check that independently verifies the result. A
+configured generic CLI caller can still supply its approved v1 adapter.
 
 ```sh
 loopx start-goal --execute --project . --goal-text "Create and check an inventory report." \
   --host-adapter-command-json "$adapter_argv" --validation-command-json "$validator_argv"
 ```
 
-The configured caller supplies the two JSON argv arrays. Core registers the
-local Goal and worker, creates one task, then runs the existing checked Turn.
-Core checks executable availability before the first registration on POSIX
-and checks absolute executable paths on Windows. Correct an unavailable
-program in the launch configuration and repeat the same goal.
+Core registers the local Goal and worker, creates one task, then runs the
+existing checked Turn. It checks for the selected Codex binary and checks the
+configured command paths before the first registration on POSIX. For generic
+adapter and check commands on Windows it checks absolute paths. Correct an
+unavailable program in the launch configuration and repeat the same goal.
 Repeat the original invocation after an interruption, including during
 registration. It continues the saved attempt or returns the checked result.
 The `--guided` route remains available for an existing project or an interactive

@@ -178,10 +178,10 @@ def add_capability_route_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
+def register_start_goal_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     start_goal_parser = subparsers.add_parser(
         "start-goal",
-        help="Preview a guided goal or execute its first checked task with a configured local adapter.",
+        help="Preview a guided goal or execute its first checked task locally.",
     )
     start_mode = start_goal_parser.add_mutually_exclusive_group()
     start_mode.add_argument(
@@ -192,7 +192,13 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
     start_mode.add_argument(
         "--execute",
         action="store_true",
-        help="Start one checked task in a fresh local project using the supplied adapter and validator.",
+        help="Start one checked task in a fresh local project with an independent check.",
+    )
+    start_goal_parser.add_argument(
+        "--host",
+        dest="execution_host",
+        choices=("codex-cli", "generic-cli"),
+        help="Executor for --execute. Select codex-cli to use the installed Codex CLI.",
     )
     start_goal_parser.add_argument(
         "--host-adapter-command-json",
@@ -390,8 +396,10 @@ def handle_start_goal_command(
             return 1
         print_payload(payload, args.format, render_managed_start_markdown)
         return 0 if payload["ok"] else 1
-    if getattr(args, "host_adapter_command_json", None) is not None or getattr(args, "validation_command_json", None) is not None:
-        print_payload({"ok": False, "error": "Adapter and validator commands require start-goal --execute."},
+    if any(getattr(args, name, None) is not None for name in (
+        "execution_host", "host_adapter_command_json", "validation_command_json",
+    )):
+        print_payload({"ok": False, "error": "Host and check options require start-goal --execute."},
                       args.format, _render_start_goal_markdown)
         return 2
     if not bool(getattr(args, "guided", False)):

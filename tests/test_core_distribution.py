@@ -775,6 +775,96 @@ def test_installed_core_starts_one_checked_task_from_goal_text(core_python, tmp_
     assert spends.read_text().count("quota_slot_spent") == 1
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_installed_core_starts_and_replays_a_checked_codex_goal(core_python, tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime = tmp_path / "inventory", tmp_path / "runtime"
+    project.mkdir()
+    (project / "inventory.json").write_text("[2, 6, 11]", encoding="utf-8")
+    _configure_first_goal_storage(core_python, project, runtime, provider)
+    objective = "Read the inventory and independently check the total."
+    check = """import json,pathlib,sys
+record = json.load(sys.stdin)
+expected = sum(json.loads(pathlib.Path('inventory.json').read_text()))
+assert record['summary'] == f'Inventory total: {expected}'
+assert record['result_kind'] == 'validated_completion'
+"""
+    command = ["--runtime-root", str(runtime), "--format", "json", "start-goal", "--execute",
+        "--host", "codex-cli", "--project", str(project), "--goal-text", objective,
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", check])]
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    node = shutil.which("node")
+    assert node is not None
+    fake, log = _fake_codex(tmp_path)
+    environment = {
+        "PATH": os.pathsep.join([str(binaries), str(Path(core_python).parent), str(Path(node).parent), os.defpath]),
+        "CODEX_HOME": str(home),
+        "FAKE_CODEX_LOG": str(log),
+    }
+    missing = json.loads(_run(core_python, command, tmp_path, environment=environment, expected=1).stdout)
+    assert "Codex CLI executable is unavailable" in missing["error"]
+    assert not (project / ".loopx").exists() and not log.exists()
+
+    source = fake if os.name != "nt" else fake.with_suffix(".py")
+    executable = write_python_host_fixture(binaries / "codex", source.read_text(encoding="utf-8").replace(
+        "result.update(json.loads(os.environ.get(\"FAKE_CODEX_RESULT_FIELDS\", \"{}\")))",
+        f"assert {objective!r} in prompt\n"
+        "assert args[args.index('--sandbox') + 1] == 'read-only'\n"
+        "total = sum(json.loads(pathlib.Path('inventory.json').read_text()))\n"
+        "result.update(result_kind='validated_completion', summary=f'Inventory total: {total}', "
+        "work_evidence=['artifact:inventory.json'], validation_evidence=['check:inventory-total'])",
+    ))
+    # Stop after the native result is durable and before the independent check.
+    interrupted = os.name == "posix"
+    if interrupted:
+        command_with_fault = _command(core_python, command)
+        command_with_fault[3] = """import os, signal
+from loopx.control_plane.turn_driver import command_validation
+def interrupt_validator(*args, **kwargs):
+    return lambda *_: os.kill(os.getpid(), signal.SIGKILL)
+command_validation.build_loopx_turn_command_validator = interrupt_validator
+""" + command_with_fault[3]
+        stopped = subprocess.run(command_with_fault, cwd=tmp_path, env=_environment(core_python, environment),
+            capture_output=True, text=True, timeout=90)
+        assert stopped.returncode == -signal.SIGKILL, (stopped.stdout, stopped.stderr)
+        (journal,) = [path for path in (runtime / "goals/inventory-goal/turns").glob("*.json")
+                      if not path.name.endswith(".lock.holder.json")]
+        recorded = json.loads(journal.read_text())
+        assert recorded["host_result"]["summary"] == "Inventory total: 19"
+        assert "typed_result" in recorded["completed_phases"]
+        executable.unlink()
+
+    first = json.loads(_run(core_python, command, tmp_path, environment=environment).stdout)
+    assert first["status"] == "committed" and first["validation"]["status"] == "passed"
+    assert first["result_kind"] == "validated_completion"
+    assert first["effects"]["host_invoked"] is (not interrupted)
+    assert first["effects"]["quota_spent"]
+    registry = project / ".loopx/registry.json"
+    registry_bytes = registry.read_bytes()
+    receipt = json.loads(_run(core_python, ["--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "todo", "list", "--goal-id", first["goal_id"], "--todo-id", first["todo_id"]],
+        project, environment=environment).stdout)
+    assert receipt["todo"]["status"] == "done"
+    executable.unlink(missing_ok=True)
+    replay = json.loads(_run(core_python, command, tmp_path, environment=environment).stdout)
+    assert replay["replayed"] and replay["resume_turn_key"] == first["resume_turn_key"]
+    assert replay["todo_id"] == first["todo_id"] and not any(replay["effects"].values())
+    different = list(command)
+    different[different.index("--host") + 1] = "generic-cli"
+    different += ["--host-adapter-command-json", json.dumps([core_python])]
+    denied = json.loads(_run(core_python, different, tmp_path, environment=environment, expected=1).stdout)
+    assert "already connected" in denied["error"] and registry.read_bytes() == registry_bytes
+    assert len(log.read_text().splitlines()) == 1
+    assert (runtime / "goals" / first["goal_id"] / "runs/index.jsonl").read_text().count("quota_slot_spent") == 1
+
+
 @pytest.mark.parametrize("invalid", ["missing-validator", "invalid-adapter", "owned-goal"])
 def test_installed_core_start_goal_preflights_before_creation(core_python, tmp_path, invalid):
     arguments = ["--format", "json", "start-goal", "--project", str(tmp_path),

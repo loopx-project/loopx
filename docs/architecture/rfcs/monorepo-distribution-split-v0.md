@@ -330,18 +330,23 @@ existing qualification boundary. It is process supervision, not a sandbox;
 operator-selected tools retain only their already authorized effects.
 
 A configured local caller can use `start-goal --execute` to submit one goal
-sentence and run the first checked task in a fresh project. The approved
-adapter and independent validator are caller inputs. The first registration
-checks the program paths using the task working directory on POSIX and
-checks explicitly absolute paths on Windows. An unavailable program is
+sentence and run the first checked task in a fresh project. Selecting
+`--host codex-cli` uses the installed Codex CLI and existing read-only native
+profile. The generic route accepts its approved adapter. Both routes require
+the caller's independent check and recover through the original executor.
+Before first registration the native route looks for Codex on PATH. Adapter
+and check commands resolve from the task directory on POSIX and are checked
+for explicitly absolute paths on Windows. An unavailable program is
 reported before creating local Goal state or dispatching work, so the caller
 can correct the launch configuration and retry. The entry uses the existing
 Goal, Todo, lease and Turn owners and defaults to project-local runtime state.
 Registration records the original operation and storage target before the
 initial source is written. The identical request can supply a missing initial
 source when the authority owner still needs it, and can recover the original
-task and Turn. Settled work returns the recorded result even if the original
-executables have been removed. The ordinary guided
+task and Turn. The native operation records its selected host in the request
+identity. An existing generic operation retains its original identity.
+Settled work returns the recorded result even if the original executables
+have been removed. The ordinary guided
 entry continues to handle interactive hosts and connected projects.
 
 ### Responsibility and installation acceptance
