@@ -829,13 +829,15 @@ def test_shared_independent_login_keeps_both_model_families(
     repeat = _github_model_review(12, login=login, family=first_family, state=state)
     comment = _github_model_review(13, login=login, family=first_family)
     comment["body"] = str(comment["body"]).splitlines()[0] + "\n\nOne follow-up question."
+    unattributed = _github_model_review(14, login=login, family="unknown")
+    unattributed["body"] = str(unattributed["body"]).split("\n\n", 1)[1]
 
     missing = "gemini" if second_family == "Gemini" else "gpt"
     one_family = _github_model_pr([*prior_reviews, first], reviewDecision="APPROVED")
     assert _model_queue_row(one_family, family=missing)["review_action_kind"] == (
         "rereview_pull_request_exact_head"
     )
-    for later in ([], [repeat], [repeat, comment]):
+    for later in ([], [repeat], [repeat, comment], [repeat, comment, unattributed]):
         pr = _github_model_pr([*prior_reviews, first, second, *later], reviewDecision="APPROVED")
         ordinary = _model_queue_row(pr, family=None)
         assert ordinary["review_conclusion"]["state"] == "APPROVED"
@@ -868,7 +870,10 @@ def test_shared_independent_login_retires_earlier_formal_evidence(intervening: s
     "with_formal_opinion", [True, False],
     ids=["keep-gpt-coverage", "keep-gemini-review-trigger"],
 )
-def test_follow_up_preserves_qualified_commented_review(with_formal_opinion: bool) -> None:
+@pytest.mark.parametrize("complete_comment", [False, True], ids=["brief", "complete-unattributed"])
+def test_follow_up_preserves_qualified_commented_review(
+    with_formal_opinion: bool, complete_comment: bool,
+) -> None:
     login = "shared-peer"
     if with_formal_opinion:
         reviews = [
@@ -885,7 +890,10 @@ def test_follow_up_preserves_qualified_commented_review(with_formal_opinion: boo
     before = _github_model_pr(reviews, reviewDecision=decision)
     assert _model_queue_row(before)["review_action_kind"] == action
     follow_up = _github_model_review(12, login=login, family="gpt-6.2-sol")
-    follow_up["body"] = "Thanks for the update. I will check the next revision."
+    if complete_comment:
+        follow_up["body"] = str(follow_up["body"]).split("\n\n", 1)[1]
+    else:
+        follow_up["body"] = "Thanks for the update. I will check the next revision."
     after = _github_model_pr([*reviews, follow_up], reviewDecision=decision)
     row = _model_queue_row(after)
     ordinary = _model_queue_row(after, family=None)
@@ -1000,7 +1008,7 @@ def test_non_covering_review_leaves_full_cross_family_review_due(pretend_matchin
         matching["author"] = {"login": "shared-review-account", "is_bot": False}
     reviews = [matching, _github_model_review(11, login="second-peer", family="Gemini")]
     if pretend_matching == "retired":
-        reviews.append(_github_model_review(12, login="first-peer", family="unknown"))
+        reviews.append(_github_model_review(12, login="first-peer", family="gpt-6.2-sol", sha="2" * 40))
     assert _model_queue_row(_github_model_pr(reviews))["review_action_kind"] == (
         "rereview_pull_request_exact_head"
     )

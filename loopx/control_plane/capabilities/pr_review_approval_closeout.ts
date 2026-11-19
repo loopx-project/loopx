@@ -78,7 +78,7 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
       formalReviewIds: number[];
       commentedReviewIds: Map<string, number>;
     }>();
-    // A follow-up preserves the latest qualified comment for each model family.
+    // Keep the latest qualified comment for each attributable family.
     // Process oldest first so an opinion change retires the prior coverage.
     for (const row of submitted.sort((a, b) => a.time - b.time || a.id - b.id)) {
       if (!logins.has(row.login)) continue;
@@ -100,10 +100,6 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
         const family = row.source.review_model_family;
         if (typeof family === "string" && family) {
           account.commentedReviewIds.set(family, row.id);
-        } else {
-          // A qualified review with unknown model provenance still replaces
-          // the prior commented evidence, as it did for a single comment.
-          account.commentedReviewIds.clear();
         }
       }
     }
