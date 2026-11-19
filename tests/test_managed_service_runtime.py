@@ -730,7 +730,7 @@ def test_real_manager_switches_core_and_preserves_original_workspace(tmp_path, m
 
 
 
-def test_verify_services_allows_production_startup_past_legacy_15s_cutoff_and_enforces_45s_deadline(
+def test_verify_services_allows_production_startup_past_legacy_cutoff_and_enforces_90s_deadline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import io
@@ -757,7 +757,7 @@ def test_verify_services_allows_production_startup_past_legacy_15s_cutoff_and_en
 
     class _FakeOpener:
         def open(self, url: str, timeout: float = 0.5):
-            if clock[0] < 22.0:
+            if clock[0] < 60.0:
                 raise ConnectionRefusedError("starting up")
             if url.endswith("/?readiness=1"):
                 payload = {
@@ -784,7 +784,7 @@ def test_verify_services_allows_production_startup_past_legacy_15s_cutoff_and_en
     )
 
     managed_runtime._verify_services(services, identity)
-    assert clock[0] == 22.0
+    assert clock[0] == 60.0
 
     clock[0] = 0.0
 
@@ -795,4 +795,4 @@ def test_verify_services_allows_production_startup_past_legacy_15s_cutoff_and_en
     monkeypatch.setattr(managed_runtime.urllib.request, "build_opener", lambda *_: _NeverReadyOpener())
     with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
         managed_runtime._verify_services(services, identity)
-    assert clock[0] == 45.0
+    assert clock[0] == 90.0

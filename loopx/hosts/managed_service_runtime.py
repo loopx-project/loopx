@@ -31,7 +31,7 @@ from .. import runtime_activation as activation
 _OBSERVER_LABEL = "com.loopx.codex-native-accounts"
 _OBSERVER_MODULE = "loopx_codex_provider_routing.native"
 _RUNTIME_BINDING = {"schema_version": "loopx_managed_runtime_binding_v1"}
-_SERVICE_READINESS_TIMEOUT_SECONDS = 45.0
+_SERVICE_READINESS_TIMEOUT_SECONDS = 90.0
 
 
 def _literal_arguments(command: str) -> list[str]:
