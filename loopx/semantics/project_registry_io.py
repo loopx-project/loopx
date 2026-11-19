@@ -286,6 +286,12 @@ class _PythonRegistryIOScanner(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_With(self, node: ast.With) -> None:
+        self._visit_with(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self._visit_with(node)
+
+    def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
         handle_roles: dict[str, _PathRole] = {}
         for item in node.items:
             context = item.context_expr
@@ -311,8 +317,6 @@ class _PythonRegistryIOScanner(ast.NodeVisitor):
         for statement in node.body:
             self.visit(statement)
         self.handles.pop()
-
-    visit_AsyncWith = visit_With
 
     def visit_Call(self, node: ast.Call) -> None:
         name = _terminal_name(node.func)

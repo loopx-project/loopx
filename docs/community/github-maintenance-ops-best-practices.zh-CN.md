@@ -186,8 +186,8 @@ loopx value-connectors source-map --format json    # connector-first source map
 | 循环 | 监控（`target_key`） | cadence | 做什么 |
 | --- | --- | --- | --- |
 | 维护 | GitHub issue intake（`github-open-issue-intake`） | 6h | 新 issue 分类并路由 |
-| 维护 | Open PR review queue（`github:huangruiteng/loopx:open-pr-review-queue`） | 3m | 扫 PR 队列，门禁通过才评审 |
-| 维护 | Public smoke quality repair（`github:huangruiteng/loopx:public-smoke-quality`） | 15m | 发现并修复 public smoke 失败 |
+| 维护 | Open PR review queue（`github:loopx-project/loopx:open-pr-review-queue`） | 3m | 扫 PR 队列，门禁通过才评审 |
+| 维护 | Public smoke quality repair（`github:loopx-project/loopx:public-smoke-quality`） | 15m | 发现并修复 public smoke 失败 |
 | 维护 | Non-benchmark quality watch（`public-nonbenchmark-quality-watch`） | 6h | 观察 benchmark 之外的质量回归 |
 | 维护 | Repository quality（`repository-quality-monitor`） | 14d | README 首屏、quickstart、公开边界扫描 |
 | 维护 | Community feedback funnel（`community-feedback-funnel`） | 14d | 反馈入口与 triage 对齐 |
@@ -279,4 +279,4 @@ item 走 source → angle → draft → feedback → publish gate → readback�
 - Content-ops 能力：
   [`loopx/capabilities/content_ops/README.md`](../../loopx/capabilities/content_ops/README.md)
 - v0.4.5 至 v0.4.7：
-  [releases](https://github.com/huangruiteng/loopx/releases)
+  [releases](https://github.com/loopx-project/loopx/releases)

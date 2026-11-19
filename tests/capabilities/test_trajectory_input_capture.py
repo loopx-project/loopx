@@ -140,6 +140,8 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
 
 @pytest.mark.parametrize("call_kind", [
     "absent", "direct", "stored_result", "compound", "bound_guard", "expanded_guard", "replan_view",
+    "worker_guard", "bound_guard_duplicate_equals", "bound_guard_duplicate_separated",
+    "worker_guard_duplicate_equals", "worker_guard_duplicate_separated",
 ])
 def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, call_kind):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import inspect_pack
@@ -155,9 +157,21 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
                 'store("read",r);text(r.exit_code===0?r.output:r);')
         items = [{"type": "response_item", "payload": item} for item in (call, reply)]
         native_command = []
-        if call_kind in {"bound_guard", "expanded_guard", "replan_view"}:
-            command = ('LOOPX_TURN=2026-01-01T00:00:00Z\n'
+        guard_inputs = {
+            "bound_guard": ("2026-01-01T00:00:00Z", ""),
+            "worker_guard": ("wake-1234567890123456789-deadbeef0001", ""),
+            "bound_guard_duplicate_equals": ("2026-01-01T00:00:00Z", " --turn-instance-id=other-turn"),
+            "bound_guard_duplicate_separated": ("2026-01-01T00:00:00Z", " --turn-instance-id other-turn"),
+            "worker_guard_duplicate_equals": (
+                "wake-1234567890123456789-deadbeef0001", " --turn-instance-id=other-turn"),
+            "worker_guard_duplicate_separated": (
+                "wake-1234567890123456789-deadbeef0001", " --turn-instance-id other-turn"),
+        }
+        if call_kind in guard_inputs or call_kind in {"expanded_guard", "replan_view"}:
+            turn, suffix = guard_inputs.get(call_kind, ("2026-01-01T00:00:00Z", ""))
+            command = (f'LOOPX_TURN={turn}\n'
                 'loopx quota should-run --turn-instance-id "${LOOPX_TURN:?}"')
+            command += suffix
             if call_kind == "expanded_guard":
                 command = command.replace('\nloopx ', '\n*/loopx ')
             elif call_kind == "replan_view":
@@ -198,17 +212,21 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
     inventory = view["solver_usage"]["projection"]["tool_context"]
     footprint = view["solver_usage"]["projection"]["loopx_requests"]
     assert footprint["status"] == "observed"
-    if call_kind in {"direct", "stored_result", "bound_guard", "replan_view"}:
+    if call_kind in {"direct", "stored_result", "bound_guard", "worker_guard", "replan_view"}:
         operation = {
             "direct": "status", "stored_result": "status",
-            "bound_guard": "quota should-run", "replan_view": "quota replan-view",
+            "bound_guard": "quota should-run", "worker_guard": "quota should-run",
+            "replan_view": "quota replan-view",
         }[call_kind]
         assert inventory["operations"] == [{"operation": operation, "calls": 1, "bytes": 5}]
         assert inventory["loopx_tool_output_fraction"] == 1.0
         assert footprint["recognized_requests"] == 1
         assert footprint["tokens"]["input_tokens"] == 100
         assert footprint["input_fraction"] == 1.0  # Whole request, distinct from the packet estimate above.
-    elif call_kind in {"compound", "expanded_guard"}:
+    elif call_kind in {
+        "compound", "expanded_guard", "bound_guard_duplicate_equals", "bound_guard_duplicate_separated",
+        "worker_guard_duplicate_equals", "worker_guard_duplicate_separated",
+    }:
         assert view["solver_usage"]["projection"]["request_coverage"]["all_requests"]["input_tokens"] == 100
         assert footprint["recognized_requests"] == 0 and footprint["unclassified_calls"] == 1
         assert footprint["input_fraction"] is None and footprint["uncached_input_fraction"] is None

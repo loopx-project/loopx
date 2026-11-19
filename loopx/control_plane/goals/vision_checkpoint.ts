@@ -56,6 +56,11 @@ const GOAL_PATH_DELTA_OUTCOMES = [
   "stop",
   "wait",
 ] as const;
+const OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES = [
+  "continue",
+  "no_change",
+  "replan",
+] as const;
 const GOAL_PATH_DELTA_SCALAR_LIMITS = {
   prior_assumption: 320,
   observed_reality: 320,
@@ -890,6 +895,25 @@ function existingVisionContinuityBasis(
   };
 }
 
+function materialOutcomeCheckpointFailures(
+  vision: JsonObject,
+): string[] {
+  let closed = false;
+  try {
+    closed = lifecycle.closed_states.includes(normalizeGoalVisionState(vision.state));
+  } catch {
+    // Invalid lifecycle state is not evidence of a closed frontier.
+  }
+  if (closed) return [];
+
+  const path = optionalObject(vision.path_delta, "agent_vision.path_delta");
+  if (path === null) return [];
+  const outcome = compactText(path.outcome);
+  return (OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES as readonly string[]).includes(outcome)
+    ? []
+    : ["path_outcome_valid"];
+}
+
 function deliveryBoundary(value: unknown): DeliveryBoundary {
   if (value === null || value === undefined || value === "") {
     return "semantic_closeout";
@@ -1025,17 +1049,38 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
     trigger.kind !== "in_flight_continuation"
   );
   const required = requiredTriggers.length > 0 || unchanged !== null;
+  const materialCloseout = request.delivery_outcome !== "outcome_gap" && triggers.some((trigger) =>
+    trigger.kind === "material_delivery_outcome"
+  );
+  const patchedFailures = request.agent_vision !== null && materialCloseout
+    ? materialOutcomeCheckpointFailures(
+      request.agent_vision,
+    )
+    : [];
+  const unchangedBasis = unchanged !== null
+    ? existingVisionContinuityBasis(request.existing_agent_vision)
+    : null;
+  const unchangedFailures =
+    unchanged !== null && request.existing_agent_vision !== null && materialCloseout
+      ? materialOutcomeCheckpointFailures(
+        request.existing_agent_vision,
+      )
+      : [];
   let decision: VisionCheckpointDecision;
   let satisfied: boolean;
-  if (request.agent_vision !== null) {
+  let unqualifiedComponents: string[] = [];
+  if (request.agent_vision !== null && patchedFailures.length === 0) {
     decision = "patched";
     satisfied = true;
-  } else if (unchanged !== null && request.existing_agent_vision !== null) {
+  } else if (unchanged !== null && request.existing_agent_vision !== null && unchangedFailures.length === 0) {
     decision = "unchanged_with_reason";
     satisfied = true;
   } else if (unchanged !== null || required) {
     decision = "missing_required";
     satisfied = false;
+    unqualifiedComponents = patchedFailures.length > 0
+      ? patchedFailures
+      : unchangedFailures;
   } else {
     decision = "not_required";
     satisfied = true;
@@ -1053,14 +1098,14 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
   if (request.agent_vision !== null) {
     checkpoint.agent_vision_state = request.agent_vision.state;
   }
+  if (unqualifiedComponents.length > 0) {
+    checkpoint.unqualified_components = unqualifiedComponents;
+  }
   if (unchanged !== null && request.existing_agent_vision !== null) {
     checkpoint.unchanged_reason = unchanged;
     checkpoint.agent_vision_state = request.existing_agent_vision.state;
-    const continuityBasis = existingVisionContinuityBasis(
-      request.existing_agent_vision,
-    );
-    if (continuityBasis !== null) {
-      checkpoint.continuity_basis = continuityBasis;
+    if (unchangedBasis !== null) {
+      checkpoint.continuity_basis = unchangedBasis;
     }
   } else if (unchanged !== null) {
     checkpoint.missing_baseline = true;

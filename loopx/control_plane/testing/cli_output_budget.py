@@ -141,61 +141,33 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "selectors for scheduler, agent-todos, user-todos, goal-boundary, "
             "or all"
         ),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={
-            # Native first admission at ff1c8a947 preserves the original Turn,
-            # read basis and recall result. Matched main/head measurements are
-            # 23,287/28,057, 35,553/42,997 and 25,562/27,694 chars; the focused
-            # pytest small case also measured 28,343. Only these synthetic JSON
-            # ceilings change; original failures and line/growth guards remain.
-            # The same explicitly imported fixture on base/head emits 24,099
-            # JSON chars. Keep canonical provenance and complete User context.
-            # The complete inline W07 admission now includes its bound
-            # settlement plan, original result read and recall evidence.
-            # The matched main/candidate fixture measures 23,483/38,997.
-            "small": {"json": 40_000, "markdown": 10_000},
-            # Same 36-Todo / 12-run source: 38,432 -> 39,101 chars with
-            # objective/evidence guidance; small and multi-agent paths unchanged.
-            # Per-Todo and fixed semantic growth are accounted for separately.
-            # Canonical source witnesses use the full Markdown context carrier;
-            # the unchanged 36-Todo fixture emits 10,225 chars / 166 lines.
-            # Native Windows paired base/head both emit 40,701 JSON chars.
-            # Retain complete routes/context and bounded host-path headroom;
-            # line, per-Todo/fixed growth and all other ceilings stay unchanged.
-            # Inherited Stride adds its complete decision/axis/source contract:
-            # the same native fixture measures 35,597 -> 42,281 characters on POSIX
-            # and 42,501 characters on native Windows due to drive and backslash paths.
-            # Preserve the original 42,000 failure and the required semantics;
-            # calibrate this regression allowance to 43,000, leaving bounded headroom
-            # (~499 chars on Windows, ~719 chars on POSIX) without widening collection
-            # or production transport limits.
-            # The progressive oracle now also bounds the complete recovered body.
-            # The same fixture measures 50,795 JSON body chars and 16,857
-            # Markdown chars. Preserve the original 43,000 / 10,500 failures and
-            # calibrate only these two presentation ceilings to measured values
-            # plus bounded headroom.
-            "crowded": {"json": 51_000, "markdown": 17_000},
-            # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
-            # this candidate both emit 25,836 JSON characters (96 matched
-            # surface/mode measurements, no semantic or route differences).
-            # Preserve complete decision facts; calibrate only this synthetic
-            # presentation ceiling. The historical 25,500 failure remains;
-            # line/growth guards and production transport limits are unchanged.
-            "multi_agent": {"json": 28_500, "markdown": 7_000},
-        },
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        # Matched ef099ae3 frozen small/crowded/multi-agent fixtures:
+        # JSON 23,289/42,965/25,514 -> 24,984/53,441/29,574;
+        # Markdown 7,476/8,143/6,441 -> 25,083/53,543/29,674.
+        # Full Goal bytes formerly required a separate cat; Markdown now also
+        # carries every source field. Retain the original 25k/51k/26.5k JSON
+        # and 10k/17k/7k Markdown misses; this is a measured cost increase,
+        # not model/outcome qualification. Line and other-route limits stay.
+        # With W07 on complete v1, the matched small case measures 39,874
+        # JSON and 39,142 Markdown chars. The bound plan, result read basis,
+        # and reward recall account for the once-only admission cost. The
+        # multi-agent case measures 31,824/31,926 and remains unbound.
+        max_chars={"small": {"json": 41_000, "markdown": 41_000},
+            "crowded": {"json": 55_000, "markdown": 55_000},
+            "multi_agent": {"json": 33_000, "markdown": 33_000}},
         max_lines={
             "small": {"json": 600, "markdown": 190},
             "crowded": {"json": 950, "markdown": 180},
             "multi_agent": {"json": 650, "markdown": 80},
         },
+        output_contract_version="loopx_turn_envelope_v1",
         scale_axis="todo_count",
-        max_json_growth_chars_per_unit=300,
-        # Required replan carries dense decision evidence from the full index.
-        # Required authoring and objective/evidence advice are fixed packets.
-        # Paired crowded-minus-small growth: 19,236 -> 19,905 chars; the
-        # new advice adds 669. Small and multi-agent paths stay identical.
-        # This fixed decision packet must not relax per-Todo growth or other routes.
+        max_json_growth_chars_per_unit=600,
+        # Matched crowded-minus-small: 19,676 -> 28,457. Full Goal material
+        # includes the original Todo text as well as structured current work.
+        # Attribute this collection cost per Todo; keep the fixed allowance.
         max_json_fixed_semantic_growth_chars=9_700,
     ),
     CliOutputBudgetSpec(
@@ -461,77 +433,88 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail scheduler",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        # Original-Turn recovery retains the bound settlement plan (38,153 chars).
-        max_chars={"json": 39_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        # W07 retains the bound admission in detail views as well as default.
+        # Matched scheduler detail measures 39,039 JSON / 39,142 Markdown.
+        max_chars={"json": 41_000, "markdown": 41_000},
         max_lines={"json": 820, "markdown": 190},
+        output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_todo_summary_detail",
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail agent-todos",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 55_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        max_chars={"json": 55_000, "markdown": 41_000},
         max_lines={"json": 1_350, "markdown": 190},
+        output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_user_todo_summary_detail",
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail user-todos",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        # The same retained plan and User Todo detail measure 38,476 chars.
-        max_chars={"json": 39_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        max_chars={"json": 41_000, "markdown": 41_000},
         max_lines={"json": 900, "markdown": 190},
+        output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_goal_boundary_detail",
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail goal-boundary",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        # Original-Turn recovery with the boundary selector measures 38,153 chars.
-        max_chars={"json": 39_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        max_chars={"json": 41_000, "markdown": 41_000},
         max_lines={"json": 900, "markdown": 190},
+        output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_vision_detail",
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail vision",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
         # The complete captured Vision projection measures 58,393 JSON chars.
         # Preserve the original 55,000 failure; keep a 607-character allowance.
-        max_chars={"json": 59_000, "markdown": 10_000},
+        max_chars={"json": 59_000, "markdown": 41_000},
         max_lines={"json": 1_350, "markdown": 190},
+        output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_all_detail",
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail all",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 85_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        max_chars={"json": 85_000, "markdown": 41_000},
         max_lines={"json": 2_100, "markdown": 190},
+        output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_turn_envelope",
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --turn-envelope",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("schema_version", "contract_capsule", "action_signature"),
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
-        # Native W07 retains original-Turn settlement, measuring 19,082 JSON
-        # chars (21,895 with multi-subagent). This is the CLI stdout budget.
-        max_chars={"json": 22_500, "markdown": 4_800},
+        # The alias now carries the same full source. Matched small JSON:
+        # 9,113 -> 24,984; blocking User gate 6,914 -> 22,917 (23,029 UTF-8
+        # bytes); enabled multi-subagent 10,727 -> 26,561. Markdown is
+        # 2,425 -> 25,083. Retain the old 13k/4.8k misses. Production wire
+        # limits and all independent authority/semantic checks stay unchanged.
+        # W07's matched multi-subagent JSON fixture measures 41,529 on
+        # POSIX and 42,164 on Windows; small Markdown measures 39,142.
+        max_chars={"json": 43_500, "markdown": 41_000},
         max_lines={"json": 300, "markdown": 140},
+        output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="loopx_turn_plan_transaction_detail",

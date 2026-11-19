@@ -226,6 +226,7 @@ def build_artifacts():
         '"""' + header + '"""',
         "from __future__ import annotations",
         "from enum import Enum",
+        "from typing import Any",
         "",
     ]
     ts = ["// " + line for line in header.splitlines()] + [""]
@@ -244,9 +245,9 @@ def build_artifacts():
             "",
         ]
     py += [
-        "TURN_CONTROLLER_CONTRACT = " + pformat(contract, sort_dicts=False, width=100),
+        "TURN_CONTROLLER_CONTRACT: dict[str, Any] = " + pformat(contract, sort_dicts=False, width=100),
         "",
-        "ROUTE_TO_DISPOSITION = TURN_CONTROLLER_CONTRACT['route_projection']",
+        "ROUTE_TO_DISPOSITION: dict[str, str | None] = TURN_CONTROLLER_CONTRACT['route_projection']",
         "",
         "def project_turn_route(route: LoopXTurnRoute) -> LoopDisposition:",
         '    """Public total route projection; contract_error explicitly rejects."""',

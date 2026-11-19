@@ -21,6 +21,12 @@ MEMORY_CONTEXT_MAX_RESULT_BYTES = 64 * 1024
 
 
 def _reward_memory_prompt_instructions(*, has_guidance: bool, ingest_enabled: bool) -> list[str]:
+    if has_guidance and ingest_enabled:
+        # Share the eligibility/schema text instead of appending a third
+        # instruction: comparison must not displace recall within 64 KiB.
+        return [
+            'Recall: private, non-authoritative; apply only if current evidence fits; no new action authority. Before reflecting, compare independent task evidence to comparable delivered procedural_experience; else use ordinary eligibility. reward_memory_reflection_json stays empty unless evidence establishes distinct reusable applicability or material trigger/action/validation/stop_condition/limitations changes. Keep distinct applicability separate. Eligible compact JSON: schema_version=turn_reward_memory_reflection_v1,status=eligible,configured surface_id,outcome_kind=research|simulation|real|engineering,content_summary,reasoning_summary,confidence=low|medium|high,1-5 opaque evidence_refs; experience: schema_version=procedural_experience_contract_v0,nonempty applicability/limitations lists,observed_outcome,attribution,same evidence_refs,future_behavior:trigger/action/validation/stop_condition. Require future behavior change and non-generalization limits; never use own summary as evidence. Legacy v0 reflections:audit-only,never durable memory. Only settlement may ingest after caller-declared Todo validator attests exact reflection digest/evidence; ordinary success:awaiting,no provider write. Provider-record merge/update/retire/supersede: never claim; configured owners decide.'
+        ]
     instructions: list[str] = []
     if has_guidance:
         instructions.append(

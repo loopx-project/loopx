@@ -91,7 +91,7 @@ request to post automatically.
 
 约束变化，不应该抹掉长程任务的决策与证据链。
 
-https://github.com/huangruiteng/loopx
+https://github.com/loopx-project/loopx
 
 ### English
 
@@ -106,4 +106,4 @@ became 4, all 3 behavior tests passed, and the GoalBar closed at 2/2.
 Changing constraints should not erase the decision and evidence trail of a
 long-running task.
 
-https://github.com/huangruiteng/loopx
+https://github.com/loopx-project/loopx

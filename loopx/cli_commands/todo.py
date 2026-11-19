@@ -1,60 +1,38 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import shlex
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 from operator import itemgetter
 from pathlib import Path
 
 from ..command_invocation import cli_option_args, loopx_cli_argv
-from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
-from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
+from ..control_plane.agents.workspace_guard import capture_delivery_workspace
+from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityRejection,
-    LocalCoordinationAuthorityUnavailable,
     local_authority_is_promoted,
-    read_canonical_todo_fields_if_promoted,
 )
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.goals.checkpoint_context_io import checkpoint_continuation_required
-from ..control_plane.agents.workspace_guard import capture_delivery_workspace
-from ..control_plane.todos.contract import (
-    replan_successor_semantic_binding,
-)
-from ..control_plane.capability_hooks import PostWritebackHookRegistration
-from ..control_plane.quota.settlement import (
-    QuotaSettlementReadback,
-    SettlementIdentity,
-    SettlementStepKind,
-    build_turn_scoped_cli_settlement_plan,
-    attach_settlement_progress,
-    read_heartbeat_settlement,
-    settlement_result_payload,
-    settlement_step_command,
-)
-from ..control_plane.runtime.time import chronology_key
-from ..control_plane.todos.markdown import render_todo_markdown
-from ..control_plane.todos.provider_projection import (
-    project_current_canonical_todos,
-)
-from ..control_plane.todos.completion_result import read_completion_result
-from ..history import load_index, load_registry
-from ..paths import resolve_runtime_root
-from ..registry import registry_goals
-from ..control_plane.work_items.semantic_replan_writeback import (
-    qualify_replan_writeback,
-)
-from ..control_plane.goals.task_planning import (
-    build_task_planning_packet,
-    render_task_planning_packet,
-)
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+from ..control_plane.goals.task_planning import (
+    build_task_planning_packet,
+    render_task_planning_packet,
+)
+from ..control_plane.quota.settlement import (
+    SettlementIdentity,
+    read_heartbeat_settlement,
+    settlement_result_payload,
+)
+from ..control_plane.todos.completion_result import read_completion_result
+from ..control_plane.todos.list_readback import list_goal_todos
+from ..control_plane.todos.markdown import render_todo_markdown
 from ..control_plane.todos.mutation_api import (
     add_goal_todo,
     archive_completed_todos,
@@ -62,7 +40,12 @@ from ..control_plane.todos.mutation_api import (
     supersede_goal_todo,
     update_goal_todo,
 )
-from ..control_plane.todos.list_readback import list_goal_todos
+from ..control_plane.todos.provider_projection import (
+    project_current_canonical_todos,
+)
+from ..history import load_registry
+from ..paths import resolve_runtime_root
+from .post_writeback import PostWritebackProjectionBuilder
 from .todo_argument_validation import (
     validate_capability_gap_options,
     validate_shared_todo_options,
@@ -71,10 +54,10 @@ from .todo_argument_validation import (
     validate_todo_claim_options,
     validate_todo_complete_options,
     validate_todo_execution_recovery_options,
+    validate_todo_plan_options,
+    validate_todo_project_markdown_options,
     validate_todo_receipt_options,
     validate_todo_result_read_options,
-    validate_todo_project_markdown_options,
-    validate_todo_plan_options,
     validate_todo_supersede_options,
     validate_todo_update_options,
 )
@@ -83,361 +66,23 @@ from .todo_event import (
     append_todo_rollout_event,
     todo_error_payload,
 )
-from .post_writeback import (
-    PostWritebackProjectionBuilder,
-    dispatch_committed_cli_post_writeback_hooks,
-    post_writeback_source_failure,
+from .todo_recovery import (
+    _recover_todo_execution_once as _recover_todo_execution_once,
+    todo_path_args as _todo_path_args,
 )
-from ..control_plane.agents.capability_gate import (
-    runtime_capabilities_for_cli_projection,
+from .todo_settlement import (
+    _completion_settlement_error as _completion_settlement_error,
+    _read_todo_turn_settlement as _read_todo_turn_settlement,
+    _todo_settlement_plan as _todo_settlement_plan,
+    _validated_replan_successor_obligation as _validated_replan_successor_obligation,
+    dispatch_todo_complete_post_writeback,
+    reconcile_todo_complete_settlement,
 )
-from ..control_plane.turn_driver.journal_store import (
-    turn_journal_observed_capabilities,
-)
-
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
 ]
-
-
-def _read_todo_turn_settlement(
-    args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
-    goal_ref: dict[str, str] | None,
-) -> QuotaSettlementReadback:
-    """Transport the original lifecycle tuple to the TS identity owner."""
-    readback = read_heartbeat_settlement(
-        runtime_root,
-        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
-        turn_instance_id=args.turn_instance_id,
-        registry_path=registry_path,
-        goal_ref=goal_ref,
-    )
-    if readback is None:
-        raise RuntimeError("exact settlement readback unexpectedly returned not-found")
-    if readback.identity.failure is not None:
-        raise ValueError(readback.identity.failure.reason)
-    if readback.identity.value is None:
-        operation = "completion" if args.todo_command == "complete" else "supersede"
-        raise ValueError(f"turn-scoped Todo {operation} has no identity")
-    return readback
-
-
-def _completion_settlement_error(
-    settlement_readback: QuotaSettlementReadback,
-    *,
-    no_follow_up: bool,
-    todo: Mapping[str, object],
-) -> str | None:
-    failure = settlement_readback.settlement.failure
-    if not no_follow_up or failure is None:
-        return None
-    if checkpoint_continuation_required(settlement_readback):
-        identity = settlement_readback.identity.value
-        # A new terminal intent may stage its result before settlement. An
-        # ordinary result already committed under the same Turn is in closeout.
-        upgrading_ordinary_result = (
-            identity is not None
-            and todo.get("status") == "done"
-            and todo.get("completion_continuation") == "active_goal"
-            and todo.get("completion_turn_key") in (identity.effect_id, identity.turn_instance_id)
-            and todo.get("completion_requested_continuation") != "no_followup"
-        )
-        if not upgrading_ordinary_result:
-            return None
-    return (
-        "terminal no-follow-up closeout requires matching writeback and quota spend receipts: "
-        + failure.reason
-    )
-
-
-def _todo_settlement_plan(
-    identity: SettlementIdentity, *, args: argparse.Namespace,
-    registry_path: Path, runtime_root: Path,
-    goal_ref: dict[str, str] | None,
-    quota_spend_source: str = "heartbeat",
-) -> dict[str, object]:
-    """Render the native plan with the original route and supplied lease facts."""
-    actor_args = ""
-    path_args = ""
-    for name, option in (
-        ("project", "--project"), ("state_file", "--state-file"),
-        ("claim_operation_id", "--claim-operation-id"),
-        ("task_lease_idempotency_key", "--task-lease-idempotency-key"),
-        ("task_lease_expected_version", "--task-lease-expected-version"),
-    ):
-        value = getattr(args, name, None)
-        if value is not None:
-            argument = f" {option} {shlex.quote(str(value))}"
-            actor_args += argument
-            if name in {"project", "state_file"}:
-                path_args += argument
-    prefix = (f"loopx --registry {shlex.quote(str(registry_path))}"
-              f" --runtime-root {shlex.quote(str(runtime_root))}")
-    plan = build_turn_scoped_cli_settlement_plan(
-        goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
-        replan_obligation_id=identity.replan_obligation_id,
-        turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
-        scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
-        goal_ref=goal_ref, quota_spend_source=quota_spend_source,
-    ).as_dict()
-
-    from ..capabilities.explore.turn_context import project_settlement_attachment
-
-    return project_settlement_attachment(plan, registry_path=registry_path, runtime_root=runtime_root)
-
-
-def _validated_replan_successor_obligation(
-    args: argparse.Namespace,
-    *,
-    registry_path: Path,
-    runtime_root_arg: str | None,
-) -> str | None:
-    requested = str(getattr(args, "replan_obligation_id", None) or "").strip()
-    if not requested:
-        return None
-    if not (
-        args.role == "agent"
-        and args.task_class == "advancement_task"
-        and args.claimed_by
-    ):
-        raise ValueError(
-            "--replan-obligation-id requires --role agent --task-class "
-            "advancement_task and --claimed-by"
-        )
-    if replan_successor_semantic_binding(
-        action_kind=args.action_kind,
-        target_key=args.monitor_target_key,
-        explore_result_node_refs=args.explore_result_node_refs,
-    ) is None:
-        raise ValueError(
-            "--replan-obligation-id requires --action-kind and either "
-            "--target-key or --explore-result-node-ref"
-        )
-    registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(registry, runtime_root_arg)
-    todo_fields = read_canonical_todo_fields_if_promoted(
-        runtime_root=runtime_root, goal_id=args.goal_id,
-    )
-    state_text = ""
-    existing_runs, _ = load_index(
-        runtime_root / "goals" / args.goal_id / "runs" / "index.jsonl"
-    )
-    newest_first_runs = [
-        run
-        for _, run in sorted(
-            enumerate(existing_runs),
-            key=lambda item: (
-                *chronology_key(item[1].get("generated_at")),
-                item[0],
-            ),
-            reverse=True,
-        )
-    ]
-    registry_goal = next(
-        (
-            item
-            for item in registry_goals(registry)
-            if str(item.get("id") or "").strip() == args.goal_id
-        ),
-        None,
-    )
-    from ..capabilities.explore.research_frontier import prepare_research_replan_evidence
-    capability_evidence = prepare_research_replan_evidence(runtime_root=runtime_root, goal_id=args.goal_id,
-        agent_id=args.claimed_by, registry_goal=registry_goal, state_text=state_text)
-    obligation, _ = qualify_replan_writeback(
-        capability_evidence=capability_evidence,
-        todo_fields=todo_fields,
-        newest_first_runs=newest_first_runs,
-        state_text=state_text,
-        agent_id=args.claimed_by,
-        goal_id=args.goal_id,
-        registry_goal=registry_goal,
-        effective_turn_cadence=effective_turn_cadence_context(
-            resolve_todo_replan_cadence_goal(
-                registry_goal or {"id": args.goal_id}, runtime_root,
-            ), runtime_root,
-            registry_path=registry_path,
-        ),
-    )
-    current = str((obligation or {}).get("obligation_id") or "").strip()
-    if not current:
-        raise ValueError(
-            "--replan-obligation-id was provided but this agent has no open "
-            "replan obligation"
-        )
-    if current != requested:
-        raise ValueError(
-            "--replan-obligation-id does not match the current open obligation: "
-            f"expected {current}"
-        )
-    if (obligation or {}).get("capability_guard"):
-        from ..capabilities.explore.research_evidence import _research_result
-        if capability_evidence is None:
-            raise ValueError("selected capability successor owner is not available")
-        _research_result("explore.research.composition_successor", {
-            "frontier": capability_evidence.frontier, "agent_id": args.claimed_by, "obligation_id": requested,
-            "todo": {"replan_obligation_id": requested, "claimed_by": args.claimed_by,
-                     "action_kind": args.action_kind, "task_class": args.task_class,
-                     "explore_result_node_refs": args.explore_result_node_refs,
-                     "target_key": args.monitor_target_key, "status": args.status or "open", "resume_when": args.resume_when},
-        })
-    return current
-
-
-
-def _todo_path_args(args: argparse.Namespace) -> dict[str, Path | None]:
-    return {
-        "project": Path(args.project).expanduser() if args.project else None,
-        "state_file": Path(args.state_file).expanduser() if args.state_file else None,
-    }
-
-
-def _recovery_claim_operation_id(
-    args: argparse.Namespace,
-    *,
-    completion_turn_key: str | None = None,
-) -> str | None:
-    command = getattr(args, "todo_command", None)
-    if command == "complete":
-        scope = str(completion_turn_key or "unscoped")
-    elif command == "update" and getattr(args, "update_operation_id", None):
-        scope = str(args.update_operation_id)
-    else:
-        return None
-    digest = hashlib.sha256(
-        (
-            "loopx-todo-execution-recovery-claim-v0\0"
-            f"{command}\0{args.goal_id}\0{args.todo_id}\0"
-            f"{args.agent_id}\0{scope}"
-        ).encode("utf-8")
-    ).hexdigest()
-    return f"todo-claim:recover:{digest[:32]}"
-
-
-def _recover_todo_execution_once(
-    args: argparse.Namespace,
-    initial_error: LocalCoordinationAuthorityRejection,
-    *,
-    registry_path: Path,
-    runtime_root_arg: str | None,
-    retry_operation: Callable[[str], dict[str, object]],
-    completion_turn_key: str | None = None,
-) -> dict[str, object]:
-    """Consume only the typed, claim-only lifecycle recovery in one CLI call.
-
-    The TypeScript lifecycle owner decides whether a new ordinary claim is a
-    legal repair.  This adapter neither infers eligibility from prose nor
-    replaces explicit proof.  Recovery that requires reconciliation/inspection
-    remains visible to the caller instead of being silently rebased.
-    """
-
-    recovery_claim_operation_id = _recovery_claim_operation_id(
-        args,
-        completion_turn_key=completion_turn_key,
-    )
-    if (
-        initial_error.code == "coordination_operation_identity_mismatch"
-        and recovery_claim_operation_id is not None
-    ):
-        try:
-            result = retry_operation(recovery_claim_operation_id)
-        except LocalCoordinationAuthorityRejection:
-            raise initial_error from None
-        result["execution_recovery"] = {
-            "schema_version": "todo_execution_recovery_v0",
-            "status": "replayed" if result.get("idempotent_replay") else "recovered",
-            "initial_error_code": initial_error.code,
-            "claim_operation_id": recovery_claim_operation_id,
-            "claim_status": "replayed",
-            "external_invocations": 1,
-            "external_failed_calls": 0,
-        }
-        return result
-
-    recovery = initial_error.payload.get("recovery")
-    if not isinstance(recovery, dict):
-        raise initial_error
-    claim = recovery.get("claim")
-    retry = recovery.get("retry")
-    if not (
-        recovery.get("action") == "claim_task"
-        and recovery.get("execution_authority_granted") is False
-        and isinstance(claim, dict)
-        and isinstance(retry, dict)
-        and retry.get("reference_source") == "claim_operation_id_from_claim"
-        and retry.get("requires_flags") == ["--claim-operation-id"]
-        and "inspect" not in recovery
-    ):
-        raise initial_error
-
-    prepared = update_goal_todo(
-        registry_path=registry_path,
-        runtime_root_arg=runtime_root_arg,
-        goal_id=args.goal_id,
-        todo_id=args.todo_id,
-        role=args.role,
-        claimed_by=args.agent_id,
-        agent_id=args.agent_id,
-        claim_only=True,
-        claim_operation_id=recovery_claim_operation_id,
-        manage_execution=True,
-        **_todo_path_args(args),
-        dry_run=False,
-    )
-    claim_operation_id = str(prepared.get("claim_operation_id") or "").strip()
-    if not (
-        prepared.get("ok") is True
-        and prepared.get("execution_managed") is True
-        and claim_operation_id
-    ):
-        raise LocalCoordinationAuthorityUnavailable(
-            "ordinary Todo claim returned without a usable execution reference",
-            code="todo_execution_recovery_claim_incomplete",
-            payload={
-                "execution_recovery": {
-                    "schema_version": "todo_execution_recovery_v0",
-                    "status": "claim_incomplete",
-                    "initial_error_code": initial_error.code,
-                    "claim_status": prepared.get("status"),
-                }
-            },
-        )
-    try:
-        result = retry_operation(claim_operation_id)
-    except Exception as retry_error:
-        retry_code = getattr(retry_error, "code", type(retry_error).__name__)
-        retry_payload = getattr(retry_error, "payload", None)
-        raise LocalCoordinationAuthorityUnavailable(
-            "Todo execution claim committed but the unchanged lifecycle retry failed",
-            code="todo_execution_recovery_retry_failed",
-            payload={
-                "execution_recovery": {
-                    "schema_version": "todo_execution_recovery_v0",
-                    "status": "claim_committed_retry_failed",
-                    "initial_error_code": initial_error.code,
-                    "claim_operation_id": claim_operation_id,
-                    "claim_status": prepared.get("status"),
-                    "retry_error_code": str(retry_code),
-                },
-                **(
-                    {"retry_failure": dict(retry_payload)}
-                    if isinstance(retry_payload, dict)
-                    else {}
-                ),
-            },
-        ) from retry_error
-    result["execution_recovery"] = {
-        "schema_version": "todo_execution_recovery_v0",
-        "status": "recovered",
-        "initial_error_code": initial_error.code,
-        "claim_operation_id": claim_operation_id,
-        "claim_status": prepared.get("status"),
-        "external_invocations": 1,
-        "external_failed_calls": 0,
-    }
-    return result
 
 
 def _render_todo_receipt(payload: dict[str, object]) -> str:
@@ -474,11 +119,24 @@ def _thin_claim_projection(payload: dict[str, object], route: Sequence[str]) -> 
     revision = outbox.get("provider_revision")
     goal_id = payload.get("goal_id")
     if (
-        not isinstance(rows, list) or not rows or outbox.get("active_fields_omitted") != len(rows)
-        or not isinstance(revision, str) or not revision or not isinstance(goal_id, str) or not goal_id
+        not isinstance(rows, list)
+        or not rows
+        or outbox.get("active_fields_omitted") != len(rows)
+        or not isinstance(revision, str)
+        or not revision
+        or not isinstance(goal_id, str)
+        or not goal_id
     ):
         return
-    command = [*route, "todo", "project-markdown", "--goal-id", goal_id, "--provider-revision", revision]
+    command = [
+        *route,
+        "todo",
+        "project-markdown",
+        "--goal-id",
+        goal_id,
+        "--provider-revision",
+        revision,
+    ]
     for field in ("project", "state_file"):
         path = outbox.get(field)
         if isinstance(path, str) and path:
@@ -504,9 +162,13 @@ def handle_todo_command(
         from .todo_list import handle_todo_list_command
 
         return handle_todo_list_command(
-            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
-            print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
-            format_name=format_name, list_reader=list_goal_todos,
+            args,
+            registry_path=registry_path,
+            runtime_root_arg=runtime_root_arg,
+            print_payload=print_payload,
+            append_cli_rollout_event=append_cli_rollout_event,
+            format_name=format_name,
+            list_reader=list_goal_todos,
         )
     renderer = render_todo_markdown
     if args.todo_command == "plan":
@@ -516,6 +178,7 @@ def handle_todo_command(
     elif args.todo_command == "result-read":
         renderer = itemgetter("text")
     goal_ref: dict[str, str] | None = None
+    settlement_identity: SettlementIdentity | None = None
     try:
         if args.todo_command is None:
             raise ValueError(
@@ -543,33 +206,49 @@ def handle_todo_command(
         if args.todo_command == "plan":
             validate_todo_plan_options(args)
             payload = build_task_planning_packet(
-                registry_path=registry_path, runtime_root_arg=runtime_root_arg,
-                goal_id=args.goal_id, agent_id=args.agent_id, text=args.text,
+                registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                text=args.text,
                 project=Path(args.project).expanduser() if args.project else None,
             )
         elif args.todo_command == "receipt":
             validate_todo_receipt_options(args)
-            runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
-            if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=args.goal_id):
-                raise ValueError("todo receipt requires promoted canonical authority; no legacy fallback")
+            runtime_root = resolve_runtime_root(
+                load_registry(registry_path), runtime_root_arg
+            )
+            if not local_authority_is_promoted(
+                runtime_root=runtime_root, goal_id=args.goal_id
+            ):
+                raise ValueError(
+                    "todo receipt requires promoted canonical authority; no legacy fallback"
+                )
             result = effect_runtime_result(
                 "coordination.local_authority.operation_receipt",
-                {"schema_version": "loopx_local_coordination_operation_receipt_request_v0",
-                 "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
-                 "goal_id": args.goal_id, "operation_id": args.operation_id},
+                {
+                    "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+                    "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
+                    "goal_id": args.goal_id,
+                    "operation_id": args.operation_id,
+                },
                 timeout=15.0,
             )
             if not isinstance(result, dict):
                 raise RuntimeError("canonical operation receipt returned an invalid result")
-            payload = {"ok": result.get("status") in {"found", "missing"},
-                       "command": "receipt", **result}
+            payload = {
+                "ok": result.get("status") in {"found", "missing"},
+                "command": "receipt",
+                **result,
+            }
         elif args.todo_command == "result-read":
             validate_todo_result_read_options(args)
             registry = load_registry(registry_path)
             payload = read_completion_result(
                 registry_path=registry_path,
                 runtime_root=resolve_runtime_root(registry, runtime_root_arg),
-                goal_id=args.goal_id, todo_id=args.todo_id,
+                goal_id=args.goal_id,
+                todo_id=args.todo_id,
             )
         elif args.todo_command == "project-markdown":
             validate_todo_project_markdown_options(args)
@@ -598,19 +277,32 @@ def handle_todo_command(
             )
             successor_settlement = None
             if replan_obligation_id and args.turn_instance_id:
-                runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+                runtime_root = resolve_runtime_root(
+                    load_registry(registry_path), runtime_root_arg
+                )
                 successor_settlement = read_heartbeat_settlement(
-                    runtime_root, goal_id=args.goal_id, agent_id=args.claimed_by,
-                    todo_id=None, turn_instance_id=args.turn_instance_id,
-                    resolve_original_binding=True, registry_path=registry_path, goal_ref=goal_ref,
+                    runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.claimed_by,
+                    todo_id=None,
+                    turn_instance_id=args.turn_instance_id,
+                    resolve_original_binding=True,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
                 )
                 if successor_settlement is None or successor_settlement.identity.value is None:
-                    raise ValueError("replan successor requires the original admitted Turn binding")
+                    raise ValueError(
+                        "replan successor requires the original admitted Turn binding"
+                    )
                 if successor_settlement.identity.failure is not None:
                     raise ValueError(successor_settlement.identity.failure.reason)
-                selected = (successor_settlement.semantic_replan_guard or {}).get("selected_obligation_id")
+                selected = (successor_settlement.semantic_replan_guard or {}).get(
+                    "selected_obligation_id"
+                )
                 if selected != replan_obligation_id:
-                    raise ValueError("replan successor does not match the original Turn obligation")
+                    raise ValueError(
+                        "replan successor does not match the original Turn obligation"
+                    )
             payload = add_goal_todo(
                 operation_id=args.operation_id,
                 registry_path=registry_path,
@@ -678,10 +370,15 @@ def handle_todo_command(
                         assert identity is not None
                         payload["settlement_identity"] = identity.as_dict()
                         payload["settlement_plan"] = _todo_settlement_plan(
-                            identity, args=args, registry_path=registry_path,
-                            runtime_root=runtime_root, goal_ref=goal_ref,
+                            identity,
+                            args=args,
+                            registry_path=registry_path,
+                            runtime_root=runtime_root,
+                            goal_ref=goal_ref,
                         )
-                        payload["replan_transition"]["turn_boundary"] = "settle_original_turn_before_end"
+                        payload["replan_transition"]["turn_boundary"] = (
+                            "settle_original_turn_before_end"
+                        )
                         payload["instruction"] = (
                             "Validate the successor and finish the returned original Turn settlement plan, "
                             "then end this heartbeat. Do not select or execute the successor in this Turn. "
@@ -697,8 +394,12 @@ def handle_todo_command(
                 claimed_by=args.claimed_by,
                 agent_id=args.agent_id,
                 claim_only=True,
-                manage_execution=(args.agent_id is not None and args.agent_id == args.claimed_by
-                    and args.task_lease_idempotency_key is None and args.task_lease_expected_version is None),
+                manage_execution=(
+                    args.agent_id is not None
+                    and args.agent_id == args.claimed_by
+                    and args.task_lease_idempotency_key is None
+                    and args.task_lease_expected_version is None
+                ),
                 claim_operation_id=args.claim_operation_id,
                 task_lease_idempotency_key=args.task_lease_idempotency_key,
                 task_lease_expected_version=args.task_lease_expected_version,
@@ -706,24 +407,51 @@ def handle_todo_command(
                 dry_run=bool(args.dry_run),
             )
             if payload.get("ok") and payload.get("execution_managed") and not args.dry_run:
-                runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+                runtime_root = resolve_runtime_root(
+                    load_registry(registry_path), runtime_root_arg
+                )
                 route = [
-                    *loopx_cli_argv(), *cli_option_args("--registry", registry_path),
-                    *cli_option_args("--runtime-root", runtime_root), "--format", "json",
+                    *loopx_cli_argv(),
+                    *cli_option_args("--registry", registry_path),
+                    *cli_option_args("--runtime-root", runtime_root),
+                    "--format",
+                    "json",
                 ]
                 selected = [
-                    *cli_option_args("--goal-id", args.goal_id), *cli_option_args("--todo-id", args.todo_id),
+                    *cli_option_args("--goal-id", args.goal_id),
+                    *cli_option_args("--todo-id", args.todo_id),
                     *cli_option_args("--agent-id", args.agent_id),
-                    *cli_option_args("--claim-operation-id", payload["claim_operation_id"]),
+                    *cli_option_args(
+                        "--claim-operation-id", payload["claim_operation_id"]
+                    ),
                 ]
-                payload["next_cli_actions"] = [shlex.join([*route, "todo", action, *selected, *extra]) for action, extra in (
-                    ("update", ["--update-operation-id", "<progress-operation-id>", "--note", "<progress>"]),
-                    ("complete", ["--evidence", "<validated-evidence>"]),
-                )]
-                payload["instruction"] = "Continue the task. Use this original claim reference for progress or completion; retain normal Turn settlement when applicable."
+                payload["next_cli_actions"] = [
+                    shlex.join([*route, "todo", action, *selected, *extra])
+                    for action, extra in (
+                        (
+                            "update",
+                            [
+                                "--update-operation-id",
+                                "<progress-operation-id>",
+                                "--note",
+                                "<progress>",
+                            ],
+                        ),
+                        ("complete", ["--evidence", "<validated-evidence>"]),
+                    )
+                ]
+                payload["instruction"] = (
+                    "Continue the task. Use this original claim reference for progress "
+                    "or completion; retain normal Turn settlement when applicable."
+                )
                 # Normal callers need the accepted task reference, not lease
                 # counters or a second inline copy of the native receipt.
-                for internal in ("lease", "lease_changed", "lease_idempotent", "original_receipt"):
+                for internal in (
+                    "lease",
+                    "lease_changed",
+                    "lease_idempotent",
+                    "original_receipt",
+                ):
                     payload.pop(internal, None)
                 if args.todo_thin:
                     _thin_claim_projection(payload, route)
@@ -816,7 +544,6 @@ def handle_todo_command(
         elif args.todo_command == "complete":
             validate_todo_complete_options(args)
             settlement_result = None
-            settlement_identity = None
             settlement_readback = None
             completion_error = None
             completion_turn_key = None
@@ -835,7 +562,9 @@ def handle_todo_command(
                     registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
                     todo_id=args.todo_id, pending_only=False)
             if getattr(args, "turn_instance_id", None):
-                runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+                runtime_root = resolve_runtime_root(
+                    load_registry(registry_path), runtime_root_arg
+                )
                 settlement_readback = _read_todo_turn_settlement(
                     args,
                     registry_path=registry_path,
@@ -946,7 +675,11 @@ def handle_todo_command(
                     role=args.role,
                     decision_outcome=args.decision_outcome,
                     evidence=args.evidence,
-                    completion_result_file=Path(args.result_file).expanduser() if args.result_file else None,
+                    completion_result_file=(
+                        Path(args.result_file).expanduser()
+                        if args.result_file
+                        else None
+                    ),
                     completion_turn_key=completion_turn_key,
                     delivery_read_context_id=getattr(args, "delivery_read_context", None),
                     delivery_settlement_identity=settlement_identity.as_dict() if settlement_identity else None,
@@ -1011,7 +744,9 @@ def handle_todo_command(
                         load_registry(registry_path), runtime_root_arg
                     ),
                     goal_ref=goal_ref,
-                ) if args.turn_instance_id else None
+                )
+                if args.turn_instance_id
+                else None
             )
             retirement_identity = supersede_readback.identity.value if supersede_readback is not None else None
             payload = supersede_goal_todo(
@@ -1046,7 +781,9 @@ def handle_todo_command(
                 retirement_identity = supersede_readback.identity.value
                 assert retirement_identity is not None
                 payload["settlement_identity"] = retirement_identity.as_dict()
-                payload["settlement_result"] = settlement_result_payload(supersede_readback.identity)
+                payload["settlement_result"] = settlement_result_payload(
+                    supersede_readback.identity
+                )
         elif args.todo_command == "archive-completed":
             validate_todo_archive_completed_options(args)
             payload = archive_completed_todos(
@@ -1064,9 +801,10 @@ def handle_todo_command(
             payload["goal_ref"] = dict(goal_ref)
     except Exception as exc:
         from ..usage_ping import capture_failure
+
         capture_failure(exc)
         payload = todo_error_payload(
-            args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg
         )
     if (
         args.todo_command == "complete"
@@ -1074,7 +812,9 @@ def handle_todo_command(
         and settlement_identity is None
         and isinstance(payload.get("settlement_identity"), dict)
     ):
-        settlement_identity = SettlementIdentity.from_runtime_payload(payload["settlement_identity"])
+        settlement_identity = SettlementIdentity.from_runtime_payload(
+            payload["settlement_identity"]
+        )
     append_todo_rollout_event(
         payload,
         args=args,
@@ -1089,52 +829,14 @@ def handle_todo_command(
         and settlement_identity is not None
         and not payload.get("dry_run")
     ):
-        runtime_root = resolve_runtime_root(
-            load_registry(registry_path),
-            runtime_root_arg,
-        )
-        settlement_readback = read_heartbeat_settlement(
-            runtime_root,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            todo_id=args.todo_id,
-            turn_instance_id=settlement_identity.turn_instance_id,
+        reconcile_todo_complete_settlement(
+            payload,
+            args=args,
             registry_path=registry_path,
+            runtime_root_arg=runtime_root_arg,
             goal_ref=goal_ref,
+            settlement_identity=settlement_identity,
         )
-        if settlement_readback is None:
-            raise RuntimeError("exact settlement readback unexpectedly returned not-found")
-        settlement_result = (
-            settlement_readback.terminal_settlement
-            if payload.get("completion_continuation") == "no_followup" and settlement_identity is not None
-            else settlement_readback.identity
-        )
-        payload["settlement_result"] = settlement_result_payload(
-            settlement_result
-        )
-        if settlement_result.failure is not None:
-            payload["ok"] = False
-            payload["receipt_repair_required"] = True
-            payload["error"] = settlement_result.failure.reason
-        elif not args.no_follow_up:
-            attach_settlement_progress(
-                payload, settlement_readback, registry_path=registry_path,
-                runtime_root=runtime_root, goal_ref=goal_ref,
-            )
-            progress = settlement_readback.progress
-            assert progress is not None
-            if progress.get("next_step") == "durable_writeback":
-                identity = settlement_readback.identity.value
-                assert identity is not None
-                plan = _todo_settlement_plan(
-                    identity, args=args, registry_path=registry_path,
-                    runtime_root=runtime_root, goal_ref=goal_ref,
-                    quota_spend_source=progress["quota_spend_source"],
-                )
-                payload["settlement_plan"] = plan
-                payload["next_cli_actions"] = [settlement_step_command(
-                    plan, SettlementStepKind.DURABLE_WRITEBACK,
-                )]
     if (
         args.todo_command == "complete"
         and payload.get("ok")
@@ -1144,54 +846,17 @@ def handle_todo_command(
         and settlement_identity is not None
         and not getattr(args, "completion_identity_key", None)
     ):
-        identity = settlement_identity.as_dict()
-        committed_at = str(payload.get("updated_at") or "").strip()
-        receipt_id = payload.get("completion_receipt_id")
-        if committed_at:
-            try:
-                admission = FirstPartyHostGoalAdmission.for_plan(
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    planned_goal_ref=goal_ref,
-                )
-                with admission.current_lifetime(
-                    operation="todo_post_writeback_hooks",
-                ):
-                    # The source lifetime lock keeps the journal evidence and
-                    # its consumers bound to the same exact Goal instance.
-                    observed = turn_journal_observed_capabilities(
-                        resolve_runtime_root(
-                            load_registry(registry_path),
-                            runtime_root_arg,
-                        ),
-                        settlement_identity=identity,
-                        goal_ref=goal_ref,
-                    )
-                    projected = runtime_capabilities_for_cli_projection(observed)
-                    if projected:
-                        payload["available_capabilities"] = projected
-                    payload["post_writeback_hooks"] = (
-                        dispatch_committed_cli_post_writeback_hooks(
-                            payload=payload,
-                            registry_path=registry_path,
-                            runtime_root_arg=runtime_root_arg,
-                            goal_id=args.goal_id,
-                            event_kind="todo_complete",
-                            identity=identity,
-                            state_version=receipt_id or committed_at,
-                            receipt_id=receipt_id,
-                            committed_at=committed_at,
-                            hooks=post_writeback_hooks,
-                            projection_builder=post_writeback_projection_builder,
-                        )
-                    )
-            except Exception:
-                # Optional post-writeback composition cannot invalidate or
-                # repeat the Todo completion that already committed above.
-                payload.pop("available_capabilities", None)
-                payload["post_writeback_hooks"] = post_writeback_source_failure(
-                    post_writeback_hooks
-                )
+        dispatch_todo_complete_post_writeback(
+            payload,
+            args=args,
+            registry_path=registry_path,
+            runtime_root_arg=runtime_root_arg,
+            goal_ref=goal_ref,
+            settlement_identity=settlement_identity,
+            post_writeback_hooks=post_writeback_hooks,
+            post_writeback_projection_builder=post_writeback_projection_builder,
+            admission_factory=FirstPartyHostGoalAdmission,
+        )
     output_format = format_name or str(getattr(args, "format", None) or "markdown")
     print_payload(
         payload,

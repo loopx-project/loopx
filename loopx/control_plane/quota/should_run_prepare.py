@@ -985,7 +985,7 @@ def _prepare_quota_should_run_item(
             active_next_action=(
                 item.get("active_state_next_action")
                 or (
-                    item.get("project_asset", {}).get("next_action")
+                    cast(dict[str, object], item.get("project_asset")).get("next_action")
                     if isinstance(item.get("project_asset"), dict)
                     else None
                 )

@@ -3,7 +3,7 @@ import test from "node:test";
 import {settlementPlanPayload} from "../../loopx/control_plane/effect_program.ts";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {projectMcpInteraction} from "../../loopx/control_plane/turn_driver/host_interaction.ts";
-import {completeCliSettlementChannel, composedCliSettlementChannel, nativeCliSettlementProjection, turnScopedCliSettlementPlan}
+import {completeCliSettlementChannel, composedCliSettlementChannel, nativeCliSettlementProjection, turnScopedCliSettlementPlan, turnScopedCliSettlementPlanPayload}
   from "../../loopx/control_plane/quota/settlement_plan.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../../loopx/control_plane/work_items/execution_preparation.ts";
 import {DELIVERY_OUTCOMES, decodeOptionalDeliveryOutcome, isTurnScopedSettlementOutcome}
@@ -18,6 +18,29 @@ const input = {
     quota_spend: "spend", terminal_closeout: "terminal completion",
   },
 };
+
+test("current Todo continuation composes the same plan and preserves historical rendering", () => {
+  const original = settlementPlanPayload(turnScopedCliSettlementPlan(input));
+  assert.deepEqual(turnScopedCliSettlementPlanPayload(input), original);
+  assert.deepEqual(turnScopedCliSettlementPlanPayload({...input, composed_settlement: false}), original);
+  const request = {...input, composed_settlement: true,
+    command_templates: {...input.command_templates, semantic_closeout: "semantic writeback"}};
+  const before = structuredClone(request);
+  const plan = turnScopedCliSettlementPlanPayload(request);
+  assert.equal(plan.schema_version, "quota_settlement_plan_v2");
+  assert.deepEqual(plan.identity, original.identity);
+  const steps = plan.ordered_steps as Record<string, unknown>[];
+  assert.deepEqual(steps.map(step => step.kind), ["validation", "durable_writeback", "quota_spend", "terminal_closeout"]);
+  assert.deepEqual(steps[0], (original.ordered_steps as object[])[0]);
+  assert.deepEqual(steps[3], (original.ordered_steps as object[])[3]);
+  assert.equal(steps[1].command_template, "writeback --settle-turn --settlement-receipt");
+  assert.equal(steps[1].semantic_closeout_command_template, "semantic writeback --settle-turn --settlement-receipt");
+  assert.equal(steps[2].owner, "runtime");
+  assert.equal(steps[2].command_template, undefined);
+  assert.deepEqual(request, before);
+  for (const composed_settlement of [null, "true", 1])
+    assert.throws(() => turnScopedCliSettlementPlanPayload({...input, composed_settlement}), /must be a boolean/);
+});
 
 test("native settlement only replaces matching executable steps on the original ready Turn", () => {
   const plan = settlementPlanPayload(turnScopedCliSettlementPlan(input));

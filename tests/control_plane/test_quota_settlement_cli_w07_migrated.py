@@ -4778,6 +4778,8 @@ def test_unclaimed_candidate_does_not_create_an_unsettled_work_obligation(
 def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     tmp_path: Path,
 ) -> None:
+    from tests.control_plane.test_quota_settlement_cli import _assert_composed_spend_source
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
 
@@ -4807,13 +4809,9 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
         "--turn-instance-id",
         turn_instance_id,
     )
-    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
-    assert plan["identity"] == identity
-    assert "--source visible-goal" in next(
-        step["command_template"]
-        for step in plan["ordered_steps"]
-        if step["kind"] == "quota_spend"
-    )
+    cli_channel = guard["interaction_contract"]["cli_channel"]
+    assert cli_channel["settlement_plan"]["identity"] == identity
+    _assert_composed_spend_source(cli_channel, runtime, turn_instance_id, "visible-goal")
 
     refresh_rc, refresh = _run_cli(
         registry_path,

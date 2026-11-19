@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
@@ -180,7 +181,7 @@ def _display_git_path(path: bytes | str) -> str:
         return repr(path)
 
 
-def _display_git_paths(paths: list[bytes | str]) -> list[str]:
+def _display_git_paths(paths: Sequence[bytes | str]) -> list[str]:
     return [_display_git_path(path) for path in paths]
 
 

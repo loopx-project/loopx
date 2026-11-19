@@ -21,7 +21,6 @@ from .chat import (
     CHAT_REVIEW_CLOSE_TAG,
     CHAT_REVIEW_OPEN_TAG,
     VisibleResponseStreamFilter,
-    parse_agent_response,
 )
 
 
@@ -500,6 +499,7 @@ def _turn_prompt(
     runtime_profile: str = "restricted",
     project_work: bool = False,
     public_source_read_context: str = "",
+    reply_image_directory: Path | None = None,
 ) -> str:
     direct_work = runtime_profile == "trusted_owner" and not execution_mode and not project_work
     try:
@@ -561,6 +561,14 @@ def _turn_prompt(
         + planning_limits
         + trusted_manager_limits
         + public_source_read_context
+        + (
+            "If the requested reply includes images you create or capture for this Turn, "
+            f"save only those images in the existing workspace under {reply_image_directory} "
+            "and reference them in the final Markdown answer using their absolute paths. "
+            "Use PNG, JPEG, GIF or WebP, up to four images, 5 MiB each and 12 MiB combined. "
+            "Keep captions and order, and explain if an image could not be captured. "
+            if reply_image_directory is not None else ""
+        )
         + (
             "For explanation-only repository questions, batch independent initial reads of applicable project instructions with focused searches of current documentation and the owning code. "
             "When the project root and search terms are already supplied, avoid a separate working-directory check or broad file inventory. Use an output budget that retains complete applicable instructions, then fetch only relevant documentation and source sections. "
@@ -1763,18 +1771,24 @@ class CodexChatAgentSession:
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
         check_running: Callable[[], None] | None = None,
+        reply_image_turn_id: str | None = None,
         _native_task: bool = False,
         sandbox_policy: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         if not _native_task and (self._native_task_policy_used or self._managed_goal_read_default) and sandbox_policy is None:
             sandbox_policy = {"type": "readOnly", "networkAccess": False}
-        from .capabilities.native_chat.codex_adapter import prepare_native_turn_text
+        from .capabilities.native_chat.codex_adapter import native_turn_response, prepare_native_turn_text
         text, output_schema = prepare_native_turn_text(self, user_message, output_schema=output_schema,
             project_collaboration=project_collaboration, native_task=_native_task,
             sandbox_policy=sandbox_policy, turn_start_guard=turn_start_guard)
         with self._request_id_lock:
             request_id = self.next_request_id
             self.next_request_id += 1
+        image_dir = None
+        if reply_image_turn_id is not None:
+            from .capabilities.native_chat.file_discovery import reply_image_directory
+
+            image_dir = self.work_dir.resolve() / reply_image_directory(reply_image_turn_id)
         if output_schema is None:
             text = _turn_prompt(
                 text,
@@ -1783,6 +1797,7 @@ class CodexChatAgentSession:
                 runtime_profile=self.runtime_profile,
                 project_work=self.project_context is not None and self.sandbox == "workspace-write",
                 public_source_read_context=self._public_source_read_context,
+                reply_image_directory=image_dir,
             )
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": text}]
         from .chat_attachments import native_attachment_inputs
@@ -2006,23 +2021,9 @@ class CodexChatAgentSession:
             visible_delta_count += 1
             on_event("answer.delta", {"text": visible_tail})
         raw_response = completed_agent_response if completed_agent_response is not None else "".join(parts)
-        if output_schema is not None:
-            try:
-                result = json.loads(raw_response)
-            except (ValueError, TypeError) as exc:
-                raise self._runtime_error(
-                    "Codex Turn did not return structured output."
-                ) from exc
-            if not isinstance(result, dict):
-                raise self._runtime_error("Codex Turn output is not an object.")
-            self.current_turn_id = ""
-            return result
-        response = parse_agent_response(
-            raw_response,
-            protected_paths=[self.work_dir],
-            team_plan_context=getattr(self, "team_plan_context", None),
-        )
-        if on_event:
+        response = native_turn_response(self, raw_response, output_schema=output_schema,
+                                        reply_image_turn_id=reply_image_turn_id)
+        if output_schema is None and on_event:
             if (
                 CHAT_REVIEW_OPEN_TAG not in raw_response
                 or CHAT_REVIEW_CLOSE_TAG not in raw_response

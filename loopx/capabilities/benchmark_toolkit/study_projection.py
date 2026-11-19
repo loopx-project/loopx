@@ -4,36 +4,40 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import statistics
 import tempfile
-from collections.abc import Iterable, Mapping
-from datetime import datetime
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
-from ...file_lock import exclusive_file_lock
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
+from ...file_lock import exclusive_file_lock
 from .experiment_board import (
     BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
+    _finite_number,
+    _optional_token,
+    _reject_unknown_fields,
+    _timestamp,
     benchmark_experiment_board_row_key,
     benchmark_run_status_is_terminal,
     build_benchmark_experiment_board,
     normalize_benchmark_experiment_board_row,
     preview_benchmark_experiment_board_upsert,
 )
-from .factorial_contrast import benchmark_metric_comparison_value
 from .experiment_identity import (
     ARM_ROLES,
     experiment_run_key,
     experiment_token_text as _token,
 )
+from .factorial_contrast import benchmark_metric_comparison_value
 from .four_arm_contract import BENCHMARK_FOUR_ARM_CONTRACT_SCHEMA_VERSION
 from .runtime_observation import (
     BENCHMARK_RUNTIME_OBSERVATION_SCHEMA_VERSION,
     build_benchmark_runtime_observation,
 )
+
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 BENCHMARK_STUDY_MANIFEST_SCHEMA_VERSION = "benchmark_study_manifest_v0"
 BENCHMARK_UPLOAD_ENVELOPE_SCHEMA_VERSION = "benchmark_upload_envelope_v0"
@@ -58,39 +62,37 @@ _CONFIDENCE_LEVELS = {"low", "medium", "high"}
 _EXPECTEDNESS = {"expected", "unexpected", "mixed", "unknown"}
 
 
-def _reject_unknown_fields(
-    payload: Mapping[str, Any], *, allowed: set[str], field: str
-) -> None:
-    unknown = sorted(set(payload) - allowed)
-    if unknown:
-        raise ValueError(f"{field} contains unsupported fields: {', '.join(unknown)}")
+def _as_map(value: object) -> Payload:
+    return {str(k): v for k, v in value.items()} if isinstance(value, Mapping) else {}
 
 
-def _optional_token(value: Any, *, field: str) -> str | None:
-    if value in (None, ""):
-        return None
-    return _token(value, field=field)
+def _as_map_list(value: object) -> list[Payload]:
+    return (
+        [_as_map(item) for item in value if isinstance(item, Mapping)]
+        if isinstance(value, list)
+        else []
+    )
 
 
-def _timestamp(value: Any, *, field: str) -> str:
-    text = str(value or "").strip()
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError as exc:
-        raise ValueError(f"{field} must be an ISO-8601 timestamp") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"{field} must include a timezone")
-    return parsed.isoformat()
+def _as_int(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _bounded_text(value: Any, *, field: str, limit: int = 600) -> str:
+def _sorted_value_counts(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _bounded_text(value: object, *, field: str, limit: int = 600) -> str:
     text = str(value or "").strip()
     if not text or len(text) > limit or "\x00" in text:
         raise ValueError(f"{field} must be bounded non-empty text")
     return text
 
 
-def _canonical_digest(payload: Mapping[str, Any]) -> str:
+def _canonical_digest(payload: PayloadView) -> str:
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -100,15 +102,7 @@ def _canonical_digest(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _finite_number(value: Any, *, field: str) -> float | int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"{field} must be numeric")
-    if not math.isfinite(float(value)):
-        raise ValueError(f"{field} must be finite")
-    return value
-
-
-def _public_scalar(value: Any, *, field: str) -> str | int | float | bool:
+def _public_scalar(value: object, *, field: str) -> str | int | float | bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -116,12 +110,12 @@ def _public_scalar(value: Any, *, field: str) -> str | int | float | bool:
     return _token(value, field=field)
 
 
-def _normalize_extension_metadata(value: Any) -> dict[str, Any]:
+def _normalize_extension_metadata(value: object) -> Payload:
     if value in (None, {}):
         return {}
     if not isinstance(value, Mapping) or len(value) > 16:
         raise TypeError("extension_metadata must be a small object")
-    output: dict[str, Any] = {}
+    output: Payload = {}
     for raw_key, raw_value in value.items():
         key = _token(raw_key, field="extension_metadata key")
         if isinstance(raw_value, list):
@@ -137,8 +131,8 @@ def _normalize_extension_metadata(value: Any) -> dict[str, Any]:
 
 
 def normalize_benchmark_study_manifest(
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
+    payload: PayloadView,
+) -> Payload:
     """Validate a reusable study declaration without adding scoring authority."""
 
     if not isinstance(payload, Mapping):
@@ -171,12 +165,13 @@ def normalize_benchmark_study_manifest(
     case_set = payload.get("case_set")
     if not isinstance(case_set, Mapping):
         raise TypeError("case_set must be an object")
+    case_set_view = _as_map(case_set)
     _reject_unknown_fields(
-        case_set,
+        case_set_view,
         allowed={"case_set_id", "case_ids"},
         field="case_set",
     )
-    raw_case_ids = case_set.get("case_ids")
+    raw_case_ids = case_set_view.get("case_ids")
     if (
         not isinstance(raw_case_ids, list)
         or not raw_case_ids
@@ -190,18 +185,19 @@ def normalize_benchmark_study_manifest(
     raw_factors = payload.get("factors")
     if not isinstance(raw_factors, list) or not (1 <= len(raw_factors) <= 16):
         raise ValueError("factors must contain 1 to 16 entries")
-    factors: list[dict[str, Any]] = []
+    factors: list[Payload] = []
     levels_by_factor: dict[str, set[str]] = {}
     for raw_factor in raw_factors:
         if not isinstance(raw_factor, Mapping):
             raise TypeError("factors entries must be objects")
+        factor_view = _as_map(raw_factor)
         _reject_unknown_fields(
-            raw_factor,
+            factor_view,
             allowed={"factor_id", "levels"},
             field="factor",
         )
-        factor_id = _token(raw_factor.get("factor_id"), field="factor.factor_id")
-        raw_levels = raw_factor.get("levels")
+        factor_id = _token(factor_view.get("factor_id"), field="factor.factor_id")
+        raw_levels = factor_view.get("levels")
         if not isinstance(raw_levels, list) or not (2 <= len(raw_levels) <= 16):
             raise ValueError("factor.levels must contain 2 to 16 levels")
         levels = [_token(item, field="factor.levels") for item in raw_levels]
@@ -213,22 +209,23 @@ def normalize_benchmark_study_manifest(
     raw_arms = payload.get("arms")
     if not isinstance(raw_arms, list) or not (2 <= len(raw_arms) <= 32):
         raise ValueError("arms must contain 2 to 32 entries")
-    arms: list[dict[str, Any]] = []
+    arms: list[Payload] = []
     arm_ids: set[str] = set()
     assignments_seen: set[tuple[tuple[str, str], ...]] = set()
     for raw_arm in raw_arms:
         if not isinstance(raw_arm, Mapping):
             raise TypeError("arms entries must be objects")
+        arm_view = _as_map(raw_arm)
         _reject_unknown_fields(
-            raw_arm,
+            arm_view,
             allowed={"arm_id", "arm_role", "factor_assignments"},
             field="arm",
         )
-        arm_id = _token(raw_arm.get("arm_id"), field="arm.arm_id")
-        arm_role = _token(raw_arm.get("arm_role"), field="arm.arm_role")
+        arm_id = _token(arm_view.get("arm_id"), field="arm.arm_id")
+        arm_role = _token(arm_view.get("arm_role"), field="arm.arm_role")
         if arm_role not in ARM_ROLES:
             raise ValueError("arm.arm_role is unsupported")
-        raw_assignments = raw_arm.get("factor_assignments")
+        raw_assignments = arm_view.get("factor_assignments")
         if not isinstance(raw_assignments, Mapping):
             raise TypeError("arm.factor_assignments must be an object")
         if set(raw_assignments) != set(levels_by_factor):
@@ -265,34 +262,35 @@ def normalize_benchmark_study_manifest(
     raw_metrics = payload.get("metrics")
     if not isinstance(raw_metrics, list) or not (1 <= len(raw_metrics) <= 16):
         raise ValueError("metrics must contain 1 to 16 entries")
-    metrics: list[dict[str, Any]] = []
+    metrics: list[Payload] = []
     metric_names: set[str] = set()
     for raw_metric in raw_metrics:
         if not isinstance(raw_metric, Mapping):
             raise TypeError("metrics entries must be objects")
+        metric_view = _as_map(raw_metric)
         _reject_unknown_fields(
-            raw_metric,
+            metric_view,
             allowed={"metric_name", "role", "unit", "higher_is_better", "binary"},
             field="metric",
         )
-        metric_name = _token(raw_metric.get("metric_name"), field="metric.metric_name")
-        role = _token(raw_metric.get("role"), field="metric.role")
+        metric_name = _token(metric_view.get("metric_name"), field="metric.metric_name")
+        role = _token(metric_view.get("role"), field="metric.role")
         if role not in _METRIC_ROLES:
             raise ValueError("metric.role is unsupported")
-        higher_is_better = raw_metric.get("higher_is_better")
-        binary = raw_metric.get("binary", False)
+        higher_is_better = metric_view.get("higher_is_better")
+        binary = metric_view.get("binary", False)
         if not isinstance(higher_is_better, bool) or not isinstance(binary, bool):
             raise TypeError("metric direction and binary flags must be boolean")
         if metric_name in metric_names:
             raise ValueError("metric names must be unique")
         metric_names.add(metric_name)
-        metric = {
+        metric: Payload = {
             "metric_name": metric_name,
             "role": role,
             "higher_is_better": higher_is_better,
             "binary": binary,
         }
-        unit = _optional_token(raw_metric.get("unit"), field="metric.unit")
+        unit = _optional_token(metric_view.get("unit"), field="metric.unit")
         if unit is not None:
             metric["unit"] = unit
         metrics.append(metric)
@@ -311,13 +309,14 @@ def normalize_benchmark_study_manifest(
     for raw_revision in raw_revisions:
         if not isinstance(raw_revision, Mapping):
             raise TypeError("source_revisions entries must be objects")
+        revision_view = _as_map(raw_revision)
         _reject_unknown_fields(
-            raw_revision,
+            revision_view,
             allowed={"component", "revision"},
             field="source_revision",
         )
         component = _token(
-            raw_revision.get("component"), field="source_revision.component"
+            revision_view.get("component"), field="source_revision.component"
         )
         if component in revision_components:
             raise ValueError("source revision components must be unique")
@@ -326,7 +325,7 @@ def normalize_benchmark_study_manifest(
             {
                 "component": component,
                 "revision": _token(
-                    raw_revision.get("revision"), field="source_revision.revision"
+                    revision_view.get("revision"), field="source_revision.revision"
                 ),
             }
         )
@@ -351,7 +350,7 @@ def normalize_benchmark_study_manifest(
         ),
         "case_set": {
             "case_set_id": _token(
-                case_set.get("case_set_id"), field="case_set.case_set_id"
+                case_set_view.get("case_set_id"), field="case_set.case_set_id"
             ),
             "case_ids": case_ids,
         },
@@ -369,8 +368,8 @@ def normalize_benchmark_study_manifest(
 
 
 def normalize_benchmark_case_insight_projection(
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
+    payload: PayloadView,
+) -> Payload:
     """Validate a redacted post-run insight; raw evidence has no schema slot."""
 
     if not isinstance(payload, Mapping):
@@ -396,10 +395,7 @@ def normalize_benchmark_case_insight_projection(
         },
         field="case insight projection",
     )
-    if (
-        payload.get("schema_version")
-        != BENCHMARK_CASE_INSIGHT_PROJECTION_SCHEMA_VERSION
-    ):
+    if payload.get("schema_version") != BENCHMARK_CASE_INSIGHT_PROJECTION_SCHEMA_VERSION:
         raise ValueError("benchmark case insight projection schema mismatch")
     if payload.get("privacy_classification") != "public_safe":
         raise ValueError("case insight projection must be public_safe")
@@ -439,43 +435,66 @@ def normalize_benchmark_case_insight_projection(
     }
 
 
-def _normalize_runtime_observation(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _require_bool_arg(value: object, *, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{field}_must_be_boolean")
+    return value
+
+
+def _require_str_arg(value: object, *, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"invalid_{field}")
+    return value
+
+
+def _normalize_runtime_observation(payload: PayloadView) -> Payload:
     if payload.get("schema_version") != BENCHMARK_RUNTIME_OBSERVATION_SCHEMA_VERSION:
         raise ValueError("benchmark runtime observation schema mismatch")
     normalized = build_benchmark_runtime_observation(
-        admission_active=payload.get("admission_active"),
-        job_receipt_state=payload.get("job_receipt_state"),
-        runner_owner_state=payload.get("runner_owner_state"),
-        terminal_result_present=payload.get("terminal_result_present"),
-        typed_fatal_runner_error=payload.get("typed_fatal_runner_error"),
+        admission_active=_require_bool_arg(
+            payload.get("admission_active"), field="admission_active"
+        ),
+        job_receipt_state=_require_str_arg(
+            payload.get("job_receipt_state"), field="job_receipt_state"
+        ),
+        runner_owner_state=_require_str_arg(
+            payload.get("runner_owner_state"), field="runner_owner_state"
+        ),
+        terminal_result_present=_require_bool_arg(
+            payload.get("terminal_result_present"), field="terminal_result_present"
+        ),
+        typed_fatal_runner_error=_require_bool_arg(
+            payload.get("typed_fatal_runner_error"), field="typed_fatal_runner_error"
+        ),
     )
     if dict(payload) != normalized:
         raise ValueError(
             "runtime observation must match the canonical public projection"
         )
-    return normalized
+    return dict(normalized)
 
 
-def _normalize_record_payload(record_kind: str, payload: Any) -> dict[str, Any]:
+def _normalize_record_payload(record_kind: str, payload: object) -> Payload:
     if not isinstance(payload, Mapping):
         raise TypeError("upload payload must be an object")
+    payload_view = _as_map(payload)
     if record_kind == "study_manifest":
-        return normalize_benchmark_study_manifest(payload)
+        return normalize_benchmark_study_manifest(payload_view)
     if record_kind == "experiment_board_row":
-        return normalize_benchmark_experiment_board_row(payload)
+        return normalize_benchmark_experiment_board_row(payload_view)
     if record_kind == "case_insight_projection":
-        return normalize_benchmark_case_insight_projection(payload)
+        return normalize_benchmark_case_insight_projection(payload_view)
     if record_kind == "runtime_observation":
-        return _normalize_runtime_observation(payload)
+        return _normalize_runtime_observation(payload_view)
     if record_kind == "behavior_finding":
         from .behavior_finding import normalize_benchmark_behavior_finding
 
-        return normalize_benchmark_behavior_finding(payload)
+        return dict(normalize_benchmark_behavior_finding(payload_view))
     raise ValueError("upload record kind is unsupported")
 
 
 def build_benchmark_upload_envelope(
-    payload: Mapping[str, Any],
+    payload: object,
     *,
     record_kind: str,
     producer_id: str,
@@ -485,8 +504,8 @@ def build_benchmark_upload_envelope(
     idempotency_key: str,
     observed_at: str,
     source_revision: str,
-    supersedes_record_id: str | None = None,
-) -> dict[str, Any]:
+    supersedes_record_id: object = None,
+) -> Payload:
     """Build one digest-bound envelope. No provider or network call occurs."""
 
     kind = _token(record_kind, field="record_kind")
@@ -510,7 +529,7 @@ def build_benchmark_upload_envelope(
     record_id = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:24]
-    envelope: dict[str, Any] = {
+    envelope: Payload = {
         "schema_version": BENCHMARK_UPLOAD_ENVELOPE_SCHEMA_VERSION,
         "record_id": record_id,
         "producer_id": identity["producer_id"],
@@ -532,12 +551,13 @@ def build_benchmark_upload_envelope(
 
 
 def normalize_benchmark_upload_envelope(
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
+    payload: object,
+) -> Payload:
     if not isinstance(payload, Mapping):
         raise TypeError("benchmark upload envelope must be an object")
+    view = _as_map(payload)
     _reject_unknown_fields(
-        payload,
+        view,
         allowed={
             "schema_version",
             "record_id",
@@ -556,34 +576,34 @@ def normalize_benchmark_upload_envelope(
         },
         field="upload envelope",
     )
-    if payload.get("schema_version") != BENCHMARK_UPLOAD_ENVELOPE_SCHEMA_VERSION:
+    if view.get("schema_version") != BENCHMARK_UPLOAD_ENVELOPE_SCHEMA_VERSION:
         raise ValueError("benchmark upload envelope schema mismatch")
-    if payload.get("privacy_classification") != "public_safe":
+    if view.get("privacy_classification") != "public_safe":
         raise ValueError("benchmark upload envelope must be public_safe")
     rebuilt = build_benchmark_upload_envelope(
-        payload.get("payload"),
-        record_kind=str(payload.get("record_kind") or ""),
-        producer_id=str(payload.get("producer_id") or ""),
-        producer_version=str(payload.get("producer_version") or ""),
-        benchmark_id=str(payload.get("benchmark_id") or ""),
-        study_id=str(payload.get("study_id") or ""),
-        idempotency_key=str(payload.get("idempotency_key") or ""),
-        observed_at=str(payload.get("observed_at") or ""),
-        source_revision=str(payload.get("source_revision") or ""),
-        supersedes_record_id=payload.get("supersedes_record_id"),
+        view.get("payload"),
+        record_kind=str(view.get("record_kind") or ""),
+        producer_id=str(view.get("producer_id") or ""),
+        producer_version=str(view.get("producer_version") or ""),
+        benchmark_id=str(view.get("benchmark_id") or ""),
+        study_id=str(view.get("study_id") or ""),
+        idempotency_key=str(view.get("idempotency_key") or ""),
+        observed_at=str(view.get("observed_at") or ""),
+        source_revision=str(view.get("source_revision") or ""),
+        supersedes_record_id=view.get("supersedes_record_id"),
     )
-    if payload.get("record_id") != rebuilt["record_id"]:
+    if view.get("record_id") != rebuilt["record_id"]:
         raise ValueError("benchmark upload record_id does not match envelope identity")
-    digest = str(payload.get("payload_digest") or "")
+    digest = str(view.get("payload_digest") or "")
     if not BARE_SHA256_PATTERN.fullmatch(digest) or digest != rebuilt["payload_digest"]:
         raise ValueError("benchmark upload payload digest mismatch")
     return rebuilt
 
 
-def _read_jsonl_objects(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl_objects(path: Path) -> list[Payload]:
     if not path.exists():
         return []
-    rows: list[dict[str, Any]] = []
+    rows: list[Payload] = []
     for index, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
         if not line.strip():
             continue
@@ -593,14 +613,14 @@ def _read_jsonl_objects(path: Path) -> list[dict[str, Any]]:
             raise ValueError(f"invalid local upload JSONL row {index}") from exc
         if not isinstance(row, dict):
             raise TypeError(f"invalid local upload JSONL row {index}")
-        rows.append(row)
+        rows.append(_as_map(row))
     return rows
 
 
 def read_benchmark_local_upload_records(
     store_path: str | Path,
-) -> list[dict[str, Any]]:
-    records = []
+) -> list[Payload]:
+    records: list[Payload] = []
     for row in _read_jsonl_objects(Path(store_path).expanduser()):
         _reject_unknown_fields(
             row,
@@ -619,30 +639,31 @@ def read_benchmark_local_upload_records(
                 "envelope": normalize_benchmark_upload_envelope(row.get("envelope")),
             }
         )
-    if [row["provider_revision"] for row in records] != list(
+    if [_as_int(row["provider_revision"]) for row in records] != list(
         range(1, len(records) + 1)
     ):
         raise ValueError("local upload provider revisions must be contiguous")
     return records
 
 
-def _same_board_row(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+def _same_board_row(left: PayloadView, right: PayloadView) -> bool:
     return benchmark_experiment_board_row_key(
         left
     ) == benchmark_experiment_board_row_key(right)
 
 
 def _validate_case_insight_attachment(
-    envelope: Mapping[str, Any], active_envelopes: Iterable[Mapping[str, Any]]
+    envelope: PayloadView, active_envelopes: Iterable[PayloadView]
 ) -> None:
     if envelope["record_kind"] != "case_insight_projection":
         return
-    insight = envelope["payload"]
+    insight = _as_map(envelope["payload"])
     board_rows = [
-        candidate["payload"]
+        _as_map(candidate["payload"])
         for candidate in active_envelopes
         if candidate["record_kind"] == "experiment_board_row"
-        and experiment_run_key(candidate["payload"]) == experiment_run_key(insight)
+        and experiment_run_key(_as_map(candidate["payload"]))
+        == experiment_run_key(insight)
     ]
     if len(board_rows) != 1:
         raise ValueError(
@@ -653,14 +674,14 @@ def _validate_case_insight_attachment(
         raise ValueError("case-insight upload requires a terminal run")
     if run["status"] != insight["outcome_status"]:
         raise ValueError("case insight outcome does not match its terminal run")
-    if run["insight"]["status"] != "complete":
+    if _as_map(run.get("insight")).get("status") != "complete":
         raise ValueError(
             "case-insight upload requires complete post-run analysis status"
         )
 
 
 def _validate_case_insight_attachments(
-    records: Iterable[Mapping[str, Any]],
+    records: Iterable[PayloadView],
 ) -> None:
     active_envelopes = _active_envelopes(records)
     for envelope in active_envelopes:
@@ -668,17 +689,18 @@ def _validate_case_insight_attachments(
 
 
 def _validate_supersession(
-    envelope: Mapping[str, Any], records: list[dict[str, Any]]
+    envelope: PayloadView, records: Sequence[PayloadView]
 ) -> None:
-    by_id = {row["envelope"]["record_id"]: row for row in records}
+    envelopes = [_as_map(row.get("envelope")) for row in records]
+    by_id = {str(item["record_id"]): item for item in envelopes}
     supersedes = envelope.get("supersedes_record_id")
-    prior = by_id.get(supersedes) if supersedes else None
+    prior = by_id.get(str(supersedes)) if isinstance(supersedes, str) and supersedes else None
     if envelope["record_kind"] == "study_manifest" and any(
-        row["envelope"]["record_kind"] == "study_manifest"
-        and row["envelope"]["benchmark_id"] == envelope["benchmark_id"]
-        and row["envelope"]["study_id"] == envelope["study_id"]
-        and row["envelope"]["record_id"] != envelope["record_id"]
-        for row in records
+        item["record_kind"] == "study_manifest"
+        and item["benchmark_id"] == envelope["benchmark_id"]
+        and item["study_id"] == envelope["study_id"]
+        and item["record_id"] != envelope["record_id"]
+        for item in envelopes
     ):
         raise ValueError(
             "study manifest comparison intent is immutable; use a new study_id"
@@ -688,51 +710,52 @@ def _validate_supersession(
     if supersedes == envelope["record_id"]:
         raise ValueError("an upload record cannot supersede itself")
     superseded_ids = {
-        row["envelope"]["supersedes_record_id"]
-        for row in records
-        if row["envelope"].get("supersedes_record_id")
+        item["supersedes_record_id"]
+        for item in envelopes
+        if item.get("supersedes_record_id")
     }
     if supersedes in superseded_ids:
         raise ValueError("upload must supersede the current active record")
+    envelope_payload = _as_map(envelope["payload"])
     if prior is not None:
-        old = prior["envelope"]
         for field in ("producer_id", "benchmark_id", "study_id", "record_kind"):
-            if old[field] != envelope[field]:
+            if prior[field] != envelope[field]:
                 raise ValueError("supersession identity does not match prior record")
+        old_payload = _as_map(prior["payload"])
         if envelope["record_kind"] == "experiment_board_row":
-            if not _same_board_row(old["payload"], envelope["payload"]):
+            if not _same_board_row(old_payload, envelope_payload):
                 raise ValueError("board-row supersession must preserve run identity")
-            preview_benchmark_experiment_board_upsert(
-                [old["payload"]], envelope["payload"]
-            )
+            preview_benchmark_experiment_board_upsert([old_payload], envelope_payload)
         elif envelope["record_kind"] == "case_insight_projection":
             for field in ("case_id", "run_id"):
-                if old["payload"][field] != envelope["payload"][field]:
+                if old_payload[field] != envelope_payload[field]:
                     raise ValueError(
                         "case-insight supersession must preserve case and run identity"
                     )
         elif envelope["record_kind"] == "behavior_finding":
-            if old["payload"]["finding_id"] != envelope["payload"]["finding_id"]:
+            if old_payload["finding_id"] != envelope_payload["finding_id"]:
                 raise ValueError("finding supersession must preserve finding identity")
 
     if envelope["record_kind"] == "behavior_finding":
         related = [
-            e for e in _active_envelopes(records)
-            if e["record_kind"] == "behavior_finding"
-            and e["benchmark_id"] == envelope["benchmark_id"]
-            and e["study_id"] == envelope["study_id"]
-            and e["payload"]["finding_id"] == envelope["payload"]["finding_id"]
+            item
+            for item in _active_envelopes(records)
+            if item["record_kind"] == "behavior_finding"
+            and item["benchmark_id"] == envelope["benchmark_id"]
+            and item["study_id"] == envelope["study_id"]
+            and _as_map(item["payload"]).get("finding_id")
+            == envelope_payload.get("finding_id")
         ]
-        if related and supersedes not in {e["record_id"] for e in related}:
+        if related and supersedes not in {item["record_id"] for item in related}:
             raise ValueError("changed finding upload requires explicit supersession")
 
     if envelope["record_kind"] == "experiment_board_row":
         related = [
-            row["envelope"]
-            for row in records
-            if row["envelope"]["record_kind"] == "experiment_board_row"
-            and _same_board_row(row["envelope"]["payload"], envelope["payload"])
-            and row["envelope"]["record_id"] != envelope["record_id"]
+            item
+            for item in envelopes
+            if item["record_kind"] == "experiment_board_row"
+            and _same_board_row(_as_map(item["payload"]), envelope_payload)
+            and item["record_id"] != envelope["record_id"]
         ]
         if related and not supersedes:
             raise ValueError("changed board-row upload requires explicit supersession")
@@ -742,8 +765,8 @@ def _validate_supersession(
 
 
 def _receipt(
-    envelope: Mapping[str, Any], *, revision: int, disposition: str, wrote: bool
-) -> dict[str, Any]:
+    envelope: PayloadView, *, revision: int, disposition: str, wrote: bool
+) -> Payload:
     return {
         "ok": True,
         "schema_version": BENCHMARK_UPLOAD_READBACK_RECEIPT_SCHEMA_VERSION,
@@ -759,41 +782,48 @@ def _receipt(
     }
 
 
+def _resolve_upload_candidate(
+    path: Path, normalized: PayloadView
+) -> tuple[list[Payload], Payload | None]:
+    records = read_benchmark_local_upload_records(path)
+    existing = next(
+        (
+            row
+            for row in records
+            if _as_map(row.get("envelope")).get("record_id") == normalized["record_id"]
+        ),
+        None,
+    )
+    if existing is not None:
+        stored = _as_map(existing["envelope"])
+        if (
+            stored["record_kind"] != normalized["record_kind"]
+            or stored["payload_digest"] != normalized["payload_digest"]
+        ):
+            raise ValueError("idempotency key was reused with different content")
+        return records, _receipt(
+            stored,
+            revision=_as_int(existing["provider_revision"]),
+            disposition="replayed",
+            wrote=False,
+        )
+    _validate_supersession(normalized, records)
+    return records, None
+
+
 def simulate_benchmark_upload(
     store_path: str | Path,
-    envelope: Mapping[str, Any],
+    envelope: PayloadView,
     *,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     """Preview or append to an explicit local JSONL provider simulation."""
 
     normalized = normalize_benchmark_upload_envelope(envelope)
     path = Path(store_path).expanduser()
     if not execute:
-        records = read_benchmark_local_upload_records(path)
-        existing = next(
-            (
-                row
-                for row in records
-                if row["envelope"]["record_id"] == normalized["record_id"]
-            ),
-            None,
-        )
-        if existing is not None:
-            stored = existing["envelope"]
-            if (
-                stored["record_kind"] != normalized["record_kind"]
-                or stored["payload_digest"] != normalized["payload_digest"]
-            ):
-                raise ValueError("idempotency key was reused with different content")
-            return _receipt(
-                stored,
-                revision=existing["provider_revision"],
-                disposition="replayed",
-                wrote=False,
-            )
-        _validate_supersession(normalized, records)
-        return _receipt(
+        records, replay = _resolve_upload_candidate(path, normalized)
+        return replay or _receipt(
             normalized,
             revision=len(records) + 1,
             disposition="preview_accepted",
@@ -802,32 +832,13 @@ def simulate_benchmark_upload(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(path):
-        records = read_benchmark_local_upload_records(path)
-        existing = next(
-            (
-                row
-                for row in records
-                if row["envelope"]["record_id"] == normalized["record_id"]
-            ),
-            None,
-        )
-        if existing is not None:
-            stored = existing["envelope"]
-            if (
-                stored["record_kind"] != normalized["record_kind"]
-                or stored["payload_digest"] != normalized["payload_digest"]
-            ):
-                raise ValueError("idempotency key was reused with different content")
-            return _receipt(
-                stored,
-                revision=existing["provider_revision"],
-                disposition="replayed",
-                wrote=False,
-            )
-        _validate_supersession(normalized, records)
-        record = {
+        records, replay = _resolve_upload_candidate(path, normalized)
+        if replay is not None:
+            return replay
+        revision = len(records) + 1
+        record: Payload = {
             "schema_version": BENCHMARK_LOCAL_UPLOAD_RECORD_SCHEMA_VERSION,
-            "provider_revision": len(records) + 1,
+            "provider_revision": revision,
             "envelope": normalized,
         }
         rows = [*records, record]
@@ -849,7 +860,7 @@ def simulate_benchmark_upload(
         os.replace(temporary_name, path)
     return _receipt(
         normalized,
-        revision=record["provider_revision"],
+        revision=revision,
         disposition="accepted",
         wrote=True,
     )
@@ -857,25 +868,31 @@ def simulate_benchmark_upload(
 
 def read_benchmark_upload_receipt(
     store_path: str | Path, *, record_id: str
-) -> dict[str, Any]:
+) -> Payload:
     requested = _token(record_id, field="record_id")
     records = read_benchmark_local_upload_records(store_path)
     selected = next(
-        (row for row in records if row["envelope"]["record_id"] == requested), None
+        (
+            row
+            for row in records
+            if _as_map(row.get("envelope")).get("record_id") == requested
+        ),
+        None,
     )
     if selected is None:
         raise ValueError("benchmark upload record was not found")
+    selected_envelope = _as_map(selected["envelope"])
     superseded_by = next(
         (
-            row["envelope"]["record_id"]
+            str(_as_map(row.get("envelope")).get("record_id") or "")
             for row in records
-            if row["envelope"].get("supersedes_record_id") == requested
+            if _as_map(row.get("envelope")).get("supersedes_record_id") == requested
         ),
         None,
     )
     receipt = _receipt(
-        selected["envelope"],
-        revision=selected["provider_revision"],
+        selected_envelope,
+        revision=_as_int(selected["provider_revision"]),
         disposition="readback_verified",
         wrote=False,
     )
@@ -885,11 +902,13 @@ def read_benchmark_upload_receipt(
     return receipt
 
 
-def _active_envelopes(records: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    normalized = []
-    for row in records:
-        candidate = row.get("envelope") if "envelope" in row else row
-        normalized.append(normalize_benchmark_upload_envelope(candidate))
+def _active_envelopes(records: Iterable[PayloadView]) -> list[Payload]:
+    normalized = [
+        normalize_benchmark_upload_envelope(
+            row.get("envelope") if "envelope" in row else row
+        )
+        for row in records
+    ]
     superseded = {
         envelope["supersedes_record_id"]
         for envelope in normalized
@@ -901,7 +920,7 @@ def _active_envelopes(records: Iterable[Mapping[str, Any]]) -> list[dict[str, An
 
 
 def _validate_four_arm_manifest_alignment(
-    study: Mapping[str, Any], four_arm_contract: Mapping[str, Any]
+    study: PayloadView, four_arm_contract: PayloadView
 ) -> None:
     """Prevent a valid four-arm contract from being attached to another design."""
 
@@ -913,7 +932,10 @@ def _validate_four_arm_manifest_alignment(
     raw_arms = four_arm_contract.get("arms")
     if not isinstance(raw_arms, list):
         raise TypeError("four-arm contract arms must be a list")
-    study_arms = {arm["arm_id"]: arm["arm_role"] for arm in study["arms"]}
+    study_arms = {
+        str(arm["arm_id"]): str(arm["arm_role"])
+        for arm in _as_map_list(study.get("arms"))
+    }
     contract_arms = {
         str(arm.get("arm_id") or ""): str(arm.get("arm_role") or "")
         for arm in raw_arms
@@ -924,16 +946,21 @@ def _validate_four_arm_manifest_alignment(
 
 
 def _metric_aggregate(
-    rows: list[Mapping[str, Any]], metric_name: str
-) -> dict[str, Any]:
+    rows: Sequence[PayloadView], metric_name: str
+) -> Payload:
     metrics = [
-        row["metrics"][metric_name]
+        _as_map(row_metrics[metric_name])
         for row in rows
-        if metric_name in row.get("metrics", {})
+        if metric_name in (row_metrics := _as_map(row.get("metrics")))
     ]
-    values = [float(metric["value"]) for metric in metrics]
+    values = [
+        float(metric_value)
+        for metric in metrics
+        if isinstance(metric_value := metric.get("value"), (int, float))
+        and not isinstance(metric_value, bool)
+    ]
     totals = [metric.get("total") for metric in metrics]
-    result: dict[str, Any] = {
+    result: Payload = {
         "case_denominator": len(metrics),
         "value_sum": sum(values),
         "value_mean": statistics.fmean(values) if values else None,
@@ -941,12 +968,14 @@ def _metric_aggregate(
         "value_min": min(values) if values else None,
         "value_max": max(values) if values else None,
     }
-    if metrics and all(
-        isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0
+    typed_totals = [
+        float(total)
         for total in totals
-    ):
-        rates = [value / float(total) for value, total in zip(values, totals)]
-        total_sum = sum(float(total) for total in totals)
+        if isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0
+    ]
+    if metrics and len(typed_totals) == len(totals):
+        rates = [value / total for value, total in zip(values, typed_totals)]
+        total_sum = sum(typed_totals)
         result.update(
             {
                 "case_macro_rate": statistics.fmean(rates),
@@ -958,8 +987,8 @@ def _metric_aggregate(
     return result
 
 
-def _effort_aggregate(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
-    output: dict[str, Any] = {}
+def _effort_aggregate(rows: Sequence[PayloadView]) -> Payload:
+    output: Payload = {}
     for field in (
         "duration_ms",
         "agent_steps",
@@ -968,9 +997,10 @@ def _effort_aggregate(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
         "estimated_cost_usd",
     ):
         values = [
-            float(row["effort"][field])
+            float(val)
             for row in rows
-            if field in row.get("effort", {})
+            if isinstance(val := _as_map(row.get("effort")).get(field), (int, float))
+            and not isinstance(val, bool)
         ]
         output[field] = {
             "denominator": len(values),
@@ -981,11 +1011,11 @@ def _effort_aggregate(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def build_benchmark_study_dashboard(
-    manifest: Mapping[str, Any],
-    records: Iterable[Mapping[str, Any]],
+    manifest: PayloadView,
+    records: Iterable[PayloadView],
     *,
-    four_arm_contract: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    four_arm_contract: PayloadView | None = None,
+) -> Payload:
     """Derive a read-only data packet from one manifest and uploaded records."""
 
     study = normalize_benchmark_study_manifest(manifest)
@@ -998,7 +1028,7 @@ def build_benchmark_study_dashboard(
         and envelope["study_id"] == study["study_id"]
     ]
     uploaded_manifests = [
-        envelope["payload"]
+        _as_map(envelope["payload"])
         for envelope in envelopes
         if envelope["record_kind"] == "study_manifest"
     ]
@@ -1013,9 +1043,9 @@ def build_benchmark_study_dashboard(
         for envelope in envelopes
         if envelope["record_kind"] == "experiment_board_row"
     ]
-    board_rows = [envelope["payload"] for envelope in board_envelopes]
+    board_rows = [_as_map(envelope["payload"]) for envelope in board_envelopes]
     board_provenance = {
-        experiment_run_key(envelope["payload"]): {
+        experiment_run_key(_as_map(envelope["payload"])): {
             key: envelope[key]
             for key in (
                 "record_id",
@@ -1028,12 +1058,18 @@ def build_benchmark_study_dashboard(
         }
         for envelope in board_envelopes
     }
-    declared_cases = set(study["case_set"]["case_ids"])
-    arms_by_id = {arm["arm_id"]: arm for arm in study["arms"]}
-    metric_by_name = {metric["metric_name"]: metric for metric in study["metrics"]}
+    case_set = _as_map(study["case_set"])
+    raw_case_ids = case_set.get("case_ids")
+    declared_case_ids = [
+        str(cid) for cid in (raw_case_ids if isinstance(raw_case_ids, list) else [])
+    ]
+    declared_cases = set(declared_case_ids)
+    arms_by_id = {str(arm["arm_id"]): arm for arm in _as_map_list(study["arms"])}
+    study_metrics = _as_map_list(study["metrics"])
+    metric_by_name = {str(metric["metric_name"]): metric for metric in study_metrics}
     primary_metric = next(
-        metric["metric_name"]
-        for metric in study["metrics"]
+        str(metric["metric_name"])
+        for metric in study_metrics
         if metric["role"] == "primary"
     )
     for row in board_rows:
@@ -1041,15 +1077,17 @@ def build_benchmark_study_dashboard(
             raise ValueError("board row is outside manifest coverage")
         if row["primary_metric"] != primary_metric:
             raise ValueError("board row primary metric does not match manifest")
-        if set(row["metrics"]) - set(metric_by_name):
+        row_metrics = _as_map(row["metrics"])
+        if set(row_metrics) - set(metric_by_name):
             raise ValueError("board row includes a metric absent from manifest catalog")
-        for metric_name, value in row["metrics"].items():
+        for metric_name, raw_val in row_metrics.items():
+            value_map = _as_map(raw_val)
             declared = metric_by_name[metric_name]
-            if value.get("higher_is_better") != declared["higher_is_better"]:
+            if value_map.get("higher_is_better") != declared["higher_is_better"]:
                 raise ValueError("board row metric direction does not match manifest")
-            if value.get("unit") != declared.get("unit"):
+            if value_map.get("unit") != declared.get("unit"):
                 raise ValueError("board row metric unit does not match manifest")
-            if declared["binary"] and value["value"] not in {0, 1}:
+            if declared["binary"] and value_map.get("value") not in {0, 1}:
                 raise ValueError("binary benchmark metric must be 0 or 1")
         if row["comparison_protocol_id"] != study["comparison_protocol_id"]:
             raise ValueError("board row comparison protocol does not match manifest")
@@ -1060,110 +1098,87 @@ def build_benchmark_study_dashboard(
         if envelope["record_kind"] == "case_insight_projection"
     ]
     insights = {
-        experiment_run_key(envelope["payload"]): envelope["payload"]
+        experiment_run_key(_as_map(envelope["payload"])): _as_map(envelope["payload"])
         for envelope in insight_envelopes
     }
-    insight_records = [envelope["payload"] for envelope in insight_envelopes]
-    if len(insights) != len(insight_records):
+    if len(insights) != len(insight_envelopes):
         raise ValueError("study upload store has multiple active insights for one run")
     for insight_envelope in insight_envelopes:
-        insight = insight_envelope["payload"]
+        insight = _as_map(insight_envelope["payload"])
         if insight["case_id"] not in declared_cases:
             raise ValueError("case insight is outside manifest coverage")
         _validate_case_insight_attachment(insight_envelope, envelopes)
     runtime_observations = [
-        envelope["payload"]
+        _as_map(envelope["payload"])
         for envelope in envelopes
         if envelope["record_kind"] == "runtime_observation"
     ]
     board = build_benchmark_experiment_board(
         board_rows,
-        benchmark_id=study["benchmark_id"],
-        study_id=study["study_id"],
+        benchmark_id=str(study["benchmark_id"]),
+        study_id=str(study["study_id"]),
         four_arm_contract=four_arm_contract,
     )
+    board_run_rows = _as_map_list(board.get("runs"))
+    board_comparison_rows = _as_map_list(board.get("comparisons"))
+    board_contrast_rows = _as_map_list(board.get("factorial_contrasts"))
 
-    cells: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for row in board["runs"]:
-        cells.setdefault((row["case_id"], row["arm_id"]), []).append(row)
-    selected: dict[tuple[str, str], dict[str, Any]] = {}
+    cells: dict[tuple[str, str], list[Payload]] = {}
+    for row in board_run_rows:
+        cells.setdefault((str(row["case_id"]), str(row["arm_id"])), []).append(row)
+    selected: dict[tuple[str, str], Payload] = {}
     ambiguous_cells = 0
     for key, candidates in cells.items():
         countable = [
-            row for row in candidates if row["countability"]["score_countable"]
+            row
+            for row in candidates
+            if _as_map(row.get("countability")).get("score_countable")
         ]
         if len(countable) == 1:
             selected[key] = countable[0]
         elif len(countable) > 1:
             ambiguous_cells += 1
 
-    arm_details = []
+    arm_details: list[Payload] = []
     for arm_id, arm in arms_by_id.items():
         arm_rows = [
             row
-            for (case_id, candidate_arm), row in selected.items()
+            for (_case_id, candidate_arm), row in selected.items()
             if candidate_arm == arm_id
         ]
-        all_arm_rows = [row for row in board["runs"] if row["arm_id"] == arm_id]
-        binary = {}
+        all_arm_rows = [row for row in board_run_rows if row["arm_id"] == arm_id]
+        binary: Payload = {}
         for metric_name, metric in metric_by_name.items():
             if not metric["binary"]:
                 continue
             values = [
-                float(row["metrics"][metric_name]["value"])
+                float(val)
                 for row in arm_rows
-                if metric_name in row["metrics"]
+                if metric_name in (rm := _as_map(row.get("metrics")))
+                and isinstance(val := _as_map(rm[metric_name]).get("value"), (int, float))
+                and not isinstance(val, bool)
             ]
+            successes = sum(value == 1 for value in values)
             binary[metric_name] = {
-                "success_count": sum(value == 1 for value in values),
+                "success_count": successes,
                 "case_denominator": len(values),
-                "success_rate": (
-                    sum(value == 1 for value in values) / len(values)
-                    if values
-                    else None
-                ),
+                "success_rate": successes / len(values) if values else None,
             }
         arm_details.append(
             {
                 **arm,
-                "protocol_counts": dict(
-                    sorted(
-                        {
-                            protocol: sum(
-                                row["protocol_id"] == protocol for row in all_arm_rows
-                            )
-                            for protocol in {row["protocol_id"] for row in all_arm_rows}
-                        }.items()
-                    )
+                "protocol_counts": _sorted_value_counts(
+                    str(row["protocol_id"]) for row in all_arm_rows
                 ),
-                "runner_revision_counts": dict(
-                    sorted(
-                        {
-                            revision: sum(
-                                row.get("runner_revision") == revision
-                                for row in all_arm_rows
-                            )
-                            for revision in {
-                                row.get("runner_revision") for row in all_arm_rows
-                            }
-                            if revision
-                        }.items()
-                    )
+                "runner_revision_counts": _sorted_value_counts(
+                    str(rev)
+                    for row in all_arm_rows
+                    if (rev := row.get("runner_revision"))
                 ),
-                "orchestrator_runtime_counts": dict(
-                    sorted(
-                        {
-                            json.dumps(runtime, sort_keys=True): sum(
-                                row.get("orchestrator_runtime") == runtime
-                                for row in all_arm_rows
-                            )
-                            for runtime in [
-                                row.get("orchestrator_runtime")
-                                for row in all_arm_rows
-                                if row.get("orchestrator_runtime")
-                            ]
-                        }.items()
-                    )
+                "orchestrator_runtime_counts": _sorted_value_counts(
+                    json.dumps(rt, sort_keys=True)
+                    for row in all_arm_rows
+                    if (rt := row.get("orchestrator_runtime"))
                 ),
                 "intended_case_count": len(declared_cases),
                 "run_count": len(all_arm_rows),
@@ -1179,43 +1194,28 @@ def build_benchmark_study_dashboard(
                 },
                 "binary_outcomes": binary,
                 "effort": _effort_aggregate(arm_rows),
-                "failure_class_counts": dict(
-                    sorted(
-                        {
-                            failure: sum(
-                                insights.get(experiment_run_key(row), {}).get(
-                                    "failure_class"
-                                )
-                                == failure
-                                for row in arm_rows
-                            )
-                            for failure in {
-                                insights.get(experiment_run_key(row), {}).get(
-                                    "failure_class"
-                                )
-                                for row in arm_rows
-                            }
-                            if failure
-                        }.items()
-                    )
+                "failure_class_counts": _sorted_value_counts(
+                    str(fc)
+                    for row in arm_rows
+                    if (fc := _as_map(insights.get(experiment_run_key(row))).get("failure_class"))
                 ),
             }
         )
 
-    case_matrix = []
+    case_matrix: list[Payload] = []
     complete_design_case_count = 0
-    for case_id in study["case_set"]["case_ids"]:
-        arm_cells = []
+    for case_id in declared_case_ids:
+        arm_cells: list[Payload] = []
         for arm_id in arms_by_id:
-            row = selected.get((case_id, arm_id))
+            selected_row = selected.get((case_id, arm_id))
             arm_cells.append(
                 {
                     "arm_id": arm_id,
-                    "selected_run_id": row["run_id"] if row else None,
-                    "score_countable": row is not None,
-                    "metrics": row["metrics"] if row else {},
-                    "effort": row["effort"] if row else {},
-                    "insight": insights.get(experiment_run_key(row)) if row else None,
+                    "selected_run_id": selected_row["run_id"] if selected_row else None,
+                    "score_countable": selected_row is not None,
+                    "metrics": selected_row["metrics"] if selected_row else {},
+                    "effort": selected_row["effort"] if selected_row else {},
+                    "insight": insights.get(experiment_run_key(selected_row)) if selected_row else None,
                 }
             )
         complete = all(cell["score_countable"] for cell in arm_cells)
@@ -1230,38 +1230,43 @@ def build_benchmark_study_dashboard(
 
     countable_comparisons = [
         comparison
-        for comparison in board["comparisons"]
+        for comparison in board_comparison_rows
         if comparison["matched_pair_countable"]
     ]
-    comparisons_by_case: dict[str, list[dict[str, Any]]] = {}
+    comparisons_by_case: dict[str, list[Payload]] = {}
     for comparison in countable_comparisons:
-        comparisons_by_case.setdefault(comparison["case_id"], []).append(comparison)
+        comparisons_by_case.setdefault(str(comparison["case_id"]), []).append(comparison)
     for case in case_matrix:
-        eligible = comparisons_by_case.get(case["case_id"], [])
+        eligible = comparisons_by_case.get(str(case["case_id"]), [])
         ranked = [
             comparison
             for comparison in eligible
-            if (
-                benchmark_metric_comparison_value(
-                    comparison.get("metric_deltas", {}).get(primary_metric, {})
-                )
-                is not None
+            if benchmark_metric_comparison_value(
+                _as_map(_as_map(comparison.get("metric_deltas")).get(primary_metric))
             )
+            is not None
         ]
         # A raw count and a rate have no meaningful shared magnitude ordering.
-        scales = {"delta_rate" in item["metric_deltas"][primary_metric] for item in ranked}
+        scales = {
+            "delta_rate" in _as_map(_as_map(item.get("metric_deltas")).get(primary_metric))
+            for item in ranked
+        }
         if len(scales) > 1:
             ranked = []
         largest = max(
             ranked,
             key=lambda item: abs(
-                benchmark_metric_comparison_value(item["metric_deltas"][primary_metric]) or 0
+                benchmark_metric_comparison_value(
+                    _as_map(_as_map(item.get("metric_deltas")).get(primary_metric))
+                )
+                or 0
             ),
             default=None,
         )
         case["eligible_comparisons"] = eligible
         case["largest_eligible_primary_contrast"] = largest
-    contrast_summary: dict[str, Any] = {}
+
+    contrast_summary: Payload = {}
     for candidate_arm in arms_by_id:
         items = [
             comparison
@@ -1277,12 +1282,12 @@ def build_benchmark_study_dashboard(
             if metric["binary"]
         }
         for item in items:
-            primary = item.get("metric_deltas", {}).get(primary_metric, {})
-            direction = primary.get("direction")
-            if direction in directions:
+            deltas = _as_map(item.get("metric_deltas"))
+            direction = _as_map(deltas.get(primary_metric)).get("direction")
+            if isinstance(direction, str) and direction in directions:
                 directions[direction] += 1
             for metric_name, transitions in binary_transitions.items():
-                binary_delta = item.get("metric_deltas", {}).get(metric_name)
+                binary_delta = deltas.get(metric_name)
                 if not isinstance(binary_delta, Mapping) or binary_delta.get(
                     "comparison_unavailable_reason"
                 ):
@@ -1305,14 +1310,9 @@ def build_benchmark_study_dashboard(
 
     intended_cells = len(declared_cases) * len(arms_by_id)
     selected_count = len(selected)
-    runtime_counts = {
-        classification: sum(
-            item["classification"] == classification for item in runtime_observations
-        )
-        for classification in sorted(
-            {item["classification"] for item in runtime_observations}
-        )
-    }
+    runtime_counts = _sorted_value_counts(
+        str(item["classification"]) for item in runtime_observations
+    )
     return {
         "ok": True,
         "schema_version": BENCHMARK_STUDY_DASHBOARD_SCHEMA_VERSION,
@@ -1339,20 +1339,20 @@ def build_benchmark_study_dashboard(
             "complete_declared_design_case_count": complete_design_case_count,
             "ambiguous_score_countable_cell_count": ambiguous_cells,
             "in_flight_run_count": sum(
-                row["status"] == "running" for row in board["runs"]
+                row["status"] == "running" for row in board_run_rows
             ),
             "matched_pair_countable_count": len(countable_comparisons),
-            "factorial_contrast_count": len(board["factorial_contrasts"]),
+            "factorial_contrast_count": len(board_contrast_rows),
             "factorial_contrast_countable_count": sum(
-                item["factorial_contrast_countable"]
-                for item in board["factorial_contrasts"]
+                bool(item["factorial_contrast_countable"])
+                for item in board_contrast_rows
             ),
             "runtime_observation_count": len(runtime_observations),
             "runtime_classification_counts": runtime_counts,
         },
         "arms": arm_details,
         "contrasts": contrast_summary,
-        "factorial_contrasts": board["factorial_contrasts"],
+        "factorial_contrasts": board_contrast_rows,
         "cases": case_matrix,
         "runs": [
             {
@@ -1360,14 +1360,14 @@ def build_benchmark_study_dashboard(
                 "redacted_insight": insights.get(experiment_run_key(row)),
                 "upload_provenance": board_provenance[experiment_run_key(row)],
             }
-            for row in board["runs"]
+            for row in board_run_rows
         ],
         "authority": {
             "score_source": BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
             "matched_comparison_source": board["schema_version"],
             "factorial_comparison_source": (
-                board["factorial_contrasts"][0]["schema_version"]
-                if board["factorial_contrasts"]
+                board_contrast_rows[0]["schema_version"]
+                if board_contrast_rows
                 else None
             ),
             "manifest_changes_scores": False,

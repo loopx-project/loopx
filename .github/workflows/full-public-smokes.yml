@@ -148,7 +148,7 @@ jobs:
           retention-days: 7
 
   smoke-fleet-health:
-    if: always()
+    if: always() && github.repository == 'loopx-project/loopx'
     needs: full-public-smokes
     runs-on: ubuntu-latest
     timeout-minutes: 10

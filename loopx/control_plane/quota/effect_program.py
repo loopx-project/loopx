@@ -239,6 +239,7 @@ def build_turn_scoped_cli_settlement_plan(
     goal_ref: Mapping[str, object] | None = None,
     autonomous_replan: bool = False,
     handoff_mode: str | None = None,
+    composed_settlement: bool = False,
 ) -> SettlementPlan:
     if sum(bool(value) for value in (todo_id, replan_obligation_id, request_subject)) != 1:
         raise ValueError(
@@ -327,6 +328,7 @@ def build_turn_scoped_cli_settlement_plan(
     )
     payload = _render_cli_settlement_plan({
         "identity": identity.as_dict(), "delivery_boundary": delivery_boundary,
+        "composed_settlement": composed_settlement,
         "autonomous_replan": autonomous_replan,
         "handoff_mode": handoff_mode,
         "completion_proof_supplied": completion_proof_supplied,

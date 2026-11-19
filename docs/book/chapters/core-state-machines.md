@@ -231,11 +231,11 @@ flowchart TD
 - settlement 再以 `goal_id + agent_id + turn_instance_id` 绑定 writeback、spend 与 scheduler receipt。
 
 对应的源码锚点分别是
-[`completion_transaction.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py)、
-[`local_state_write_correctness.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py)、
-[`authority_store.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts)、
-[`coordination/authority_core.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_core.py)
-和 [`settlement.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py)。
+[`completion_transaction.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py)、
+[`local_state_write_correctness.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py)、
+[`authority_store.ts`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts)、
+[`coordination/authority_core.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/authority_core.py)
+和 [`settlement.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py)。
 
 所以正确流程是“读 basis -> 提案 -> 验证/guard -> guarded commit -> 事件或 receipt -> 回读”，而不是
 Agent 直接覆盖一份看似完整的状态。
@@ -300,7 +300,7 @@ transition 仍由 write API、validation 和 receipt 完成。箭头表示事实
 
 ### Todo lifecycle：只有四个持久 status
 
-[`loopx/control_plane/todos/contract.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/contract.py)
+[`loopx/control_plane/todos/contract.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/contract.py)
 定义 Todo 的持久状态：
 
 ```text
@@ -370,7 +370,7 @@ flowchart LR
 
 ### Handoff：clear 不等于路线完整
 
-[`handoff_gate.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py)
+[`handoff_gate.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py)
 从 Todo relation 派生六种 handoff state：
 
 | 派生状态 | 含义 | 下一步 |
@@ -389,7 +389,7 @@ flowchart LR
 
 ### Quota runtime：先判定行为，再考虑 spend
 
-[`loopx/control_plane/quota/states.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/quota/states.py)
+[`loopx/control_plane/quota/states.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/quota/states.py)
 固定了 quota runtime state 的判定优先级：
 
 ```text
@@ -424,7 +424,7 @@ guard、capability gate、selected Todo、execution obligation 和 scheduler hin
 
 ### Settlement：成功必须按事务顺序落地
 
-[`turn_transaction_contract.json`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_transaction_contract.json)
+[`turn_transaction_contract.json`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/turn_transaction_contract.json)
 定义完整 Turn 的阶段：
 
 ```text
@@ -525,7 +525,7 @@ effect；外部结果必须先成为 typed observation，才能进入 Monitor �
 - 到达 expiry 或 stop condition：完成 Monitor，并连接 successor 或 `no_followup`。
 
 对于已经显式提升到 shared authority 的 Goal，
-[`todo_monitor_poll.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/todo_monitor_poll.ts)
+[`todo_monitor_poll.ts`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/todo_monitor_poll.ts)
 会在同一个 canonical revision、同一次 CAS 和同一 durable operation receipt 中提交**无 lease 的
 observation 与它请求的独立 successor**。事务先校验 actor 注册、claim/binding/exclusion、Monitor
 仍处于 active 状态，以及 material-change generation 确实前进；任何校验失败都不会写入任一半。
@@ -643,7 +643,7 @@ flowchart TD
 
 ### Terminal 是严格合取，不是“队列看起来空了”
 
-[`loopx/control_plane/goals/goal_frontier/terminal.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/goals/goal_frontier/terminal.py)
+[`loopx/control_plane/goals/goal_frontier/terminal.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/goals/goal_frontier/terminal.py)
 中的 `goal_frontier_is_terminal_no_followup` 不接受一个手写的 terminal flag。它要求 Todo source
 完整且闭合，并且 advancement、monitor、successor、handoff、replan、acceptance、autonomy blocker
 等 frontier 均无未解决项；同时还需要结构化的 `no_followup` intent。

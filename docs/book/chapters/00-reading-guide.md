@@ -233,7 +233,7 @@ CLI/App convergence 与 Stage 4 distribution cleanup 仍是后续方向。
 | 主题 | `v0.5.4` 已发布事实 | 深入入口 |
 | --- | --- | --- |
 | Control Plane | Turn/Host Todo settlement、quota commit、task-lease lifecycle、Vision refresh 与 scheduler heartbeat 等完整事务已迁入 typed TypeScript owner；Python facade 仍承担迁移期边界 | [迁移 RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
-| Operator surface | Personal Workspace 已提供 Goal、Task、Chat 和 read-only status source 入口；界面不是新的事实源 | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
+| Operator surface | Personal Workspace 已提供 Goal、Task、Chat 和 read-only status source 入口；界面不是新的事实源 | [Dashboard README](https://github.com/loopx-project/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
 | Host runtime | Codex、Claude Code、OpenCode、Pi、KunlunCode、DeepSeek Harness 与 custom runner 具有不同 activation/stop contract | [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/) |
 | Capability / Provider | Capability 由 package-owned catalog entry、真实 command 和 durable validation 共同定义；Provider/Extension 不继承 Kernel authority | [Capability Catalog](/loopx/docs/capabilities/) |
 | Shared authority | file、NoKV 与 PostgreSQL provider 仍是 staged candidate；安装 Provider 不会改变默认本地 authority | [Shared Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/) |

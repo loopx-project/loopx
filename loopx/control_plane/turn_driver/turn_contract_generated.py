@@ -3,6 +3,7 @@ Source: loopx/control_plane/turn_loop_controller_contract_v0.json
 SHA256: be2734e9f192e8d78598c06e338dafc72ed71bb0251a2ec3784cb8421c4fd78d"""
 from __future__ import annotations
 from enum import Enum
+from typing import Any
 
 class LoopXTurnResultKind(str, Enum):
     VALIDATED_PROGRESS = "validated_progress"
@@ -38,7 +39,7 @@ class LoopDisposition(str, Enum):
     REPLAN = "replan"
     TERMINAL = "terminal"
 
-TURN_CONTROLLER_CONTRACT = {'schema_version': 'loop_turn_controller_decision_contract_v0',
+TURN_CONTROLLER_CONTRACT: dict[str, Any] = {'schema_version': 'loop_turn_controller_decision_contract_v0',
  'evaluation': 'ordered_checks_then_first_matching_return',
  'qualification': {'receipt': 'TypeScript qualifyExecution; material settlement, durable '
                               'completion and host failure qualification remain admission '
@@ -282,7 +283,7 @@ TURN_CONTROLLER_CONTRACT = {'schema_version': 'loop_turn_controller_decision_con
                                        'REPLAN': 'replan',
                                        'TERMINAL': 'terminal'}}}
 
-ROUTE_TO_DISPOSITION = TURN_CONTROLLER_CONTRACT['route_projection']
+ROUTE_TO_DISPOSITION: dict[str, str | None] = TURN_CONTROLLER_CONTRACT['route_projection']
 
 def project_turn_route(route: LoopXTurnRoute) -> LoopDisposition:
     """Public total route projection; contract_error explicitly rejects."""

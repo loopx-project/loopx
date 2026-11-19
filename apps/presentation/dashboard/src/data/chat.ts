@@ -16,7 +16,6 @@ import {
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
-  type TodoPreview,
 } from "./chat-model.js";
 import type {DelegationPreflight} from "./delegation-preflight.js";
 

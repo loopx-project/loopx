@@ -1,30 +1,33 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import tomllib
-from pathlib import Path
-from typing import Any
+from typing import cast
 
 from .agent_registry import (
     agent_profile_for_goal,
     registered_agent_ids_for_goal,
 )
-from .execution_profile import execution_profile_turn_granularity
-from .heartbeat_prompt import build_heartbeat_prompt
-from .history import load_registry
-from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
-from .registry import registry_goals, resolve_state_file
 from .control_plane.agents.legacy_migration import (
     completed_peer_agent_runtime_migration,
     legacy_agent_hierarchy_present,
     peer_agent_runtime_migration_completed,
     peer_agent_runtime_migration_id,
 )
+from .control_plane.heartbeat.builder import build_heartbeat_prompt
 from .control_plane.todos.contract import normalize_required_capabilities
+from .execution_profile import execution_profile_turn_granularity
+from .history import load_registry
+from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
+from .registry import registry_goals, resolve_state_file
 
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 DEFAULT_UPGRADE_MODES = ("thin",)
 SHOULD_RUN_FALSE_RE = re.compile(
@@ -56,7 +59,65 @@ STAGE_DEFERRED_ATTENTION_STATUSES = {
 STAGE_DEFERRED_ADAPTER_STATUSES = {
     "planned",
 }
+HOST_LOOP_UPDATE_STATUSES = {"missing", "partial", "stale", "unknown", "error", "unavailable"}
 _AUTOMATION_PARSE_ERROR_LIMIT = 20
+_SUMMARY_MARKDOWN_FIELDS = (
+    "ready_for_default_promotion", "managed_goal_count", "current_prompt_count",
+    "stale_prompt_count", "unknown_prompt_count", "not_installed_prompt_count",
+    "stage_deferred_goal_count", "installed_manifest_source", "installed_manifest_entry_count",
+    "installed_manifest_parse_error_count", "installed_manifest_has_task_body",
+    "installed_prompt_policy_warning_count", "installed_prompt_policy_warning_prompt_count",
+    "host_loop_activated_goal_count", "host_loop_missing_goal_count",
+    "peer_runtime_automation_migration_count",
+)
+_MANIFEST_MARKDOWN_FIELDS = ("available", "path", "reason", "parse_error_count", "parse_errors_complete")
+_PROPAGATION_MARKDOWN_FIELDS = (
+    "schema_version", "ready_for_default_promotion", "managed_target_count",
+    "deferred_target_count", "update_count", "deferred_install_count", "recommended_action",
+)
+_MIGRATION_MARKDOWN_FIELDS = (
+    "migration_id", "delivery_semantics", "host_update_required_once", "completion_command",
+)
+
+
+def _dict_view(value: object) -> PayloadView:
+    return cast(PayloadView, value) if isinstance(value, dict) else {}
+
+
+def _dict_list(value: object) -> list[Payload]:
+    return [cast(Payload, item) for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _str_list(value: object) -> list[str]:
+    return [str(item) for item in value] if isinstance(value, (list, tuple)) else []
+
+
+def _int_value(value: object) -> int:
+    if not value:
+        return 0
+    return int(value) if isinstance(value, (int, float, str, bytes, bytearray)) else int(str(value))
+
+
+def _unavailable_policy_audit(reason: str, *, status: str = "unavailable") -> Payload:
+    return {
+        "available": False,
+        "status": status,
+        "warning_count": 0,
+        "warnings": [],
+        "reason": reason,
+    }
+
+
+def _first_match(patterns: tuple[str, ...], text: str) -> str | None:
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _bullet_fields(mapping: PayloadView, keys: tuple[str, ...]) -> list[str]:
+    return [f"- {key}: `{mapping.get(key)}`" for key in keys]
 
 
 def prompt_digest(text: str) -> str:
@@ -64,13 +125,13 @@ def prompt_digest(text: str) -> str:
 
 
 def goal_heartbeat_prompt(
-    goal: dict[str, Any],
+    goal: Payload,
     *,
     cli_bin: str,
     mode: str,
     agent_id: str | None,
-    available_capabilities: Any = None,
-) -> dict[str, Any]:
+    available_capabilities: Sequence[str] | None = None,
+) -> Payload:
     """Build the prompt one Goal's ``mode`` heartbeat target installs.
 
     The prompt inputs come from the Goal's own registration (state file, agent
@@ -82,7 +143,8 @@ def goal_heartbeat_prompt(
     """
     goal_id = str(goal.get("id") or "")
     repo = Path(str(goal.get("repo") or ".")).expanduser()
-    state_file = resolve_state_file(repo, goal.get("state_file"))
+    raw_state_file = goal.get("state_file")
+    state_file = resolve_state_file(repo, str(raw_state_file) if raw_state_file else None)
     registered_agents = registered_agent_ids_for_goal(goal)
     reward_memory_enabled = False
     if agent_id is not None:
@@ -93,42 +155,48 @@ def goal_heartbeat_prompt(
         reward_memory_enabled = reward_memory_automatic_ingest_for_agent(
             goal, agent_id
         )
-    return build_heartbeat_prompt(
-        goal_id=goal_id,
-        active_state=None,
-        active_state_source="registry",
-        resolved_active_state=state_file,
-        compact=mode == "compact",
-        brief=mode == "brief",
-        thin=mode == "thin",
-        cli_bin=cli_bin,
-        agent_id=agent_id,
-        agent_profile=agent_profile_for_goal(goal, agent_id),
-        registered_agents=registered_agents or None,
-        available_capabilities=available_capabilities,
-        runtime_profile="codex_app_heartbeat",
-        turn_granularity=execution_profile_turn_granularity(
-            goal.get("execution_profile")
-            if isinstance(goal.get("execution_profile"), dict)
-            else None
+    normalized_capabilities = (
+        available_capabilities
+        if isinstance(available_capabilities, (list, tuple))
+        else None
+        if available_capabilities is None
+        else list(available_capabilities)
+    )
+    raw_profile = goal.get("execution_profile")
+    return cast(
+        Payload,
+        build_heartbeat_prompt(
+            goal_id=goal_id,
+            active_state=None,
+            active_state_source="registry",
+            resolved_active_state=state_file,
+            compact=mode == "compact",
+            brief=mode == "brief",
+            thin=mode == "thin",
+            cli_bin=cli_bin,
+            agent_id=agent_id,
+            agent_profile=agent_profile_for_goal(goal, agent_id),
+            registered_agents=registered_agents or None,
+            available_capabilities=normalized_capabilities,
+            runtime_profile="codex_app_heartbeat",
+            turn_granularity=execution_profile_turn_granularity(
+                cast(Payload, raw_profile) if isinstance(raw_profile, dict) else None
+            ),
+            reward_memory_enabled=reward_memory_enabled,
         ),
-        reward_memory_enabled=reward_memory_enabled,
     )
 
 
-def prompt_summary(prompt: dict[str, Any], mode: str) -> dict[str, Any]:
+def prompt_summary(prompt: PayloadView, mode: str) -> Payload:
     task_body = str(prompt.get("task_body") or "")
-    if mode == "full":
-        command = prompt.get("expanded_prompt_command")
-    else:
-        command = prompt.get(f"{mode}_prompt_command")
-    interface_budget = prompt.get("interface_budget") if isinstance(prompt.get("interface_budget"), dict) else {}
+    command = prompt.get("expanded_prompt_command") if mode == "full" else prompt.get(f"{mode}_prompt_command")
+    interface_budget = _dict_view(prompt.get("interface_budget"))
     return {
         "mode": mode,
         "sha256": prompt_digest(task_body),
         "char_count": len(task_body),
         "line_count": len(task_body.splitlines()),
-        "interface_budget": interface_budget,
+        "interface_budget": dict(interface_budget) if interface_budget else {},
         "within_interface_budget": interface_budget.get("within_budget"),
         "interface_budget_char_count": interface_budget.get("budget_char_count"),
         "interface_budget_max_chars": interface_budget.get("max_chars"),
@@ -136,15 +204,9 @@ def prompt_summary(prompt: dict[str, Any], mode: str) -> dict[str, Any]:
     }
 
 
-def prompt_policy_audit(prompt: str | None) -> dict[str, Any]:
+def prompt_policy_audit(prompt: str | None) -> Payload:
     if not isinstance(prompt, str) or not prompt.strip():
-        return {
-            "available": False,
-            "status": "unavailable",
-            "warning_count": 0,
-            "warnings": [],
-            "reason": "installed prompt body is unavailable",
-        }
+        return _unavailable_policy_audit("installed prompt body is unavailable")
 
     warnings: list[dict[str, str]] = []
     should_run_match = SHOULD_RUN_FALSE_RE.search(prompt)
@@ -187,23 +249,17 @@ def prompt_policy_audit(prompt: str | None) -> dict[str, Any]:
     }
 
 
-def installed_prompt_policy_audit(entry: dict[str, Any] | None) -> dict[str, Any]:
+def installed_prompt_policy_audit(entry: PayloadView | None) -> Payload:
     if not entry:
-        return {
-            "available": False,
-            "status": "unavailable",
-            "warning_count": 0,
-            "warnings": [],
-            "reason": "installed prompt entry is unavailable",
-        }
+        return _unavailable_policy_audit("installed prompt entry is unavailable")
     audit = entry.get("prompt_policy_audit")
     if isinstance(audit, dict):
-        return audit
+        return cast(Payload, audit)
     task_body = entry.get("task_body")
     return prompt_policy_audit(task_body if isinstance(task_body, str) else None)
 
 
-def load_installed_manifest(path: Path | None) -> dict[str, Any]:
+def load_installed_manifest(path: Path | None) -> Payload:
     if path is None:
         return load_codex_app_automation_manifest()
     if not path.exists():
@@ -213,17 +269,17 @@ def load_installed_manifest(path: Path | None) -> dict[str, Any]:
             "entries": [],
             "reason": "installed automation manifest does not exist",
         }
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw: object = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(raw, list):
-        entries = raw
+        raw_entries: object = raw
     elif isinstance(raw, dict):
-        entries = raw.get("automations") or raw.get("entries") or []
+        raw_entries = raw.get("automations") or raw.get("entries") or []
     else:
-        entries = []
+        raw_entries = []
     return {
         "available": True,
         "path": str(path),
-        "entries": [entry for entry in entries if isinstance(entry, dict)],
+        "entries": _dict_list(raw_entries),
     }
 
 
@@ -231,34 +287,30 @@ def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
 
 
-def parse_automation_toml(path: Path) -> dict[str, Any]:
-    return tomllib.loads(path.read_text(encoding="utf-8"))
+def parse_automation_toml(path: Path) -> Payload:
+    return cast(Payload, tomllib.loads(path.read_text(encoding="utf-8")))
 
 
 def infer_goal_id_from_prompt(prompt: str) -> str | None:
-    patterns = (
-        r"Advance\s+`([^`]+)`\s+from\b",
-        r"Advance\s+`([^`]+)`\s+using\b",
-        r"--goal-id\s+([A-Za-z0-9_.:-]+)",
-        r"goal_id:\s*`([^`]+)`",
+    return _first_match(
+        (
+            r"Advance\s+`([^`]+)`\s+from\b",
+            r"Advance\s+`([^`]+)`\s+using\b",
+            r"--goal-id\s+([A-Za-z0-9_.:-]+)",
+            r"goal_id:\s*`([^`]+)`",
+        ),
+        prompt,
     )
-    for pattern in patterns:
-        match = re.search(pattern, prompt)
-        if match:
-            return match.group(1)
-    return None
 
 
 def infer_agent_id_from_prompt(prompt: str) -> str | None:
-    patterns = (
-        r"Agent:\s*`([^`]+)`",
-        r"--agent-id\s+([A-Za-z0-9_.:-]+)",
+    return _first_match(
+        (
+            r"Agent:\s*`([^`]+)`",
+            r"--agent-id\s+([A-Za-z0-9_.:-]+)",
+        ),
+        prompt,
     )
-    for pattern in patterns:
-        match = re.search(pattern, prompt)
-        if match:
-            return match.group(1)
-    return None
 
 
 def infer_prompt_mode(prompt: str) -> str:
@@ -272,13 +324,12 @@ def infer_prompt_mode(prompt: str) -> str:
 
 
 def infer_available_capabilities_from_prompt(prompt: str) -> list[str]:
-    return normalize_required_capabilities(
-        AVAILABLE_CAPABILITY_PATTERN.findall(prompt)
-    )
+    return normalize_required_capabilities(AVAILABLE_CAPABILITY_PATTERN.findall(prompt))
 
 
-def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, Any]:
+def load_codex_app_automation_manifest(root: Path | None = None) -> Payload:
     from .control_plane.heartbeat.automation_upgrade import bootstrap_binding
+
     home = root or codex_home()
     automations_root = home / "automations"
     if not automations_root.exists():
@@ -293,10 +344,11 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
             "parse_errors_complete": True,
         }
 
-    entries: list[dict[str, Any]] = []
+    entries: list[Payload] = []
     parse_errors: list[dict[str, str]] = []
     parse_error_count = 0
     for path in sorted(automations_root.glob("*/automation.toml")):
+        parse_error_reason: str | None = None
         try:
             automation = parse_automation_toml(path)
         except OSError:
@@ -305,17 +357,10 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
             parse_error_reason = "invalid_utf8"
         except tomllib.TOMLDecodeError:
             parse_error_reason = "invalid_toml"
-        else:
-            parse_error_reason = None
         if parse_error_reason is not None:
             parse_error_count += 1
             if len(parse_errors) < _AUTOMATION_PARSE_ERROR_LIMIT:
-                parse_errors.append(
-                    {
-                        "automation_id": path.parent.name,
-                        "reason": parse_error_reason,
-                    }
-                )
+                parse_errors.append({"automation_id": path.parent.name, "reason": parse_error_reason})
             continue
         if automation.get("kind") != "heartbeat":
             continue
@@ -328,6 +373,11 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
         agent_id = infer_agent_id_from_prompt(prompt)
         status = str(automation.get("status") or "ACTIVE")
         binding = bootstrap_binding(prompt)
+        runtime_thin_bootstrap: Payload | None = (
+            {**{str(key): value for key, value in binding.items()}, "registry": str(binding["registry"])}
+            if binding
+            else None
+        )
         entries.append(
             {
                 "automation_id": str(automation.get("id") or path.parent.name),
@@ -338,19 +388,13 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
                 "char_count": len(prompt),
                 "line_count": len(prompt.splitlines()),
                 "prompt_policy_audit": prompt_policy_audit(prompt),
-                "available_capabilities": infer_available_capabilities_from_prompt(
-                    prompt
-                ),
+                "available_capabilities": infer_available_capabilities_from_prompt(prompt),
                 "rrule": str(automation.get("rrule") or "").strip(),
-                "target_thread_id": str(
-                    automation.get("target_thread_id") or ""
-                ).strip(),
+                "target_thread_id": str(automation.get("target_thread_id") or "").strip(),
                 "status": status,
                 "installed": status.upper() != "DELETED",
                 "source": "codex_app_automation_toml",
-                "runtime_thin_bootstrap": {
-                    **binding, "registry": str(binding["registry"]),
-                } if binding else None,
+                "runtime_thin_bootstrap": runtime_thin_bootstrap,
                 "path": str(path),
             }
         )
@@ -382,7 +426,7 @@ def resolve_codex_app_automation_rrule(
     thread_id: str | None = None,
     root: Path | None = None,
     automation_id: str | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     """Resolve one active Codex App heartbeat RRULE without exposing its body."""
 
     manifest = load_codex_app_automation_manifest(root)
@@ -393,9 +437,8 @@ def resolve_codex_app_automation_rrule(
     safe_thread_id = str(thread_id or os.environ.get("CODEX_THREAD_ID") or "").strip()
     candidates = [
         entry
-        for entry in manifest.get("entries", [])
-        if isinstance(entry, dict)
-        and str(entry.get("goal_id") or "") == safe_goal_id
+        for entry in _dict_list(manifest.get("entries"))
+        if str(entry.get("goal_id") or "") == safe_goal_id
         and (not safe_agent_id or str(entry.get("agent_id") or "") == safe_agent_id)
         and (automation_id or entry.get("installed") is True)
         and (not automation_id or entry.get("automation_id") == automation_id)
@@ -404,7 +447,7 @@ def resolve_codex_app_automation_rrule(
             or str(entry.get("target_thread_id") or "") == safe_thread_id
         )
     ]
-    parse_error_count = int(manifest.get("parse_error_count") or 0)
+    parse_error_count = _int_value(manifest.get("parse_error_count"))
     # An unreadable file can hide another matching heartbeat.
     if len(candidates) != 1 or parse_error_count:
         reason = "no matching active Codex App heartbeat RRULE"
@@ -412,7 +455,7 @@ def resolve_codex_app_automation_rrule(
             reason = "Codex App heartbeat RRULE is ambiguous"
         elif parse_error_count:
             reason = "Codex App heartbeat manifest could not be fully read"
-        result = {
+        result: Payload = {
             "available": False,
             "reason": reason,
             "candidate_count": len(candidates),
@@ -420,9 +463,7 @@ def resolve_codex_app_automation_rrule(
         if parse_error_count:
             result["manifest_parse_error_count"] = parse_error_count
             result["manifest_parse_errors"] = manifest.get("parse_errors") or []
-            result["manifest_parse_errors_complete"] = (
-                manifest.get("parse_errors_complete") is True
-            )
+            result["manifest_parse_errors_complete"] = manifest.get("parse_errors_complete") is True
         return result
     entry = candidates[0]
     status = str(entry.get("status") or "").upper()
@@ -438,42 +479,35 @@ def resolve_codex_app_automation_rrule(
     }
 
 
-def installed_entry_digest(entry: dict[str, Any]) -> str | None:
+def installed_entry_digest(entry: PayloadView) -> str | None:
     for key in ("prompt_sha256", "task_body_sha256", "sha256"):
         value = entry.get(key)
         if value:
             return str(value)
     task_body = entry.get("task_body")
-    if isinstance(task_body, str):
-        return prompt_digest(task_body)
-    return None
+    return prompt_digest(task_body) if isinstance(task_body, str) else None
 
 
-def installed_entry_available_capabilities(
-    entry: dict[str, Any] | None,
-) -> list[str]:
+def installed_entry_available_capabilities(entry: PayloadView | None) -> list[str]:
     if not entry:
         return []
     explicit = normalize_required_capabilities(entry.get("available_capabilities"))
     if explicit:
         return explicit
     task_body = entry.get("task_body")
-    if isinstance(task_body, str):
-        return infer_available_capabilities_from_prompt(task_body)
-    return []
+    return infer_available_capabilities_from_prompt(task_body) if isinstance(task_body, str) else []
 
 
-def entry_declares_not_installed(entry: dict[str, Any] | None) -> bool:
+def entry_declares_not_installed(entry: PayloadView | None) -> bool:
     if not entry:
         return False
     status = str(entry.get("status") or "").replace("-", "_").lower()
     if status in {"not_installed", "no_automation", "uninstalled"}:
         return True
-    installed = entry.get("installed")
-    return installed is False
+    return entry.get("installed") is False
 
 
-def entry_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+def entry_key(entry: PayloadView) -> tuple[str, str, str]:
     return (
         str(entry.get("goal_id") or ""),
         str(entry.get("mode") or DEFAULT_UPGRADE_MODES[0]),
@@ -481,8 +515,8 @@ def entry_key(entry: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def index_installed_entries(entries: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
-    indexed: dict[tuple[str, str, str], dict[str, Any]] = {}
+def index_installed_entries(entries: Sequence[PayloadView]) -> dict[tuple[str, str, str], PayloadView]:
+    indexed: dict[tuple[str, str, str], PayloadView] = {}
     for entry in entries:
         goal_id, mode, agent_id = entry_key(entry)
         if goal_id:
@@ -495,12 +529,12 @@ def prompt_target_key(mode: str, agent_id: str | None) -> str:
 
 
 def peer_runtime_upgrade_migration(
-    goal: dict[str, Any],
+    goal: PayloadView,
     *,
     goal_id: str,
-    installed: dict[str, dict[str, Any]],
-    generated_prompts: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
+    installed: Mapping[str, PayloadView],
+    generated_prompts: Mapping[str, PayloadView],
+) -> Payload:
     if peer_agent_runtime_migration_completed(goal):
         completed = completed_peer_agent_runtime_migration(goal) or {}
         return {
@@ -516,12 +550,9 @@ def peer_runtime_upgrade_migration(
             "status": "not_required",
         }
     migration_id = peer_agent_runtime_migration_id(goal_id, goal)
-    host_updates = []
+    host_updates: list[Payload] = []
     for target, prompt_status in installed.items():
-        if not (
-            prompt_status.get("installed") is True
-            and prompt_status.get("requires_update") is True
-        ):
+        if not (prompt_status.get("installed") is True and prompt_status.get("requires_update") is True):
             continue
         generated = generated_prompts.get(target) or {}
         host_updates.append(
@@ -557,14 +588,21 @@ def peer_runtime_upgrade_migration(
     }
 
 
-def build_loop_activation_summary(
-    *,
-    installed: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    current_targets = [key for key, value in installed.items() if value.get("status") == "current"]
-    stale_targets = [key for key, value in installed.items() if value.get("status") == "stale"]
-    missing_targets = [key for key, value in installed.items() if value.get("status") == "unknown"]
-    not_installed_targets = [key for key, value in installed.items() if value.get("status") == "not_installed"]
+def build_loop_activation_summary(*, installed: Mapping[str, PayloadView]) -> Payload:
+    targets_by_status: dict[str, list[str]] = {
+        "current": [],
+        "stale": [],
+        "unknown": [],
+        "not_installed": [],
+    }
+    for key, value in installed.items():
+        bucket = targets_by_status.get(str(value.get("status") or ""))
+        if bucket is not None:
+            bucket.append(key)
+    current_targets = targets_by_status["current"]
+    stale_targets = targets_by_status["stale"]
+    missing_targets = targets_by_status["unknown"]
+    not_installed_targets = targets_by_status["not_installed"]
     target_count = len(installed)
     if target_count and len(current_targets) == target_count:
         status = "current"
@@ -605,24 +643,20 @@ def build_loop_activation_summary(
     }
 
 
-HOST_LOOP_UPDATE_STATUSES = {"missing", "partial", "stale", "unknown", "error", "unavailable"}
+def goal_adapter(goal: PayloadView) -> PayloadView:
+    return _dict_view(goal.get("adapter"))
 
 
-def goal_adapter(goal: dict[str, Any]) -> dict[str, Any]:
-    adapter = goal.get("adapter")
-    return adapter if isinstance(adapter, dict) else {}
-
-
-def goal_adapter_status(goal: dict[str, Any]) -> str:
+def goal_adapter_status(goal: PayloadView) -> str:
     return str(goal_adapter(goal).get("status") or "")
 
 
-def goal_adapter_kind(goal: dict[str, Any]) -> str | None:
+def goal_adapter_kind(goal: PayloadView) -> str | None:
     kind = goal_adapter(goal).get("kind")
     return str(kind) if kind else None
 
 
-def goal_is_stage_deferred(goal: dict[str, Any]) -> bool:
+def goal_is_stage_deferred(goal: PayloadView) -> bool:
     attention_status = str(goal.get("attention_status") or "").replace("-", "_").lower()
     if attention_status in STAGE_DEFERRED_ATTENTION_STATUSES:
         return True
@@ -630,7 +664,7 @@ def goal_is_stage_deferred(goal: dict[str, Any]) -> bool:
     return adapter_status in STAGE_DEFERRED_ADAPTER_STATUSES
 
 
-def stage_deferred_goal_summary(goal: dict[str, Any], state_file: Path | None) -> dict[str, Any]:
+def stage_deferred_goal_summary(goal: PayloadView, state_file: Path | None) -> Payload:
     return {
         "goal_id": str(goal.get("id") or ""),
         "adapter_kind": goal_adapter_kind(goal),
@@ -647,29 +681,26 @@ def stage_deferred_goal_summary(goal: dict[str, Any], state_file: Path | None) -
     }
 
 
-def managed_default_upgrade_target(goal: dict[str, Any]) -> dict[str, Any]:
-    installed = goal.get("installed_prompts") if isinstance(goal.get("installed_prompts"), dict) else {}
-    mode_summaries: list[dict[str, Any]] = []
+def managed_default_upgrade_target(goal: PayloadView) -> Payload:
+    installed = _dict_view(goal.get("installed_prompts"))
+    mode_summaries: list[Payload] = []
     statuses: set[str] = set()
     policy_warning_count = 0
     for mode, prompt_status in installed.items():
         if not isinstance(prompt_status, dict):
             continue
-        status = str(prompt_status.get("status") or "unknown")
+        prompt_view = cast(PayloadView, prompt_status)
+        status = str(prompt_view.get("status") or "unknown")
         statuses.add(status)
-        audit = (
-            prompt_status.get("prompt_policy_audit")
-            if isinstance(prompt_status.get("prompt_policy_audit"), dict)
-            else {}
-        )
-        warning_count = int(audit.get("warning_count") or 0)
+        audit = _dict_view(prompt_view.get("prompt_policy_audit"))
+        warning_count = _int_value(audit.get("warning_count"))
         policy_warning_count += warning_count
         mode_summaries.append(
             {
                 "mode": mode,
                 "status": status,
-                "requires_update": bool(prompt_status.get("requires_update")),
-                "automation_id": prompt_status.get("automation_id"),
+                "requires_update": bool(prompt_view.get("requires_update")),
+                "automation_id": prompt_view.get("automation_id"),
                 "policy_warning_count": warning_count,
             }
         )
@@ -706,11 +737,11 @@ def managed_default_upgrade_target(goal: dict[str, Any]) -> dict[str, Any]:
 
 def build_default_upgrade_propagation(
     *,
-    summary: dict[str, Any],
-    managed: list[dict[str, Any]],
-    deferred: list[dict[str, Any]],
+    summary: PayloadView,
+    managed: Sequence[PayloadView],
+    deferred: Sequence[PayloadView],
     recommended_action: str,
-) -> dict[str, Any]:
+) -> Payload:
     managed_targets = [managed_default_upgrade_target(goal) for goal in managed]
     stage_deferred_targets = [
         {
@@ -740,6 +771,33 @@ def build_default_upgrade_propagation(
     }
 
 
+def _summarize_managed_heartbeats(managed: Sequence[PayloadView]) -> dict[str, int]:
+    counts = {
+        "unknown": 0, "stale": 0, "current": 0, "not_installed": 0,
+        "policy_warning_count": 0, "policy_warning_prompt_count": 0,
+        "host_loop_activated": 0, "host_loop_missing": 0, "peer_runtime_migration_count": 0,
+    }
+    for goal in managed:
+        for installed in _dict_view(goal.get("installed_prompts")).values():
+            if not isinstance(installed, dict):
+                continue
+            status_value = installed.get("status")
+            if status_value in {"unknown", "stale", "current", "not_installed"}:
+                counts[str(status_value)] += 1
+            warning_count = _int_value(_dict_view(installed.get("prompt_policy_audit")).get("warning_count"))
+            counts["policy_warning_count"] += warning_count
+            if warning_count > 0:
+                counts["policy_warning_prompt_count"] += 1
+        activation = _dict_view(goal.get("host_loop_activation"))
+        if activation.get("activated") is True:
+            counts["host_loop_activated"] += 1
+        if activation.get("status") in HOST_LOOP_UPDATE_STATUSES:
+            counts["host_loop_missing"] += 1
+        if _dict_view(goal.get("peer_runtime_automation_migration")).get("required") is True:
+            counts["peer_runtime_migration_count"] += 1
+    return counts
+
+
 def build_upgrade_plan(
     *,
     registry_path: Path,
@@ -748,7 +806,7 @@ def build_upgrade_plan(
     cli_bin: str = "loopx",
     modes: list[str] | tuple[str, ...] | None = None,
     goal_ids: list[str] | tuple[str, ...] | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_override)
     if not registry_path.exists():
@@ -761,29 +819,28 @@ def build_upgrade_plan(
     selected_modes = tuple(modes or DEFAULT_UPGRADE_MODES)
     selected_goal_ids = set(goal_ids or [])
     manifest = load_installed_manifest(installed_manifest)
-    manifest_entries = manifest["entries"]
-    manifest_task_body_count = sum(1 for entry in manifest_entries if isinstance(entry, dict) and "task_body" in entry)
-    installed_by_key = index_installed_entries(manifest["entries"])
-    managed: list[dict[str, Any]] = []
-    deferred: list[dict[str, Any]] = []
+    manifest_entries = _dict_list(manifest.get("entries"))
+    manifest_task_body_count = sum(1 for entry in manifest_entries if "task_body" in entry)
+    installed_by_key = index_installed_entries(manifest_entries)
+    managed: list[Payload] = []
+    deferred: list[Payload] = []
 
-    for goal in registry_goals(registry):
+    for raw_goal in registry_goals(registry):
+        goal = cast(Payload, raw_goal)
         goal_id = str(goal.get("id") or "")
         if selected_goal_ids and goal_id not in selected_goal_ids:
             continue
         repo = Path(str(goal.get("repo") or ".")).expanduser()
-        state_file = resolve_state_file(repo, goal.get("state_file"))
+        raw_state_file = goal.get("state_file")
+        state_file = resolve_state_file(repo, str(raw_state_file) if raw_state_file else None)
         if goal_is_stage_deferred(goal):
             deferred.append(stage_deferred_goal_summary(goal, state_file))
             continue
         registered_agents = registered_agent_ids_for_goal(goal)
-        prompt_summaries: dict[str, dict[str, Any]] = {}
-        installed: dict[str, dict[str, Any]] = {}
-        prompt_targets = [
-            (mode, agent_id)
-            for mode in selected_modes
-            for agent_id in (registered_agents or [None])
-        ]
+        prompt_summaries: dict[str, Payload] = {}
+        installed: dict[str, Payload] = {}
+        target_agents: Sequence[str | None] = registered_agents or (None,)
+        prompt_targets = [(mode, agent_id) for mode in selected_modes for agent_id in target_agents]
         for mode, agent_id in prompt_targets:
             key = prompt_target_key(mode, agent_id)
             entry = installed_by_key.get((goal_id, mode, agent_id or ""))
@@ -793,22 +850,19 @@ def build_upgrade_plan(
                 legacy_unscoped = entry is not None
             available_capabilities = installed_entry_available_capabilities(entry)
             prompt = goal_heartbeat_prompt(
-                goal,
-                cli_bin=cli_bin,
-                mode=mode,
-                agent_id=agent_id,
+                goal, cli_bin=cli_bin, mode=mode, agent_id=agent_id,
                 available_capabilities=available_capabilities,
             )
-            summary = prompt_summary(prompt, mode)
-            summary["agent_id"] = agent_id
-            summary["prompt_target"] = key
-            prompt_summaries[key] = summary
-            expected_digest = str(summary.get("sha256") or "")
+            prompt_meta = prompt_summary(prompt, mode)
+            prompt_meta["agent_id"] = agent_id
+            prompt_meta["prompt_target"] = key
+            prompt_summaries[key] = prompt_meta
+            expected_digest = str(prompt_meta.get("sha256") or "")
             not_installed = entry_declares_not_installed(entry)
             actual_digest = None if not_installed else installed_entry_digest(entry) if entry else None
-            bootstrap = entry.get("runtime_thin_bootstrap") if entry else None
+            bootstrap = _dict_view(entry.get("runtime_thin_bootstrap")) if entry else {}
             live_thin = bool(
-                isinstance(bootstrap, dict)
+                bootstrap
                 and mode == "thin"
                 and bootstrap.get("goal_id") == goal_id
                 and bootstrap.get("agent_id") == agent_id
@@ -816,49 +870,27 @@ def build_upgrade_plan(
                 and bootstrap.get("runtime_root") == (str(Path(runtime_root_override).expanduser().resolve()) if runtime_root_override else None)
                 and Path(str(bootstrap.get("registry"))).resolve() == Path(registry_path).resolve()
             )
-            status = "unknown"
-            if not_installed:
-                status = "not_installed"
-            elif entry:
-                status = "current" if live_thin or actual_digest == expected_digest else "stale"
+            prompt_status = "not_installed" if not_installed else ("current" if live_thin or actual_digest == expected_digest else "stale") if entry else "unknown"
             policy_audit = (
-                {
-                    "available": False,
-                    "status": "not_applicable",
-                    "warning_count": 0,
-                    "warnings": [],
-                    "reason": "heartbeat is explicitly not installed",
-                }
+                _unavailable_policy_audit("heartbeat is explicitly not installed", status="not_applicable")
                 if not_installed
                 else installed_prompt_policy_audit(entry)
             )
-            warnings = (
-                policy_audit.get("warnings")
-                if isinstance(policy_audit.get("warnings"), list)
-                else []
-            )
+            warnings = _dict_list(policy_audit.get("warnings"))
             if legacy_unscoped:
                 warnings = [
                     *warnings,
                     {
                         "kind": "legacy_unscoped_prompt_for_registered_agent",
                         "severity": "warning",
-                        "recommended_action": (
-                            "replace this heartbeat with a scoped prompt generated with "
-                            f"--agent-id {agent_id}"
-                        ),
+                        "recommended_action": f"replace this heartbeat with a scoped prompt generated with --agent-id {agent_id}",
                     },
                 ]
-                policy_audit = {
-                    **policy_audit,
-                    "status": "warning",
-                    "warning_count": len(warnings),
-                    "warnings": warnings,
-                }
-            policy_warning_count = int(policy_audit.get("warning_count") or 0)
+                policy_audit = {**policy_audit, "status": "warning", "warning_count": len(warnings), "warnings": warnings}
+            policy_warning_count = _int_value(policy_audit.get("warning_count"))
             installed[key] = {
-                "status": status,
-                "requires_update": status in {"unknown", "stale"} or policy_warning_count > 0,
+                "status": prompt_status,
+                "requires_update": prompt_status in {"unknown", "stale"} or policy_warning_count > 0,
                 "automation_id": entry.get("automation_id") if entry else None,
                 "installed": False if not_installed else bool(entry),
                 "agent_id": agent_id,
@@ -871,10 +903,7 @@ def build_upgrade_plan(
             }
         loop_activation = build_loop_activation_summary(installed=installed)
         runtime_migration = peer_runtime_upgrade_migration(
-            goal,
-            goal_id=goal_id,
-            installed=installed,
-            generated_prompts=prompt_summaries,
+            goal, goal_id=goal_id, installed=installed, generated_prompts=prompt_summaries,
         )
 
         managed.append(
@@ -891,85 +920,32 @@ def build_upgrade_plan(
                 "installed_prompts": installed,
                 "host_loop_activation": loop_activation,
                 "peer_runtime_automation_migration": runtime_migration,
-                "requires_update": any(item["requires_update"] for item in installed.values())
+                "requires_update": any(bool(item["requires_update"]) for item in installed.values())
                 or loop_activation.get("status") in HOST_LOOP_UPDATE_STATUSES
                 or runtime_migration.get("required") is True,
             }
         )
 
-    unknown = sum(
-        1
-        for goal in managed
-        for installed in goal["installed_prompts"].values()
-        if installed["status"] == "unknown"
-    )
-    stale = sum(
-        1
-        for goal in managed
-        for installed in goal["installed_prompts"].values()
-        if installed["status"] == "stale"
-    )
-    current = sum(
-        1
-        for goal in managed
-        for installed in goal["installed_prompts"].values()
-        if installed["status"] == "current"
-    )
-    not_installed = sum(
-        1
-        for goal in managed
-        for installed in goal["installed_prompts"].values()
-        if installed["status"] == "not_installed"
-    )
-    policy_warning_count = sum(
-        int(installed.get("prompt_policy_audit", {}).get("warning_count") or 0)
-        for goal in managed
-        for installed in goal["installed_prompts"].values()
-        if isinstance(installed, dict)
-    )
-    policy_warning_prompt_count = sum(
-        1
-        for goal in managed
-        for installed in goal["installed_prompts"].values()
-        if int(installed.get("prompt_policy_audit", {}).get("warning_count") or 0) > 0
-    )
-    host_loop_activated = sum(
-        1
-        for goal in managed
-        if isinstance(goal.get("host_loop_activation"), dict)
-        and goal["host_loop_activation"].get("activated") is True
-    )
-    host_loop_missing = sum(
-        1
-        for goal in managed
-        if isinstance(goal.get("host_loop_activation"), dict)
-        and goal["host_loop_activation"].get("status") in HOST_LOOP_UPDATE_STATUSES
-    )
-    peer_runtime_migration_count = sum(
-        1
-        for goal in managed
-        if isinstance(goal.get("peer_runtime_automation_migration"), dict)
-        and goal["peer_runtime_automation_migration"].get("required") is True
-    )
+    counts = _summarize_managed_heartbeats(managed)
     ready = (
         bool(managed)
-        and unknown == 0
-        and stale == 0
-        and policy_warning_count == 0
-        and host_loop_missing == 0
-        and peer_runtime_migration_count == 0
+        and counts["unknown"] == 0
+        and counts["stale"] == 0
+        and counts["policy_warning_count"] == 0
+        and counts["host_loop_missing"] == 0
+        and counts["peer_runtime_migration_count"] == 0
     )
     if ready:
         recommended_action = "promotion propagation is complete"
-    elif peer_runtime_migration_count > 0:
+    elif counts["peer_runtime_migration_count"] > 0:
         recommended_action = (
             "complete each peer runtime automation migration in the projected order; "
             "stable migration ids make host updates idempotent and each completion ack "
             "removes the prompt exactly once"
         )
-    elif host_loop_missing > 0:
+    elif counts["host_loop_missing"] > 0:
         recommended_action = "activate missing host loops from generated scoped heartbeat prompts before claiming autonomous setup"
-    elif policy_warning_count > 0:
+    elif counts["policy_warning_count"] > 0:
         recommended_action = "regenerate installed heartbeat automations with prompt policy warnings before default promotion"
     elif managed:
         recommended_action = "refresh installed heartbeat automations/controller clients before default promotion"
@@ -977,33 +953,28 @@ def build_upgrade_plan(
         recommended_action = "selected heartbeats are stage-deferred; do not install until the operator authorizes that stage"
     else:
         recommended_action = "no registry-managed heartbeats matched the upgrade plan selection"
-    summary = {
+    summary: Payload = {
         "managed_goal_count": len(managed),
-        "current_prompt_count": current,
-        "stale_prompt_count": stale,
-        "unknown_prompt_count": unknown,
-        "not_installed_prompt_count": not_installed,
+        "current_prompt_count": counts["current"],
+        "stale_prompt_count": counts["stale"],
+        "unknown_prompt_count": counts["unknown"],
+        "not_installed_prompt_count": counts["not_installed"],
         "stage_deferred_goal_count": len(deferred),
         "ready_for_default_promotion": ready,
         "installed_manifest_available": manifest.get("available"),
         "installed_manifest_source": manifest.get("source"),
         "installed_manifest_entry_count": len(manifest_entries),
-        "installed_manifest_parse_error_count": int(
-            manifest.get("parse_error_count") or 0
-        ),
+        "installed_manifest_parse_error_count": _int_value(manifest.get("parse_error_count")),
         "installed_manifest_task_body_count": manifest_task_body_count,
         "installed_manifest_has_task_body": manifest_task_body_count > 0,
-        "installed_prompt_policy_warning_count": policy_warning_count,
-        "installed_prompt_policy_warning_prompt_count": policy_warning_prompt_count,
-        "host_loop_activated_goal_count": host_loop_activated,
-        "host_loop_missing_goal_count": host_loop_missing,
-        "peer_runtime_automation_migration_count": peer_runtime_migration_count,
+        "installed_prompt_policy_warning_count": counts["policy_warning_count"],
+        "installed_prompt_policy_warning_prompt_count": counts["policy_warning_prompt_count"],
+        "host_loop_activated_goal_count": counts["host_loop_activated"],
+        "host_loop_missing_goal_count": counts["host_loop_missing"],
+        "peer_runtime_automation_migration_count": counts["peer_runtime_migration_count"],
     }
     default_upgrade_propagation = build_default_upgrade_propagation(
-        summary=summary,
-        managed=managed,
-        deferred=deferred,
-        recommended_action=recommended_action,
+        summary=summary, managed=managed, deferred=deferred, recommended_action=recommended_action,
     )
     return {
         "ok": True,
@@ -1021,134 +992,64 @@ def build_upgrade_plan(
     }
 
 
-def render_upgrade_plan_markdown(payload: dict[str, Any]) -> str:
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+def render_upgrade_plan_markdown(payload: PayloadView) -> str:
+    summary = _dict_view(payload.get("summary"))
     lines = [
         "# LoopX Upgrade Plan",
         "",
-        f"- ok: `{payload.get('ok')}`",
-        f"- registry: `{payload.get('registry')}`",
-        f"- runtime_root: `{payload.get('runtime_root')}`",
-        f"- cli_bin: `{payload.get('cli_bin')}`",
-        f"- prompt_modes: `{', '.join(payload.get('prompt_modes') or [])}`",
-        f"- ready_for_default_promotion: `{summary.get('ready_for_default_promotion')}`",
-        f"- managed_goal_count: `{summary.get('managed_goal_count')}`",
-        f"- current_prompt_count: `{summary.get('current_prompt_count')}`",
-        f"- stale_prompt_count: `{summary.get('stale_prompt_count')}`",
-        f"- unknown_prompt_count: `{summary.get('unknown_prompt_count')}`",
-        f"- not_installed_prompt_count: `{summary.get('not_installed_prompt_count')}`",
-        f"- stage_deferred_goal_count: `{summary.get('stage_deferred_goal_count')}`",
-        f"- installed_manifest_source: `{summary.get('installed_manifest_source')}`",
-        f"- installed_manifest_entry_count: `{summary.get('installed_manifest_entry_count')}`",
-        f"- installed_manifest_parse_error_count: `{summary.get('installed_manifest_parse_error_count')}`",
-        f"- installed_manifest_has_task_body: `{summary.get('installed_manifest_has_task_body')}`",
-        f"- installed_prompt_policy_warning_count: `{summary.get('installed_prompt_policy_warning_count')}`",
-        f"- installed_prompt_policy_warning_prompt_count: `{summary.get('installed_prompt_policy_warning_prompt_count')}`",
-        f"- host_loop_activated_goal_count: `{summary.get('host_loop_activated_goal_count')}`",
-        f"- host_loop_missing_goal_count: `{summary.get('host_loop_missing_goal_count')}`",
-        f"- peer_runtime_automation_migration_count: `{summary.get('peer_runtime_automation_migration_count')}`",
+        *_bullet_fields(payload, ("ok", "registry", "runtime_root", "cli_bin")),
+        f"- prompt_modes: `{', '.join(_str_list(payload.get('prompt_modes')))}`",
+        *_bullet_fields(summary, _SUMMARY_MARKDOWN_FIELDS),
         f"- recommended_action: `{payload.get('recommended_action')}`",
     ]
-    manifest = payload.get("installed_manifest") if isinstance(payload.get("installed_manifest"), dict) else {}
-    lines.extend(
-        [
-            "",
-            "## Installed Manifest",
-            "",
-            f"- available: `{manifest.get('available')}`",
-            f"- path: `{manifest.get('path')}`",
-            f"- reason: `{manifest.get('reason')}`",
-            f"- parse_error_count: `{manifest.get('parse_error_count')}`",
-            f"- parse_errors_complete: `{manifest.get('parse_errors_complete')}`",
-        ]
-    )
-    for error in manifest.get("parse_errors") or []:
-        if not isinstance(error, dict):
-            continue
+    manifest = _dict_view(payload.get("installed_manifest"))
+    lines.extend(["", "## Installed Manifest", "", *_bullet_fields(manifest, _MANIFEST_MARKDOWN_FIELDS)])
+    for error in _dict_list(manifest.get("parse_errors")):
         lines.append(
             f"- parse_error automation_id=`{error.get('automation_id')}` "
             f"reason=`{error.get('reason')}`"
         )
-    propagation = (
-        payload.get("default_upgrade_propagation")
-        if isinstance(payload.get("default_upgrade_propagation"), dict)
-        else {}
-    )
-    lines.extend(
-        [
-            "",
-            "## Default Upgrade Propagation",
-            "",
-            f"- schema_version: `{propagation.get('schema_version')}`",
-            f"- ready_for_default_promotion: `{propagation.get('ready_for_default_promotion')}`",
-            f"- managed_target_count: `{propagation.get('managed_target_count')}`",
-            f"- deferred_target_count: `{propagation.get('deferred_target_count')}`",
-            f"- update_count: `{propagation.get('update_count')}`",
-            f"- deferred_install_count: `{propagation.get('deferred_install_count')}`",
-            f"- recommended_action: `{propagation.get('recommended_action')}`",
-        ]
-    )
-    managed_targets = (
-        propagation.get("managed_targets") if isinstance(propagation.get("managed_targets"), list) else []
-    )
-    for target in managed_targets:
-        if not isinstance(target, dict):
-            continue
+    propagation = _dict_view(payload.get("default_upgrade_propagation"))
+    lines.extend(["", "## Default Upgrade Propagation", "", *_bullet_fields(propagation, _PROPAGATION_MARKDOWN_FIELDS)])
+    for target in _dict_list(propagation.get("managed_targets")):
         lines.append(
             f"- managed `{target.get('goal_id')}` action=`{target.get('action')}` "
             f"requires_update=`{target.get('requires_update')}` reason=`{target.get('reason')}`"
         )
-    for goal in payload.get("managed_heartbeats") or []:
-        if not isinstance(goal, dict):
+    managed_heartbeats = _dict_list(payload.get("managed_heartbeats"))
+    for goal in managed_heartbeats:
+        migration = _dict_view(goal.get("peer_runtime_automation_migration"))
+        if migration.get("required") is not True:
             continue
-        migration = goal.get("peer_runtime_automation_migration")
-        if not isinstance(migration, dict) or migration.get("required") is not True:
-            continue
-        lines.extend(
-            [
-                "",
-                f"## Peer Runtime Migration: {goal.get('goal_id')}",
-                "",
-                f"- migration_id: `{migration.get('migration_id')}`",
-                f"- delivery_semantics: `{migration.get('delivery_semantics')}`",
-                f"- host_update_required_once: `{migration.get('host_update_required_once')}`",
-                f"- completion_command: `{migration.get('completion_command')}`",
-            ]
-        )
-    deferred_targets = (
-        propagation.get("stage_deferred_targets")
-        if isinstance(propagation.get("stage_deferred_targets"), list)
-        else []
-    )
-    for target in deferred_targets:
-        if not isinstance(target, dict):
-            continue
+        lines.extend(["", f"## Peer Runtime Migration: {goal.get('goal_id')}", "", *_bullet_fields(migration, _MIGRATION_MARKDOWN_FIELDS)])
+    for target in _dict_list(propagation.get("stage_deferred_targets")):
         lines.append(
             f"- deferred `{target.get('goal_id')}` action=`{target.get('action')}` "
             f"requires_update=`{target.get('requires_update')}`"
         )
     lines.extend(["", "## Managed Heartbeats", ""])
-    for goal in payload.get("managed_heartbeats") or []:
-        installed = goal.get("installed_prompts") if isinstance(goal.get("installed_prompts"), dict) else {}
-        generated = goal.get("generated_prompts") if isinstance(goal.get("generated_prompts"), dict) else {}
-        activation = (
-            goal.get("host_loop_activation")
-            if isinstance(goal.get("host_loop_activation"), dict)
-            else {}
-        )
-        status_parts = []
-        for mode, status in installed.items():
-            if isinstance(status, dict):
-                audit = status.get("prompt_policy_audit") if isinstance(status.get("prompt_policy_audit"), dict) else {}
-                audit_warning_count = int(audit.get("warning_count") or 0)
-                audit_suffix = f",audit_warnings={audit_warning_count}" if audit_warning_count else ""
-                status_parts.append(f"{mode}={status.get('status')}{audit_suffix}")
-        prompt_parts = []
-        for mode, prompt in generated.items():
-            if isinstance(prompt, dict):
-                prompt_parts.append(
-                    f"{mode}:sha={str(prompt.get('sha256') or '')[:12]} chars={prompt.get('char_count')}"
-                )
+    for goal in managed_heartbeats:
+        installed = _dict_view(goal.get("installed_prompts"))
+        generated = _dict_view(goal.get("generated_prompts"))
+        activation = _dict_view(goal.get("host_loop_activation"))
+        status_parts: list[str] = []
+        warning_lines: list[str] = []
+        for mode, status_entry in installed.items():
+            if not isinstance(status_entry, dict):
+                continue
+            audit = _dict_view(status_entry.get("prompt_policy_audit"))
+            audit_warning_count = _int_value(audit.get("warning_count"))
+            audit_suffix = f",audit_warnings={audit_warning_count}" if audit_warning_count else ""
+            status_parts.append(f"{mode}={status_entry.get('status')}{audit_suffix}")
+            warnings = _dict_list(audit.get("warnings"))
+            if warnings:
+                kinds = ", ".join(str(warning.get("kind")) for warning in warnings if warning.get("kind"))
+                warning_lines.append(f"  prompt_policy_warnings[{mode}]: `{kinds}`")
+        prompt_parts = [
+            f"{mode}:sha={str(prompt.get('sha256') or '')[:12]} chars={prompt.get('char_count')}"
+            for mode, prompt in generated.items()
+            if isinstance(prompt, dict)
+        ]
         lines.extend(
             [
                 f"- `{goal.get('goal_id')}` state_file_exists=`{goal.get('state_file_exists')}` "
@@ -1158,27 +1059,13 @@ def render_upgrade_plan_markdown(payload: dict[str, Any]) -> str:
                 f"activated=`{activation.get('activated')}` current=`{activation.get('current_count')}` "
                 f"missing=`{activation.get('missing_count')}` stale=`{activation.get('stale_count')}`",
                 f"  prompts: `{'; '.join(prompt_parts)}`",
+                *warning_lines,
             ]
         )
-        for mode, status in installed.items():
-            if not isinstance(status, dict):
-                continue
-            audit = status.get("prompt_policy_audit") if isinstance(status.get("prompt_policy_audit"), dict) else {}
-            warnings = audit.get("warnings") if isinstance(audit.get("warnings"), list) else []
-            if not warnings:
-                continue
-            kinds = ", ".join(
-                str(warning.get("kind"))
-                for warning in warnings
-                if isinstance(warning, dict) and warning.get("kind")
-            )
-            lines.append(f"  prompt_policy_warnings[{mode}]: `{kinds}`")
-    deferred = payload.get("stage_deferred_heartbeats") or []
-    if deferred:
+    deferred_goals = _dict_list(payload.get("stage_deferred_heartbeats"))
+    if deferred_goals:
         lines.extend(["", "## Stage Deferred Heartbeats", ""])
-        for goal in deferred:
-            if not isinstance(goal, dict):
-                continue
+        for goal in deferred_goals:
             lines.append(
                 f"- `{goal.get('goal_id')}` adapter=`{goal.get('adapter_kind')}:{goal.get('adapter_status')}` "
                 f"attention_status=`{goal.get('attention_status')}` requires_update=`{goal.get('requires_update')}`"

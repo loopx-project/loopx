@@ -10,8 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ...bootstrap_command_pack import build_start_goal_guided_packet
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
-from ..quota.turn_envelope import quota_action_signature_document
+from ..quota.turn_envelope import assert_complete_turn_decision, compose_turn_decision, quota_action_signature_document
 from ..work_items.interaction_contract import build_interaction_contract
 from .action_portfolio_scenarios import (
     turn_scenario_source as _turn_scenario_source,
@@ -64,7 +63,8 @@ ACTUAL_DEFAULT_MODEL_BEHAVIOR_CATALOG_SCHEMA_VERSION = (
     "actual_default_model_behavior_scenario_catalog_v0"
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS = 2
-# Synthetic pretty-JSON regression allowance, not a production transport limit.
+# Historical compact-output threshold: characterizes the crowded fixture only.
+# Current actors receive the complete source; production wire/page limits are separate.
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 90_000
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_SCHEMA_VERSION = (
     "actual_default_model_behavior_contrast_v0"
@@ -755,12 +755,12 @@ def _build_actual_default_model_behavior_scenario_sources(
     return packets
 
 
-def _compact_actual_default_model_behavior_scenario_sources(
+def _compose_actual_default_model_behavior_scenario_sources(
     sources: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     return {
         scenario_id: (
-            compact_quota_should_run_cli_payload(deepcopy(dict(packet)))
+            compose_turn_decision(packet, composed_settlement=True)
             if packet.get("mode") == "should-run"
             else deepcopy(dict(packet))
         )
@@ -774,7 +774,7 @@ def build_actual_default_model_behavior_scenario_inputs(
     """Build paired source and actual-default actor packets from one fixture."""
 
     sources = _build_actual_default_model_behavior_scenario_sources(root)
-    return sources, _compact_actual_default_model_behavior_scenario_sources(sources)
+    return sources, _compose_actual_default_model_behavior_scenario_sources(sources)
 
 
 def build_actual_default_model_behavior_scenario_packets(
@@ -839,8 +839,7 @@ def _validate_quota_hot_path_compaction_regression(
 ) -> None:
     if _pretty_json_size(source) <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
         raise ValueError("compaction-regression source must exceed the hot-path budget")
-    if _pretty_json_size(packet) > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
-        raise ValueError("compaction-regression packet exceeds the hot-path budget")
+    assert_complete_turn_decision(packet)
     if packet.get("capability_gate") != source.get("capability_gate"):
         raise ValueError("compaction regression must preserve complete capability candidate context")
     if contract.get("selected_todo_id") != expected_selected_todo_id:

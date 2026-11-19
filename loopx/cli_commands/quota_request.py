@@ -156,6 +156,10 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
             raise QuotaCommandValidationError("Monitor lease proof requires an execution key and positive safe-integer version")
         if not (args.todo_id or args.target_key):
             raise QuotaCommandValidationError("Monitor lease proof requires --todo-id or --target-key")
+    if getattr(args, "delivery_workspace_path", None) is not None and command != "spend-slot":
+        raise QuotaCommandValidationError(
+            "--delivery-workspace-path is only valid with `loopx quota spend-slot`"
+        )
     begin_turn = bool(getattr(args, "begin_turn", False))
     if command not in {"status", "plan"} and not args.goal_id:
         raise QuotaCommandValidationError(
@@ -217,6 +221,7 @@ def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
         "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
         "defer_context_presentation",
         "capture_file", "decision_file", "outcome_ref", "source_hash",
+        "delivery_workspace_path",
         "initial_read", "select", "list_fields", "list_depth", "reference_file",
         "capture_sha256", "selection_sha256", "offset", "page_bytes",
     ):

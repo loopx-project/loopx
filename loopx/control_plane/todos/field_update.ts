@@ -1,6 +1,6 @@
 /** Pure field intent planning. Admission, leases, validation and commit stay
  * with the calling lifecycle transaction; this result grants no write right. */
-import { appendTodoExploreReferences, normalizeTodoWorkRequirements } from "./work_requirements.ts";
+import { appendTodoExploreReferences } from "./work_requirements.ts";
 import {planTodoPriority} from "./priority.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";

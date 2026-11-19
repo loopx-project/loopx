@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { accessSync, constants, mkdirSync, realpathSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +58,18 @@ const persistentFixtureBase = (): string => {
   // temp-root checkout skips for the documented reason while a classifier
   // regression on a persistent checkout still fails the assertions.
   if (independentlyTemporary(fileURLToPath(import.meta.url))) return "";
-  return [homedir(), resolve(".")].find(base => !independentlyTemporary(join(base, "usage-ping.json"))) ?? "";
+  const repoLocal = join(resolve("."), ".local");
+  for (const base of [repoLocal, homedir(), resolve(".")]) {
+    if (independentlyTemporary(join(base, "usage-ping.json"))) continue;
+    try {
+      if (base === repoLocal) mkdirSync(base, { recursive: true });
+      accessSync(base, constants.W_OK);
+      return base;
+    } catch {
+      // Unwritable HOME or candidate base falls through without EROFS.
+    }
+  }
+  return "";
 };
 
 test("temporary machine routes suppress every HTTP channel even with enabled/copied state", async t => {

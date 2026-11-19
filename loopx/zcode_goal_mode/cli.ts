@@ -5,7 +5,7 @@ import {createServer, request as httpRequest} from "node:http";
 import {mkdir, readFile, unlink} from "node:fs/promises";
 import type {JsonObject} from "../control_plane/effect_program.ts";
 import {BARE_SHA256_PATTERN} from "../control_plane/content_digest.ts";
-import {dirname, isAbsolute, join} from "node:path";
+import {isAbsolute, join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {ZCODE_GOAL_ACTIONS, isGoalBasis, sameBinding, ZCodeGoalError, safeFailure, type NativeRequest, type ZCodeGoalReadback} from "./contract.ts";
 import {NativeGoalController, readState, atomicState, type BindingState} from "./runtime.ts";

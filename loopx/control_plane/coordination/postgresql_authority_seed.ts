@@ -17,7 +17,6 @@ import { link, lstat, open, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
 import {
-  canonicalAuthorityObject,
   canonicalAuthoritySha256,
   isAuthorityJsonObject,
   requireAuthorityStoreId,
@@ -29,7 +28,6 @@ import {
   installPostgreSqlAuthorityStoreSchema,
   PostgreSqlAuthorityStore,
   type PostgreSqlAuthorityDatabase,
-  type PostgreSqlAuthorityConnection,
 } from "./postgresql_authority_store.ts";
 import { syncAuthorityDirectory } from "./file_authority_store.ts";
 import { openLocalAuthorityStoreHandle } from "./local_authority_provider.ts";

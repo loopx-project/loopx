@@ -8,6 +8,7 @@ import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {setTimeout as delay} from "node:timers/promises";
 import test from "node:test";
+import {fileURLToPath} from "node:url";
 
 const bridge = fileURLToPath(new URL("../../loopx/control_plane/turn_driver/host_stdio_bridge.ts", import.meta.url));
 const launch = (script: string) => spawn(process.execPath,

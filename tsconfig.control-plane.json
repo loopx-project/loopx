@@ -86,6 +86,7 @@
     "tests/control_plane_ts/postgresql_authority_service_fixture.ts",
     "tests/control_plane_ts/delivery_continuity.test.ts",
     "tests/control_plane_ts/delivery_history.test.ts",
+    "tests/control_plane_ts/delivery_response.test.ts",
     "tests/control_plane_ts/delivery_workspace.test.ts",
     "tests/control_plane_ts/settlement_workspace_causality.test.ts",
     "tests/control_plane_ts/quota_settlement_readback.test.ts",

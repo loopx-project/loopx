@@ -15,7 +15,7 @@ import mimetypes
 from pathlib import Path
 import subprocess
 from threading import Thread
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 from ..capabilities.explore.result_log import explore_history_rows
 from ..control_plane.status.goal_source import GoalSource, GoalSourceReader, SourceScopeError
@@ -46,6 +46,8 @@ class RuntimeWorkspaceServer(ThreadingHTTPServer):
 
 
 class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandler):
+    server: RuntimeWorkspaceServer
+
     def log_message(self, *_args):
         pass
 
@@ -224,7 +226,8 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
             self._json({"ok": False, "error": "原运行来源暂不可读，请刷新重试；未替换来源。"}, 503)
 
     def _asset(self, path):
-        relative = "index.html" if path in {"/", "/chat", "/chat/"} else path.removeprefix("/chat/")
+        decoded = unquote(path)
+        relative = "index.html" if decoded in {"/", "/chat", "/chat/"} else decoded.removeprefix("/chat/")
         target = (self.server.assets_dir / relative).resolve()
         if not target.is_relative_to(self.server.assets_dir) or not target.is_file():
             self._json({"ok": False, "error": "Asset not found."}, 404)

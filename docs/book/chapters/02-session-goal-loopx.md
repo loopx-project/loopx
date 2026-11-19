@@ -145,7 +145,7 @@ same time and cost budget
 记录 completion、独立 verifier、错误写入、人工介入、stop-policy、wall time 和 cost。没有 matched
 baseline 或独立 verifier 时，可以记录使用体验，不能声称产品能力提升。
 
-[Benchmark 研究 RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
+[Benchmark 研究 RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
 定义当前研究边界。Benchmark-native 研究必须明确 arm semantics、authority boundary 与独立
 verifier，才能作为产品研究证据。
 
@@ -274,7 +274,7 @@ environment read 与 replan，不需要新 Host 继承旧 transcript。
 ### Host 兼容矩阵
 
 LoopX 保留同一 control-plane contract，但不同 Host 的启动和唤醒机制并不相同。当前公开
-[Runtime Connector Catalog](https://github.com/huangruiteng/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
+[Runtime Connector Catalog](https://github.com/loopx-project/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
 与各 Host adapter 文档给出的主要路径是：
 
 | Host surface | 驱动 | 关键限制 |

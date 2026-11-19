@@ -2115,7 +2115,7 @@ Codex turn actually consumes quota. The smallest public-safe event is
 ```
 
 The public fixture is
-[`examples/quota-slot-spend-event.example.json`](https://github.com/huangruiteng/loopx/blob/main/examples/quota-slot-spend-event.example.json).
+[`examples/quota-slot-spend-event.example.json`](https://github.com/loopx-project/loopx/blob/main/examples/quota-slot-spend-event.example.json).
 
 Validation rule:
 

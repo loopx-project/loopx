@@ -112,34 +112,28 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     validate, writeback, spend, terminal = plan["ordered_steps"]
     assert validate["command_condition"] == "todo_deliverable_complete"
     assert terminal["conditional"] is True and terminal["owner"] == "agent"
-    if not off or complete:
-        assert plan["schema_version"] == "quota_settlement_plan_v2"
-        assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
-        assert spend["owner"] == "runtime" and "command_template" not in spend
-        assert cli["next_cli_actions"] == [writeback["command_template"]]
-        if not off:
-            _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
-            projected = json.loads(Path(recovery["path"]).read_bytes())
-            assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
-        if case in {"combined", "after_claim"}:
-            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
+    assert spend["owner"] == "runtime" and "command_template" not in spend
+    assert cli["next_cli_actions"] == [writeback["command_template"]]
+    if not off:
+        _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
+        projected = json.loads(Path(recovery["path"]).read_bytes())
+        assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+    if case in {"combined", "after_claim"}:
+        from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
-            command, pages = guard["first_read_command"], []
-            while command:
-                words = shlex.split(command)
-                rc, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
-                assert rc == 0 and page["ok"] and page["offset"] == sum(len(body.encode()) for body in pages)
-                pages.append(page["content"])
-                command = page.get("next_command")
-            values = selected_context_values("".join(pages))
-            cli_path = "/interaction_contract/cli_channel"
-            assert cli_path + "/next_cli_actions" not in values
-            assert values[cli_path + "/settlement_plan/ordered_steps/1/command_template"] == writeback["command_template"]
-    else:
-        assert plan["schema_version"] == "quota_settlement_plan_v1"
-        assert "--settle-turn" not in writeback["semantic_closeout_command_template"]
-        assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
-        assert spend["owner"] == "agent"
+        command, pages = guard["first_read_command"], []
+        while command:
+            words = shlex.split(command)
+            rc, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+            assert rc == 0 and page["ok"] and page["offset"] == sum(len(body.encode()) for body in pages)
+            pages.append(page["content"])
+            command = page.get("next_command")
+        values = selected_context_values("".join(pages))
+        cli_path = "/interaction_contract/cli_channel"
+        assert cli_path + "/next_cli_actions" not in values
+        assert values[cli_path + "/settlement_plan/ordered_steps/1/command_template"] == writeback["command_template"]
 
     material_fields = {"<validated_progress>": "verified_slice", "<scale>": "implementation",
                        "<outcome>": "outcome_progress"}
@@ -185,10 +179,6 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     else:
         rc, result = _run_generated_cli(command, registry_path=registry, cwd=project)
     assert rc == 0 and result["ok"] and result["settlement_identity"] == identity, result
-    if off and not complete:
-        assert result["settlement_owed"]["kind"] == "quota_spend" and _spend_run_count(runtime) == 0
-        rc, result = _run_generated_cli(spend["command_template"], registry_path=registry, cwd=project)
-        assert rc == 0 and result["ok"], result
     assert result["settlement_progress"]["state"] == "settled"
     assert result["settlement_identity"] == identity
     # Claim re-entry appends the readiness upgrade under the original Turn.
@@ -509,26 +499,26 @@ def test_complete_turn_rejects_other_routes_before_authority_io(tmp_path, comman
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_explicit_complete_soft_claim_reuses_the_original_legacy_receipt(tmp_path, provider):
+def test_compatibility_alias_soft_claim_reuses_the_original_default_receipt(tmp_path, provider):
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="soft_claim")
     command = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, legacy = _run_cli(registry, runtime, *command, cwd=project)
-    assert rc == 0 and legacy.get("schema_version") is None
-    original_cli = legacy["interaction_contract"]["cli_channel"]
-    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
+    rc, original = _run_cli(registry, runtime, *command, cwd=project)
+    assert rc == 0 and original.get("schema_version") == "loopx_turn_envelope_v1"
+    original_cli = original["interaction_contract"]["cli_channel"]
+    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
     rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", cwd=project)
     assert rc == 0 and complete["schema_version"] == "loopx_turn_envelope_v1", complete
     cli = complete["interaction_contract"]["cli_channel"]
     assert "execution_preparation" not in cli  # A soft claim never becomes a fabricated ready lease.
     assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
-    assert cli["settlement_plan"]["identity"] == legacy["heartbeat_receipt"]["settlement_identity"]
-    assert complete["goal_boundary"] == legacy["goal_boundary"]
-    assert complete["normal_delivery_allowed"] == legacy["normal_delivery_allowed"]
+    assert cli["settlement_plan"]["identity"] == original["heartbeat_receipt"]["settlement_identity"]
+    assert complete["goal_boundary"] == original["goal_boundary"]
+    assert complete["normal_delivery_allowed"] == original["normal_delivery_allowed"]
     assert len(cli["next_cli_actions"]) == 1
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
-    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
+    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
 
 
 def _read_selected_result(command):
@@ -721,7 +711,8 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
         command = command.replace(key, value)
     words = shlex.split(command)
     assert words[words.index("--delivery-boundary") + 1] == "semantic_closeout"
-    command += " " + shlex.join([*direction_args, "--settle-turn", "--no-global-sync", "--suppress-external-sinks",
+    assert '--settle-turn' in words and '--settlement-receipt' in words
+    command += " " + shlex.join([*direction_args, "--no-global-sync", "--suppress-external-sinks",
         "--delivery-workspace-path", str(project)])
     # A hostile ambient executable must not select another checkout/accounting owner.
     trap = tmp_path / "bin"
@@ -740,8 +731,8 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
                    for row in receipts)
         assert _spend_run_count(runtime) == 1
         assert result.get("idempotent_replay", False) is replay
-    ordinary_args = shlex.split(command)
-    ordinary_args.remove("--settle-turn")
+    ordinary_args = [word for word in shlex.split(command)
+                     if word not in {'--settle-turn', '--settlement-receipt'}]
     rc, ordinary = _run_generated_cli(shlex.join(ordinary_args), registry_path=registry)
     assert rc == 0 and ordinary["settlement_progress"]["state"] == "settled", ordinary
     assert [row["step_kind"] for row in ordinary["settlement_result"]["receipts"]] == [

@@ -279,7 +279,8 @@ export function inspectCheckpointReplayFromRows(value: unknown, rows: JsonObject
   const prior = requireJsonObject(request.prior, "checkpoint prior");
   const goal = goalPathSegment(request.goal_id);
   const runsDir = join(root, "goals", goal, "runs");
-  if (!rows.some(row => canonicalAuthoritySha256(row) === canonicalAuthoritySha256(prior))) {
+  const priorDigest = canonicalAuthoritySha256(prior);
+  if (!rows.some(row => canonicalAuthoritySha256(row) === priorDigest)) {
     unknown("checkpoint replay is not an indexed record");
   }
   return committedArtifacts(prior, runsDir, request.include_retained_binding === true, request.include_retained_content === true);

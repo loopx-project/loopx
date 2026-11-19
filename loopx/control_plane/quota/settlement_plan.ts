@@ -1,7 +1,7 @@
 /** CLI guidance for the existing completion -> writeback -> spend protocol.
  * This is a projection, not a validation, lease or receipt authorization. */
 import {
-  settlementIdentity, type JsonObject, type SettlementIdentityInput,
+  settlementIdentity, settlementPlanPayload, type JsonObject, type SettlementIdentityInput,
   SETTLEMENT_PLAN_SCHEMA_VERSION, type SettlementPlan, type SettlementStep,
 } from "../effect_program.ts";
 import {isDeepStrictEqual} from "node:util";
@@ -90,6 +90,21 @@ export function completeCliSettlementChannel(payload: JsonObject): JsonObject {
   const composed = receiptBoundCliSettlement({cli, receipt: payload.heartbeat_receipt,
     todo_id: jsonObject(payload.selected_todo)?.todo_id}, false);
   return composed ?? cli;
+}
+
+/** Current continuation commands share the complete source's composition.
+ * Historical callers retain the original plan unless explicitly migrated. */
+export function turnScopedCliSettlementPlanPayload(params: JsonObject): JsonObject {
+  const plan = settlementPlanPayload(turnScopedCliSettlementPlan(params));
+  if (params.composed_settlement === undefined
+      || !requireBoolean(params.composed_settlement, "composed_settlement")) return plan;
+  const steps = plan.ordered_steps as JsonObject[];
+  const cli = composedCliSettlementChannel({settlement_plan: plan,
+    next_cli_actions: steps.filter(step => step.kind === "durable_writeback" || step.kind === "quota_spend")
+      .map(step => step.command_template)});
+  if (jsonObject(cli.settlement_plan)?.schema_version !== COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION)
+    throw new Error("current CLI continuation requires a composed settlement plan");
+  return cli.settlement_plan as JsonObject;
 }
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {

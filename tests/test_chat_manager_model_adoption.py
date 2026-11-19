@@ -5,7 +5,13 @@ Only the paid upstream adapter is substituted; release model evaluation owns
 actual answer quality, separately from this lifecycle regression.
 """
 
+import json
+import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
+from test_native_steward_private import finish, steward  # noqa: F401
 
 from loopx.capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
@@ -16,10 +22,12 @@ from loopx.chat_manager import (
     MANAGER_CONTEXT_VERSION,
     manager_channel_binding,
     manager_executor_allocation,
+    manager_session_model_allocation,
     open_manager_session,
 )
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_store import ChatSessionStore
+from loopx.extensions.lark.conversation_identity import identity_ref
 
 
 def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
@@ -140,7 +148,6 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
 def test_legacy_bound_steward_adopts_explicit_machine_model_once(conversation):
     root, store, runtime, session, starts = conversation
     sid = session["session_id"]
-    import json
     legacy = {**store.load_session(sid), "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
     legacy.pop("manager_executor_allocation", None)
     store._session_path(sid).write_text(json.dumps(legacy))  # retained pre-allocation disk format
@@ -158,7 +165,6 @@ def test_legacy_bound_steward_adopts_explicit_machine_model_once(conversation):
 
 
 def test_legacy_model_adoption_preserves_unset_fields_and_endpoint(conversation):
-    from loopx.chat_manager import manager_session_model_allocation
     root, store, runtime, session, _ = conversation
     legacy = {**session, "manager_executor_allocation": None,
               "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
@@ -277,9 +283,15 @@ def upstream_boundary(monkeypatch, tmp_path):
     starts = []
 
     def start(**kwargs):
-        adapter = Adapter(len(starts))
-        if kwargs.get("resume_thread_id"):
-            adapter.upstream_thread_id = kwargs["resume_thread_id"]
+        transport = Adapter(len(starts))
+        adapter = CodexAppServerAdapter(SimpleNamespace(
+            thread_id=kwargs.get("resume_thread_id") or transport.upstream_thread_id,
+            resolved_model=kwargs["model"],
+            resolved_reasoning_effort=kwargs["reasoning_effort"],
+            read_only_review=kwargs["read_only_review"],
+            process=SimpleNamespace(poll=lambda: None if transport.healthcheck() else 0),
+            close=transport.close_session,
+        ))
         starts.append((kwargs, adapter))
         return adapter
 
@@ -292,13 +304,83 @@ def upstream_boundary(monkeypatch, tmp_path):
         ])
         return runtime
 
-    def open_conversation(runtime):
+    def open_conversation(runtime, **settings):
         return open_manager_session(
             controller=runtime, goal_id="loopx-manager", work_dir=tmp_path,
-            provider="fixture", audience="owner",
+            provider="fixture", audience="owner", **settings,
         )[0]
 
     return root, store, controller, open_conversation, starts
+
+
+@pytest.mark.parametrize("allocation_already_recorded", [False, True])
+def test_legacy_observed_model_does_not_override_machine_model(upstream_boundary, allocation_already_recorded):
+    root, store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6.1-sol", effort="xhigh")
+    runtime = controller()
+    session = open_conversation(runtime)
+    sid = session["session_id"]
+    store.append_message(sid, role="user", text="Keep the original scope.")
+    messages = store.messages(sid)
+    configure(root, model="gpt-6.2-sol", effort="xhigh")
+
+    # A historical session has an observed model without a user selection.
+    # A previous runtime may also have committed the new allocation even
+    # though it reopened the provider with the model from that old observation.
+    legacy = store.load_session(sid)
+    legacy.pop("requested_agent_model_id")
+    if allocation_already_recorded:
+        allocation = manager_session_model_allocation(runtime, legacy)
+        assert allocation["model"] == "gpt-6.2-sol"
+        legacy["manager_executor_allocation"] = allocation
+    store._session_path(sid).write_text(json.dumps(legacy))
+
+    updated = open_conversation(runtime)
+
+    assert updated["session_id"] == sid and updated["channel_id"] == session["channel_id"]
+    assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == ("gpt-6.2-sol", "xhigh")
+    assert updated["agent_model_id"] == updated["manager_executor_allocation"]["model"] == "gpt-6.2-sol"
+    assert store.messages(sid) == messages
+    assert starts[-1][0]["history"] == [{"role": "user", "content": "Keep the original scope."}]
+    assert updated["upstream_context_history"][-1]["thread_id"] == session["upstream_thread_id"]
+
+    open_conversation(runtime)
+    assert len(starts) == 2
+
+
+def test_explicit_session_model_survives_machine_default_edit(upstream_boundary):
+    root, _, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6-sol", effort="high")
+    runtime = controller()
+    session = open_conversation(runtime, agent_model_id="gpt-6.1-sol")
+    configure(root, model="gpt-6.2-sol", effort="high")
+
+    updated = open_conversation(runtime)
+    assert updated["session_id"] == session["session_id"]
+    assert starts[-1][0]["model"] == updated["agent_model_id"] == updated["requested_agent_model_id"] == "gpt-6.1-sol"
+
+
+def test_unconfirmed_machine_model_does_not_replace_binding(upstream_boundary, monkeypatch):
+    root, store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6.1-sol", effort="high")
+    runtime = controller()
+    session = open_conversation(runtime)
+    configure(root, model="gpt-6.2-sol", effort="high")
+    start = CodexAppServerAdapter.start
+
+    def start_without_model_readback(**kwargs):
+        adapter = start(**kwargs)
+        adapter.session.resolved_model = None
+        return adapter
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start", start_without_model_readback)
+    with pytest.raises(CodexChatAgentError, match="could not be restored"):
+        open_conversation(runtime)
+
+    held = store.load_session(session["session_id"])
+    assert held["upstream_thread_id"] == session["upstream_thread_id"]
+    assert held["manager_executor_allocation"] == session["manager_executor_allocation"]
+    assert held["agent_model_id"] == "gpt-6.1-sol" and not starts[-1][1].healthcheck()
 
 
 @pytest.mark.parametrize("refresh_context", [False, True])
@@ -328,6 +410,81 @@ def test_model_edit_keeps_early_context_through_public_resume(upstream_boundary,
     # Native history is restored once, separately from the repeated objective.
     assert [item["content"] for item in starts[-1][0]["history"]] == messages
     assert all(text not in starts[-1][0]["objective"] for text in messages)
+
+
+@pytest.mark.parametrize("source", ["working", "stale_context", "missing_rollout", "wrong_provider"])
+def test_bound_steward_model_edit_uses_original_native_checkpoint(steward, monkeypatch, source):  # noqa: F811
+    from loopx.capabilities.native_chat import codex_auth
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    home = workspace.parent / "codex-home"
+    home.mkdir()
+    runtime.codex_home = home
+    monkeypatch.setattr(codex_auth, "conversation_account_epoch", lambda *args, **kwargs: ("revision", "slot"))
+    fake = Path(runtime.codex_bin)
+    fake.write_text(fake.read_text().replace(
+        'result = {"thread": {"id": "durable-thread"}}',
+        'result = {"thread": {"id": "durable-thread"}, "modelProvider": "openai",\n'
+        '                  "model": request["params"].get("model"),\n'
+        '                  "reasoningEffort": request["params"].get("config", {}).get("model_reasoning_effort")}',
+    ))
+    configure(store.root.parent, model="gpt-6.1-sol", effort="xhigh")
+    event = provider.event("steward-app", "original-checkpoint", "Keep the original evidence.")
+    transport.admit("steward-app", event)
+    original = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    assert finish(runtime, original)["status"] == "completed"
+    sid = original["session_id"]
+    session = store.load_session(sid)
+    checkpoint = session["native_working_checkpoint"]
+    thread_id = checkpoint["thread_id"]
+    assert thread_id == session["upstream_thread_id"]
+    rollout = home / "sessions" / "original.jsonl"
+    rollout.parent.mkdir()
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": thread_id, "model_provider": "different-provider" if source == "wrong_provider" else "openai",
+    }}) + "\n")
+    with sqlite3.connect(home / "state_1.sqlite") as database:
+        database.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT, archived INTEGER)")
+        database.execute("INSERT INTO threads VALUES (?, ?, 0)", (thread_id, str(rollout)))
+    if source == "missing_rollout":
+        rollout.unlink()
+    if source == "stale_context":
+        store.update_session(sid, manager_context_version=MANAGER_CONTEXT_VERSION - 1)
+    old_turn = store.load_turn(sid, original["turn_id"])
+    configure(store.root.parent, model="gpt-6.2-sol", effort="high")
+    turn, _ = store.create_queued_turn(sid, client_turn_id="next-original", message="Next question.", origin="lark")
+    queued = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    history = store.messages(sid)
+    offset = capture.stat().st_size
+
+    if source in {"missing_rollout", "wrong_provider"}:
+        with pytest.raises(CodexChatAgentError, match="could not be restored"):
+            runtime._ensure_adapter(queued, work_dir=workspace, objective="manager")
+        assert capture.stat().st_size == offset
+        assert store.load_session(sid)["agent_model_id"] == "gpt-6.1-sol"
+    else:
+        runtime._ensure_adapter(queued, work_dir=workspace, objective="manager")
+        calls = [json.loads(line) for line in capture.read_bytes()[offset:].splitlines()]
+        method = "thread/resume" if source == "working" else "thread/start"
+        assert [call["method"] for call in calls
+                if call["method"] in {"thread/resume", "thread/start", "thread/fork"}] == [method]
+        options = next(call["params"] for call in calls if call["method"] == method)
+        assert options["model"] == "gpt-6.2-sol" and options["config"]["model_reasoning_effort"] == "high"
+        assert all(call["method"] not in {"turn/start", "thread/compact/start"} for call in calls)
+        if source == "working":
+            assert options["threadId"] == thread_id
+            assert all(call["method"] != "thread/inject_items" for call in calls)
+            assert store.load_session(sid)["upstream_thread_id"] == thread_id
+        else:
+            assert any(call["method"] == "thread/inject_items" for call in calls)
+        preparation = store.load_turn(sid, turn["turn_id"])["native_context_preparation"]
+        assert preparation["planned_method"] == method
+        assert preparation["manager_context_migration"] is (source == "stale_context")
+        assert store.load_session(sid)["agent_model_id"] == "gpt-6.2-sol"
+    assert store.load_turn(sid, original["turn_id"]) == old_turn
+    assert store.load_turn(sid, turn["turn_id"])["status"] == "queued"
+    assert store.load_session(sid)["active_turn_id"] == turn["turn_id"]
+    assert store.messages(sid) == history
 
 
 @pytest.mark.parametrize("policy,effort,expected_effort", [
@@ -579,3 +736,15 @@ def test_native_account_epoch_reopens_only_unstarted_codex_adapter(conversation,
         assert preparation["planned_method"] == "thread/resume" and preparation["history_message_count"] == 0
     else:
         assert preparation is None
+
+
+def test_manager_session_model_allocation_ignores_partial_pre_v0_record(conversation) -> None:
+    root, _store, runtime, session, _starts = conversation
+    configure(root, model="gpt-6.1-sol", effort="high", endpoint="codex", policy="preferred")
+    partial_allocation = {
+        "schema_version": 1,
+        "selection_policy": "preferred",
+    }
+    partial_session = {**session, "manager_executor_allocation": partial_allocation}
+    assert manager_session_model_allocation(runtime, partial_session) is None
+    assert partial_session["manager_executor_allocation"] == partial_allocation

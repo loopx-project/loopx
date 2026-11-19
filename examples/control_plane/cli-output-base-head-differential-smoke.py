@@ -70,6 +70,12 @@ def _run_probe(
 ) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(source_root)
+    # This subprocess starts Python directly and pins product imports through
+    # PYTHONPATH. Do not inherit the invoking launcher's release identity: that
+    # would mix a base probe with head assets. Setting it to source_root is also
+    # wrong here because rendered recovery commands would expose two different
+    # checkout paths and turn path length into a false output regression.
+    env.pop("LOOPX_RELEASE_ROOT", None)
     # Both revisions measure the same fixture, including implicit machine
     # defaults. Never let the operator's registry/configuration select a host.
     stable_root = budget_fixture_path(fixture_root)
