@@ -736,6 +736,13 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     context = assert_host_task_context(model_input, original)
     assert "todo_write_hint" not in context
     assert "spend_policy" not in context["heartbeat_recommendation"]
+    users = context["interaction_contract"]["agent_channel"]["work_context"]["user_todos"]
+    model_proof = users["authority_read"]["todo_read_model"]
+    assert model_proof["schema_version"] == "loopx_todo_domain_read_record_v0"
+    assert model_proof["records_sha256"] and "contract_fields" not in model_proof
+    original_reader = json.loads(_run(core_python, [*prefix, "todo", "list", "--goal-id", GOAL, "--role", "user",
+        "--status", "open", "--agent-id", AGENT], workspace).stdout)
+    assert original_reader["authority_read"]["todo_read_model"]["contract_fields"]
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
     resume_command = [item for index, item in enumerate(command)
                       if item != "--todo-id" and (index == 0 or command[index - 1] != "--todo-id")]

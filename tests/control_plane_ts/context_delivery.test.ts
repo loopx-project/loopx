@@ -684,6 +684,30 @@ test("cold-source title deduplication retains full body, distinct title and orig
   assert.strictEqual(compactTodoContextSource(distinct), distinct);
 });
 
+test("Todo context keeps live User gates and readback proof for both registered record formats", () => {
+  const todos = [{todo_id: "user-stop", text: "Wait for approval before publication.", future_detail: true}];
+  const dictionary = ["todo_id", "text", "approval_state"];
+  const readback = {
+    source_authority: "sqlite_v0", provider_revision: "revision-1",
+    decision_read_from_provider: true, legacy_fallback_used: false,
+  };
+  for (const schema_version of ["loopx_todo_canonical_read_record_v0", "loopx_todo_domain_read_record_v0"]) {
+    const metadata = {schema_version, todo_count: 1, records_sha256: "a".repeat(64), future_proof: true};
+    const source = {source: "sqlite_v0", todos, authority_read: {...readback,
+      todo_read_model: {...metadata, contract_fields: dictionary}}};
+    assert.deepEqual(compactTodoContextSource(source),
+      {source: "sqlite_v0", todos, authority_read: {...readback, todo_read_model: metadata}});
+    assert.deepEqual(source.authority_read.todo_read_model.contract_fields, dictionary);
+  }
+  for (const todo_read_model of [
+    {schema_version: "future_todo_read_model", contract_fields: dictionary},
+    {schema_version: "loopx_todo_domain_read_record_v0", contract_fields: ["todo_id", null]},
+  ]) {
+    const source = {todos, authority_read: {...readback, todo_read_model}};
+    assert.strictEqual(compactTodoContextSource(source), source);
+  }
+});
+
 function evidenceContext(): JsonObject {
   return {complete: true, sources: [{source: "turn_start_capability_hook", kind: "explore_turn_context",
     hook_id: "explore.turn_context", capability_id: "explore", content: {

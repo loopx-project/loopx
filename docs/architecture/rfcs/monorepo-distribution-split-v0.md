@@ -416,6 +416,11 @@ observations expose their current scoped status in this view. Their full
 receipts stay in the original capture, with observations, failures, required
 reads and unfamiliar data still delivered when present.
 
+Work context carries the selected task, scoped User Todos and their read
+provenance. For both registered Todo read formats, the field dictionary stays
+with the canonical Todo reader. Existing captures remain available under
+their original digests.
+
 Context reuse must be invalidated by relevant source/requirement revisions,
 session generation changes, compaction or lost acknowledgements. A smaller
 packet cannot be treated as proof the executor has the prior context. Recover

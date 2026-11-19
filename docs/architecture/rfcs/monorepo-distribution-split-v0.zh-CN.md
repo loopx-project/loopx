@@ -287,6 +287,9 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 当前状态，完整回执留在原始 capture 中。有实际结果、失败、必读材料或未知字段时，
 Worker 仍会收到对应内容。
 
+工作上下文携带选中的任务、作用域内的 User Todo 和读取依据。两种已登记的 Todo 读取
+格式都把字段表留在 canonical Todo 读取入口。已有 capture 仍可按原摘要读取。
+
 相关来源/要求版本变化、Session generation 变化、compaction 或 ACK 丢失时，必须使上下文复用失效。
 不能因为 packet 更小，就认为 executor 已掌握前文。连续性未知时走所属契约的恢复路径。
 Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导。
