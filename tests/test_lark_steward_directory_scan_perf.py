@@ -1,10 +1,12 @@
 """Regression and directory-scan efficiency checks for steward/chat hot paths."""
 from __future__ import annotations
 
+import gc
 import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+import tracemalloc
 
 import pytest
 
@@ -200,7 +202,7 @@ def test_private_ingress_records_cache_unchanged_captures_and_fail_closed(tmp_pa
         observer._records()
 
 
-def test_external_conversations_pending_caches_unchanged_journals_and_isolates_mutations(tmp_path, monkeypatch):
+def test_external_conversations_recover_caches_metadata_only_and_drops_image_bodies(tmp_path, monkeypatch):
     import loopx.capabilities.native_chat.external_conversations as external_module
 
     controller = SimpleNamespace(
@@ -212,8 +214,14 @@ def test_external_conversations_pending_caches_unchanged_journals_and_isolates_m
 
     refs = [_hex_ref(10), _hex_ref(11), _hex_ref(12)]
     for ref in refs:
-        _atomic_write_json(core.root / f"{ref}.json", _native_request(ref, status="prepared"))
+        row = _native_request(ref, status="command_completed")
+        row["delivery_verified"] = True
+        row["message"] = "retained body " + ref
+        _atomic_write_json(core.root / f"{ref}.json", row)
     (core.root / "ignored-note.json").write_text(json.dumps({"ignored": True}), encoding="utf-8")
+
+    # pending() still returns full canonical rows including message bodies.
+    assert [row["message"] for row in core.pending()] == ["retained body " + ref for ref in refs]
 
     reads: list[Path] = []
     original_read = external_module._read_json
@@ -224,36 +232,69 @@ def test_external_conversations_pending_caches_unchanged_journals_and_isolates_m
 
     monkeypatch.setattr(external_module, "_read_json", counted_read)
 
-    first = core.pending()
-    assert [row["request_ref"] for row in first] == refs
+    core.recover()
     assert len(reads) == 3
 
     reads.clear()
-    second = core.pending()
-    assert second == first
+    core.recover()
     assert reads == []
 
-    # Mutating returned dicts in caller memory must not pollute subsequent reads.
-    second[0]["status"] = "mutated"
-    second[0]["source"]["source_ref"] = "tampered"
-    third = core.pending()
-    assert third[0]["status"] == "prepared"
-    assert third[0]["source"]["source_ref"] == "source_one"
+    # Mutating returned metadata rows must not corrupt the discovery cache.
+    snapshot = core._recovery_rows()
+    assert [row["request_ref"] for row in snapshot] == refs
+    assert all("message" not in row and "attachments" not in row for row in snapshot)
+    snapshot[0]["status"] = "mutated"
+    snapshot[0]["source"]["source_ref"] = "tampered"
+    assert [row["status"] for row in core._recovery_rows()] == ["command_completed"] * 3
+    assert core._recovery_rows()[0]["source"]["source_ref"] == "source_one"
     assert reads == []
 
     # Replacing a file (even with preserved mtime) invalidates only that file.
     target = core.root / f"{refs[1]}.json"
     stamp = target.stat()
-    _atomic_write_json(target, _native_request(refs[1], status="accepted"))
+    updated = _native_request(refs[1], status="command_completed")
+    updated["delivery_verified"] = False
+    _atomic_write_json(target, updated)
     os.utime(target, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
 
-    fourth = core.pending()
-    assert fourth[1]["status"] == "accepted"
+    core.recover()
     assert reads == [target]
 
     # Deleting a file removes it without re-reading unchanged siblings.
     reads.clear()
     (core.root / f"{refs[0]}.json").unlink()
-    fifth = core.pending()
-    assert [row["request_ref"] for row in fifth] == [refs[1], refs[2]]
+    remaining = core._recovery_rows()
+    assert [row["request_ref"] for row in remaining] == [refs[1], refs[2]]
     assert reads == []
+
+
+def test_external_conversations_recover_does_not_retain_delivered_image_payloads(tmp_path):
+    controller = SimpleNamespace(
+        store=SimpleNamespace(root=tmp_path),
+        project_contexts=SimpleNamespace(conversation_bindings=SimpleNamespace()),
+    )
+    core = ChatExternalConversations(controller)
+    core.root.mkdir()
+
+    # 24 delivered requests each carrying ~1.5 MiB synthetic data_url image attachments.
+    payload_blob = "data:image/png;base64," + ("A" * (1_500_000))
+    for i in range(24):
+        ref = _hex_ref(100 + i)
+        row = _native_request(ref, status="command_completed")
+        row["delivery_verified"] = True
+        row["attachments"] = [{"kind": "image", "mime_type": "image/png", "data_url": payload_blob}]
+        _atomic_write_json(core.root / f"{ref}.json", row)
+    del payload_blob
+    gc.collect()
+
+    tracemalloc.start()
+    try:
+        before = tracemalloc.take_snapshot()
+        core.recover()
+        gc.collect()
+        after = tracemalloc.take_snapshot()
+    finally:
+        tracemalloc.stop()
+
+    retained_bytes = sum(stat.size_diff for stat in after.compare_to(before, "lineno") if stat.size_diff > 0)
+    assert retained_bytes < 512 * 1024, f"recover() retained {retained_bytes} bytes of delivered image payloads"
