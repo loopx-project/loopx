@@ -301,3 +301,74 @@ def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provid
         server.shutdown()
         worker.join(timeout=5)
         server.server_close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_execution_feedback_survives_http_and_lark_readback_after_disable(tmp_path, monkeypatch, provider):
+    """Recorded method deviations remain visible without certifying benefit."""
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.extensions.lark.presentation.explore_record_values import _finding_record_values
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    state = tmp_path / "active.md"
+    state.write_text("# Read-only feedback\n")
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [
+        {"id": "feedback", "repo": str(tmp_path), "state_file": state.name},
+    ]}))
+    initialize_canonical_authority(runtime, "feedback", build_todo_runtime_shadow_projection(
+        goal_id="feedback", todos=[], handoff_mode="soft_claim"), state_path=state, provider=provider)
+    observation = {
+        "schema_version": "explore_execution_observation_v0", "candidate_sha256": "a" * 64,
+        "input_revision": "input-v1", "planned_method_id": "broad-search",
+        "executed_method_id": "targeted-check", "change_reason": "A counterexample ruled out broad search.",
+        "elapsed_seconds": 12.5, "limit_seconds": 60, "search_iterations": None, "stop_reason": None,
+        "evidence_refs": ["artifact:negative-result"], "result_ref": "artifact:negative-result",
+        "result_candidate_sha256": "a" * 64,
+    }
+    log = explore_result_log_path(runtime, "feedback")
+    append_explore_result_event(log, build_explore_node_event(
+        goal_id="feedback", node_id="choice", title="Method choice"))
+    for finding_id, observed in (("plain", None), ("changed", observation)):
+        append_explore_result_event(log, build_explore_finding_event(
+            goal_id="feedback", node_id="choice", finding_id=finding_id,
+            title="Recorded negative result", summary="No measured improvement.", status="refuted",
+            execution_observation=observed, evidence_refs=["artifact:negative-result"]))
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+    with pytest.raises(EffectRuntimeRejected, match="executed candidate"):
+        build_explore_finding_event(goal_id="feedback", node_id="choice", finding_id="bad",
+            title="Wrong candidate", execution_observation={**observation, "result_candidate_sha256": "b" * 64})
+    before = {path: path.read_bytes() for path in (log, state, registry)}
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root_override, server.verbose = registry, None, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        # Explore is never activated: already saved evidence remains readable.
+        with urlopen(f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id=feedback&view=findings") as response:
+            page = json.load(response)
+        changed = next(row for row in page["items"] if row["finding_id"] == "changed")
+        plain = next(row for row in page["items"] if row["finding_id"] == "plain")
+        assert changed["execution_observation"] == observation
+        assert changed["status"] == "refuted"
+        assert "execution_observation" not in plain
+        for row in (plain, changed):
+            lark = _finding_record_values(row, goal_id="feedback", source_id="fixture")
+            assert lark["Status"] == "refuted"
+            assert lark["LoopX Result ID"] == row["finding_id"]
+            if row is plain:
+                assert lark["Summary"] == "No measured improvement."
+            else:
+                assert "broad-search -> targeted-check" in lark["Summary"]
+                assert "12.5 / 60" in lark["Summary"]
+                assert "Search iterations: not measured" in lark["Summary"]
+                assert "Termination reason: not measured" in lark["Summary"]
+                assert "artifact:negative-result" in lark["Summary"]
+                assert "independently assessed" in lark["Summary"]
+        assert all(path.read_bytes() == contents for path, contents in before.items())
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()

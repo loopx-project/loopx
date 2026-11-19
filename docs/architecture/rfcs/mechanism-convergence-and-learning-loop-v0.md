@@ -335,6 +335,20 @@ read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
 adding another execution profile to this slice.
 
+**Source checkpoint: product execution-observation readback (2026-11-19).** Saved
+findings reuse Explore's execution-observation codec and retain the planned and
+actual methods, deviation reason, candidate revision, costs and result reference.
+The findings and history readers share one expandable view; the existing Lark
+finding Summary presents the same recorded facts, keeping missing measurements
+unknown. Findings without observations retain their existing display and
+projection. Wrong-candidate result references are rejected, failed reads withhold
+old contents, and valid sources recover in place. Isolated File/SQLite HTTP and
+packaged desktop/narrow-browser checks qualify these paths without source-state
+or execution-authority mutations. This delivers product transport and readback,
+not model adoption or method benefit. Execution convergence, cross-task adoption,
+prediction calibration and matched-budget outcomes remain open. Formal evaluation
+does not block independent implementation or migration.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

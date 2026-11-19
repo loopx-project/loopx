@@ -22,3 +22,24 @@ export function WorkYardstickReadback({capture, zh}: {capture: WorkYardstickCapt
     <p>{zh ? "这是记录者的研究判断；代理有效性与成果验收仍需独立证据。" : "This records the author's research decision; proxy fidelity and outcome acceptance still require independent evidence."}</p>
   </details>;
 }
+
+/** Both current findings and append-only history read the same recorded facts. */
+export function ExecutionObservationReadback({observation, zh}: {
+  observation: import("../../../../../../loopx/control_plane/runtime_decode.js").JsonObject; zh: boolean;
+}) {
+  const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
+  return <details className="explore-reader-details">
+    <summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
+    <dl className="research-finding-sections">
+      <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(observation.planned_method_id)} → {String(observation.executed_method_id)}</dd>
+      {observation.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(observation.change_reason)}</dd></> : null}
+      <dt>{zh ? "运行秒数 / 上限秒数" : "Elapsed / limit seconds"}</dt><dd>{measured(observation.elapsed_seconds)} / {measured(observation.limit_seconds)}</dd>
+      <dt>{zh ? "搜索次数" : "Search iterations"}</dt><dd>{measured(observation.search_iterations)}</dd>
+      <dt>{zh ? "结束原因" : "Termination reason"}</dt><dd>{measured(observation.stop_reason)}</dd>
+      <dt>{zh ? "输入版本" : "Input revision"}</dt><dd><code>{String(observation.input_revision)}</code></dd>
+      <dt>{zh ? "执行候选 SHA-256" : "Executed candidate SHA-256"}</dt><dd><code>{String(observation.candidate_sha256)}</code></dd>
+      {observation.result_ref ? <><dt>{zh ? "该候选的结果引用" : "Result for this candidate"}</dt><dd><code>{String(observation.result_ref)}</code></dd></> : null}
+    </dl>
+    <p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p>
+  </details>;
+}

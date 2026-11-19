@@ -1,4 +1,4 @@
-import {WorkYardstickReadback} from "./work-yardstick-readback";
+import {ExecutionObservationReadback, WorkYardstickReadback} from "./work-yardstick-readback";
 import {GoalSourceStrategies, useGoalStrategyLocation} from "./goal-source-strategies";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
@@ -181,19 +181,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     </dl> : <p>{finding.summary}</p>;
   };
   const findingBody = (finding: ExploreHistoryEvent) => {
-    const execution = finding.execution_observation;
-    const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
-    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{finding.work_yardstick ? <WorkYardstickReadback capture={finding.work_yardstick} zh={zh}/> : null}{execution ? <details><summary><span>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</span> <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
-      <dl className="research-finding-sections">
-        <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
-        {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}
-        <dt>{zh ? "运行秒数 / 上限秒数" : "Elapsed / limit seconds"}</dt><dd>{measured(execution.elapsed_seconds)} / {measured(execution.limit_seconds)}</dd>
-        <dt>{zh ? "搜索次数" : "Search iterations"}</dt><dd>{measured(execution.search_iterations)}</dd>
-        <dt>{zh ? "结束原因" : "Termination reason"}</dt><dd>{measured(execution.stop_reason)}</dd>
-        <dt>{zh ? "执行候选 SHA-256" : "Executed candidate SHA-256"}</dt><dd><code>{String(execution.candidate_sha256)}</code></dd>
-        {execution.result_ref ? <><dt>{zh ? "该候选的结果引用" : "Result for this candidate"}</dt><dd><code>{String(execution.result_ref)}</code></dd></> : null}
-      </dl>
-    </details> : null}</>;
+    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{finding.work_yardstick ? <WorkYardstickReadback capture={finding.work_yardstick} zh={zh}/> : null}{finding.execution_observation ? <ExecutionObservationReadback observation={finding.execution_observation} zh={zh}/> : null}</>;
   };
   const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
   const findingElement = (finding: ExploreHistoryEvent) => {
