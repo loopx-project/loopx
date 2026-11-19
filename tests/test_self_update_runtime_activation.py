@@ -1060,8 +1060,9 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
     "target_read", ["compatible", "rejected", "other_revision", "legacy_fallback", "launcher_changed"],
 )
 @pytest.mark.parametrize("select_source_registry", [False, True])
+@pytest.mark.parametrize("archive_layout", ["default", "configured"])
 def test_rollback_checks_registered_todo_read_before_switching(
-    tmp_path, monkeypatch, capsys, target_read, select_source_registry,
+    tmp_path, monkeypatch, capsys, target_read, select_source_registry, archive_layout,
 ):
     from loopx.cli import main
 
@@ -1082,21 +1083,32 @@ def test_rollback_checks_registered_todo_read_before_switching(
         ],
     }))
     source_runtime = project / "state"
-    releases = tmp_path / "releases"
+    user_home = tmp_path / "user"
+    monkeypatch.setattr(Path, "home", lambda: user_home)
+    default_launcher = user_home / ".local/bin/loopx"
+    if archive_layout == "configured":
+        releases = tmp_path / "configured releases"
+        launcher = tmp_path / "configured bin/loopx"
+        monkeypatch.setenv("LOOPX_RELEASES_DIR", str(releases))
+        monkeypatch.setenv("LOOPX_BIN_DIR", str(launcher.parent))
+        default_launcher.parent.mkdir(parents=True)
+        default_launcher.write_text("Unrelated launcher")
+    else:
+        releases = user_home / ".local/share/loopx/releases"
+        launcher = default_launcher
+        monkeypatch.setenv("LOOPX_RELEASES_DIR", "")
+        monkeypatch.setenv("LOOPX_BIN_DIR", "")
     current, target, concurrent = (
         releases / label / "scripts/loopx" for label in ("current", "target", "concurrent")
     )
     for command in (current, target, concurrent):
         command.parent.mkdir(parents=True)
         command.touch()
-    launcher = tmp_path / "bin/loopx"
-    launcher.parent.mkdir()
+    launcher.parent.mkdir(parents=True)
     launcher.symlink_to(current)
     original_inode = launcher.lstat().st_ino
     snapshot = doctor_payload()
     snapshot["package"]["release_root"] = str(current.parent.parent)
-    monkeypatch.setattr("loopx.self_update._user_loopx_bin", lambda *_: launcher)
-    monkeypatch.setattr("loopx.self_update._user_releases_dir", lambda *_: releases)
     monkeypatch.setattr("loopx.self_update.collect_doctor", lambda **_: snapshot)
     authority = "loopx.control_plane.coordination.local_authority"
     promoted = []
@@ -1147,6 +1159,8 @@ def test_rollback_checks_registered_todo_read_before_switching(
         "--format", "json", "update", "--rollback", "target",
     ])
     result = json.loads(capsys.readouterr().out)
+    if archive_layout == "configured":
+        assert default_launcher.read_text() == "Unrelated launcher"
     assert (common_runtime, "legacy-only") in promoted
     assert current_reads == [(source_runtime, goal_id)]
     if target_read == "compatible":
