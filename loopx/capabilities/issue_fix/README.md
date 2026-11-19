@@ -1396,6 +1396,7 @@ loopx issue-fix outcome \
 python3 examples/issue-fix-capability-guide-smoke.py
 python3 examples/issue-fix-reviewer-recommendation-smoke.py
 python3 examples/issue-fix-reviewer-request-smoke.py
+python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py
 python3 examples/issue-fix-reviewer-notification-sink-smoke.py
 python3 examples/issue-fix-workflow-plan-smoke.py
 python3 examples/issue-fix-workflow-contract-smoke.py

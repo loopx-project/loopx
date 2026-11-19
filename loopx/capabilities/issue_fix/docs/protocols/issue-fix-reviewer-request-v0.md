@@ -189,6 +189,7 @@ Run:
 
 ```bash
 python3 examples/issue-fix-reviewer-request-smoke.py
+python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py
 ```
 
 The generic fixture verifies live-author exclusion, top-candidate selection,
