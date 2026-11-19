@@ -383,6 +383,19 @@ def register_registry_admin_commands(subparsers: argparse._SubParsersAction) -> 
     bind_thread_parser.add_argument("--host-surface", required=True, help="Host surface such as codex-app.")
     bind_thread_parser.add_argument("--agent-id", required=True, help="Already registered public-safe agent id.")
     bind_thread_parser.add_argument("--execute", action="store_true", help="Write the binding; otherwise preview only.")
+    bind_thread_parser.add_argument(
+        "--with-agy-hooks",
+        action="store_true",
+        help="Also preview or atomically write the bound Antigravity Stop recovery hook in hooks.json.",
+    )
+    bind_thread_parser.add_argument(
+        "--agy-home",
+        help="Antigravity config home for --with-agy-hooks (defaults to AGY_HOME or ~/.gemini/config).",
+    )
+    bind_thread_parser.add_argument(
+        "--cli-bin",
+        help="LoopX CLI executable path/name recorded in hooks.json when using --with-agy-hooks.",
+    )
 
     unbind_thread_parser = subparsers.add_parser(
         "unbind-agent-thread",
@@ -631,6 +644,14 @@ def handle_registry_admin_command(
 
     if args.command in {"bind-agent-thread", "unbind-agent-thread"}:
         try:
+            with_agy_hooks = bool(
+                args.command == "bind-agent-thread"
+                and getattr(args, "with_agy_hooks", False)
+            )
+            if with_agy_hooks and args.host_surface not in {"agy", "antigravity-app"}:
+                raise ValueError(
+                    "--with-agy-hooks requires --host-surface agy or antigravity-app"
+                )
             global_path = explicit_global_registry(args.runtime_root)
             global_goal = _registry_goal(global_path, args.goal_id)
             source_registry = global_goal.get("source_registry")
@@ -691,11 +712,13 @@ def handle_registry_admin_command(
                     _registry_goal(source_path, args.goal_id),
                     host_surface=args.host_surface,
                     thread_id=args.thread_id,
+                    exact_surface=True,
                 )
                 global_binding = resolve_thread_agent_binding(
                     _registry_goal(global_path, args.goal_id),
                     host_surface=args.host_surface,
                     thread_id=args.thread_id,
+                    exact_surface=True,
                 )
                 if args.command == "bind-agent-thread":
                     readback_verified = all(
@@ -724,6 +747,28 @@ def handle_registry_admin_command(
                     payload["error_kind"] = "thread_agent_binding_readback_failed"
             else:
                 payload["global_sync"] = {"enabled": bool(args.execute), "wrote": False}
+            if with_agy_hooks:
+                from ..slash_command_install import sync_antigravity_hooks
+
+                cli_bin = (
+                    getattr(args, "cli_bin", None)
+                    or getattr(args, "control_cli_bin", None)
+                    or "loopx"
+                )
+                hooks_result = sync_antigravity_hooks(
+                    cli_bin=cli_bin,
+                    agy_home=getattr(args, "agy_home", None),
+                    execute=bool(args.execute and payload.get("ok")),
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    runtime_root=str(global_path.parent),
+                    conversation_id=args.thread_id,
+                    registry=str(source_path),
+                )
+                payload["antigravity_hooks"] = hooks_result
+                if hooks_result["status"].startswith(("blocked_", "skipped_")):
+                    payload["ok"] = False
+                    payload["error_kind"] = hooks_result["status"]
         except Exception as exc:
             payload = {
                 "ok": False,

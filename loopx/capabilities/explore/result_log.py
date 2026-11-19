@@ -933,7 +933,9 @@ def _materialized_parent_edges(
     return derived
 
 
-def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
+def _finding_view(
+    event: Mapping[str, Any], *, include_internal_order: bool = False
+) -> dict[str, Any]:
     measured: dict[str, Any] = {}
     if "measurements" in event:
         try:
@@ -943,11 +945,13 @@ def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
             # view, not the append-only history. Runtime failure propagates.
             measured["measurement_error"] = str(error)
         else:
-            measured.update(measurements=event["measurements"], recorded_order=event["_recorded_order"])
+            measured["measurements"] = event["measurements"]
     return {
         **({"work_binding": event["work_binding"]} if "work_binding" in event else {}),
-        **({"work_yardstick": event["work_yardstick"], "recorded_order": event["_recorded_order"]} if "work_yardstick" in event else {}),
+        **({"work_yardstick": event["work_yardstick"]} if "work_yardstick" in event else {}),
         **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
+        **({"recorded_order": event["_recorded_order"]} if include_internal_order
+            or "measurements" in event or "work_yardstick" in event else {}),
         **measured,
         "finding_id": str(event.get("result_id") or ""),
         "finding": str(event.get("title") or ""),
@@ -1171,6 +1175,7 @@ def build_explore_result_projection(
     goal_id: str,
     finding_limit: int = DEFAULT_FINDING_LIMIT,
     mermaid_node_limit: int = DEFAULT_MERMAID_NODE_LIMIT,
+    include_internal_finding_order: bool = False,
 ) -> dict[str, Any]:
     """Fold result events into the bounded projection display sinks render."""
 
@@ -1202,7 +1207,9 @@ def build_explore_result_projection(
     # Whole-second source clocks can tie. Folding retains creation order, so
     # break equal chronology keys with the existing latest-append ordinal
     # before bounding any consumer; do not rewrite the stored evidence clock.
-    findings = [_finding_view(event) for event in sorted(
+    findings = [_finding_view(
+        event, include_internal_order=include_internal_finding_order,
+    ) for event in sorted(
         folded_findings,
         key=lambda item: (chronology_key(item["last_updated_at"]), item["_recorded_order"]),
         reverse=True,

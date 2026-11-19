@@ -149,6 +149,7 @@ class _QuotaDecisionPreparation:
     action_selection_qualification: dict[str, Any] | None
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None
+    receipt_bound_replan_execution_pending: bool
     user_todo_summary: dict[str, Any] | None
     agent_todo_summary: dict[str, Any] | None
     agent_todo_planning_source_items: list[dict[str, Any]]
@@ -750,6 +751,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_replan_obligation_id: str | None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_replan_execution_pending: bool = False,
     receipt_bound_successor_replan: bool = False,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
@@ -971,7 +973,7 @@ def _prepare_quota_should_run_item(
             active_next_action=(
                 item.get("active_state_next_action")
                 or (
-                    item.get("project_asset", {}).get("next_action")
+                    cast(dict[str, object], item.get("project_asset")).get("next_action")
                     if isinstance(item.get("project_asset"), dict)
                     else None
                 )
@@ -1109,6 +1111,7 @@ def _prepare_quota_should_run_item(
         action_selection_qualification=None,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
+        receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
         agent_todo_planning_source_items=agent_todo_planning_source_items,

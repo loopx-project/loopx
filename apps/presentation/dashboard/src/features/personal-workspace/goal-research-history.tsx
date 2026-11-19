@@ -67,6 +67,15 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const [caseMode, setCaseReading] = useState(readCaseMode);
   const requestedCase = caseMode.goalId === goalId ? caseMode.requested : null;
   const caseReading = requestedCase ?? !preferHistory;
+  const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(pack => pack.case_study_summary);
+  // A link to a particular version stays in the case reader even when that
+  // version has no study. An unpinned visit can fall back to ordinary history.
+  const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
+  const caseViewAvailable = hasCases || awaitingRequestedCase || (requestedCase === true && analysis.location.packId !== null);
+  const deferHistory = requestedCase === true && caseViewAvailable;
+  const historySource = JSON.stringify([goalId, originalGoalId, readSourceUrl]);
+  const [openedHistorySource, setOpenedHistorySource] = useState<string | null>(null);
+  const readHistory = active && (!deferHistory || openedHistorySource === historySource);
   useEffect(() => {
     const changed = () => setCaseReading(readCaseMode());
     changed(); window.addEventListener("popstate", changed);
@@ -200,7 +209,10 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><div><p>{stateLabel(event.status)} · {event.title}</p>{event.summary ? findingBody(event) : null}</div>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
 
   useEffect(() => {
-    if (!active) return;
+    if (!readHistory) return;
+    // Once history has opened, switching back to the saved case should not
+    // cancel a page in flight or start the same history scan again.
+    setOpenedHistorySource(historySource);
     let current = true;
     const controller = new AbortController();
     setBusy(true); setError(""); setLoaded(0);
@@ -245,7 +257,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       } finally {if (current) setBusy(false);}
     })();
     return () => {current = false; controller.abort();};
-  }, [goalId, originalGoalId, active, revision, refreshRevision, readSourceUrl]);
+  }, [goalId, originalGoalId, readHistory, historySource, revision, refreshRevision, readSourceUrl]);
   const history = useMemo(() => {
     try {
       const canonical = projectExploreHistory(read.events, originalGoalId);
@@ -518,18 +530,14 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/>
   </Fragment> : null;
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
-  const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
-  // Keep an explicitly opened study in place during a read failure. A complete
-  // catalogue with no study still uses the ordinary history view.
-  const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
   const selectedStrategy = hasNativeSource && !emptySourceHistory ? strategies.selection : null;
-  const readingCase = caseReading && (hasCases || awaitingRequestedCase) && (requestedCase === true || selectedStrategy === null);
+  const readingCase = caseReading && caseViewAvailable && (requestedCase === true || selectedStrategy === null);
   const alternateReading = readingCase ? <ResearchCaseReading analysis={analysis} active={active}/>
     : selectedStrategy !== null ? <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
       sourceUrl={readSourceUrl} zh={zh} selection={selectedStrategy}
       onSelect={strategies.choose} onClose={() => strategies.choose(null)}/> : null;
   return <>
-    {hasCases || awaitingRequestedCase ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
+    {caseViewAvailable ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
       <button type="button" aria-pressed={!readingCase} onClick={() => {
         if (readingCase) {analysis.closeCitation(); setCaseMode(false);}
       }}>{zh ? "研究历程" : "Research history"}</button>

@@ -12,11 +12,12 @@ import test_quota_settlement_cli as fixture
 from loopx.control_plane.todos.markdown import render_todo_markdown
 
 
-def test_settlement_recovery_preserves_order_conditions_and_commands() -> None:
+@pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
+def test_settlement_recovery_preserves_order_conditions_and_commands(version: str) -> None:
     payload = {
         "error": "same-Turn settlement is incomplete",
         "settlement_plan": {
-            "schema_version": "quota_settlement_plan_v1",
+            "schema_version": version,
             "ordered_steps": [
                 None,
                 {
@@ -75,10 +76,13 @@ def test_empty_typed_settlement_plan_keeps_its_heading() -> None:
 
 
 @pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
-def test_real_cli_recovery_markdown_exposes_the_same_semantic_command(tmp_path, monkeypatch, handoff_mode):
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("terminal", [False, True])
+def test_real_cli_recovery_markdown_exposes_the_same_semantic_command(tmp_path, monkeypatch, handoff_mode, provider, terminal):
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
-    fixture._initialize_fixture_authority(project, runtime, provider="sqlite", handoff_mode=handoff_mode)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     binding = ["--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
                "--todo-id", fixture.TODO_ID, "--turn-instance-id", "markdown-feedback"]
     if handoff_mode == "hard_lease":
@@ -89,16 +93,23 @@ def test_real_cli_recovery_markdown_exposes_the_same_semantic_command(tmp_path, 
     code, guard = fixture._run_cli(registry, runtime, "quota", "should-run", *binding,
         "--runtime-profile", "generic_cli", cwd=project)
     assert code == 0 and guard["should_run"], guard
-    complete = ["todo", "complete", *binding, "--no-follow-up", "--evidence", "evidence:route-feedback"]
+    complete = ["todo", "complete", *binding, "--evidence", "evidence:route-feedback"]
+    if terminal:
+        complete.append("--no-follow-up")
     if handoff_mode == "hard_lease":
         complete += ["--claim-operation-id", "markdown-execution"]
     code, recovery = fixture._run_cli(registry, runtime, *complete, cwd=project)
-    assert code == 1, recovery
+    assert code == int(terminal), recovery
+    plan = recovery["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    assert plan["ordered_steps"][2]["owner"] == "runtime"
+    assert "command_template" not in plan["ordered_steps"][2]
     expected = recovery["settlement_plan"]["ordered_steps"][1]["semantic_closeout_command_template"]
     markdown = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "markdown", *complete], cwd=project,
         env={**os.environ, "PYTHONPATH": str(fixture.REPO_ROOT)}, capture_output=True, text=True)
-    assert markdown.returncode == 1, markdown.stdout
+    assert markdown.returncode == int(terminal), markdown.stdout
     assert "semantic closeout: `" + expected + "`" in markdown.stdout
     spend_precondition = recovery["settlement_plan"]["ordered_steps"][2]["precondition"]
     assert "fresh open-Todo semantic checkpoint" in spend_precondition

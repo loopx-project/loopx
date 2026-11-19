@@ -74,7 +74,7 @@ def request_cancel(directory: Path) -> dict[str, Any]:
 
 
 def _observed_usage(directory: Path) -> dict | None:
-    """Provider observation survives output/qualification failure; not a fee estimate."""
+    """Provider observation survives output/qualification failure."""
     events = directory / "events.jsonl"
     if not events.exists():
         return None

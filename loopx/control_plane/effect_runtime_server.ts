@@ -118,7 +118,12 @@ function resetIdleTimer(server: ReturnType<typeof createServer>): void {
   clearTimeout(idleTimer);
   // Idleness starts after effects finish, not when their sockets connect.
   if (!publicationComplete || pendingRequests > 0 || shutdownRequested || !server.listening) return;
-  idleTimer = setTimeout(() => server.close(), idleMs);
+  idleTimer = setTimeout(() => {
+    server.close();
+    // close() waits for every connection; one whose peer died without a
+    // request would keep this process alive but no longer listening.
+    for (const socket of sockets) socket.destroy();
+  }, idleMs);
   idleTimer.unref();
 }
 
@@ -139,7 +144,10 @@ async function writeResponse(socket: Socket, response: JsonObject, sink: FileHan
     request_id: response.request_id, ok: true, result_ref: ref})}\n`);
 }
 
+const sockets = new Set<Socket>();
 const server = createServer((socket) => {
+  sockets.add(socket);
+  socket.on("close", () => sockets.delete(socket));
   resetIdleTimer(server);
   socket.setEncoding("utf8");
   // A caller may close while a response is still buffered (for example after

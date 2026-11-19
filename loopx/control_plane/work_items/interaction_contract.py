@@ -13,9 +13,14 @@ import shlex
 import typing
 from collections.abc import Collection, Mapping
 
+from ...install_contract import render_host_cli_command
+
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction, agent_scope_frontier_action as _agent_scope_frontier_action
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
-from ..agents.workspace_guard import delivery_workspace_refresh_hint
+from ..agents.workspace_guard import (
+    delivery_workspace_refresh_hint,
+    workspace_guard_missing_task_repository,
+)
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
@@ -47,7 +52,7 @@ from ..todos.contract import (
     normalize_todo_replan_obligation_id,
 )
 from ..todos.todo_semantics import todo_item_task_class
-from ..todos.user_gate import has_only_open_user_actions, open_todo_count
+from ..todos.user_gate import has_only_open_user_actions, open_todo_count, open_user_gate_todo_items
 from ..todos.write_hint import build_capability_resolution_writeback_actions
 from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
@@ -463,6 +468,17 @@ def _due_monitor_cli_actions(
     ]
 
 
+# Observation is evidence, never an owner decision: no completion command is projected.
+# Keep the text free of quote characters; consumers shlex-split every action.
+MONITOR_USER_GATE_NOTICE = (
+    "A Monitor observation never completes or approves a User gate. Do not pass the id or claim proof "
+    "of this Turn to a gate completion, and do not attach evidence to a gate through todo update. "
+    "Record the observation with the poll below and yield. Work that may continue on an observed change "
+    "without an owner decision belongs in the successor of that poll (--material-change with "
+    "--next-agent-todo), not behind a User gate."
+)
+
+
 def _turn_scoped_cli_settlement_context(
     payload: dict[str, Any],
     *,
@@ -633,7 +649,7 @@ def _selection_recovery_command(
 
 def _render_replan_successor_closeout_guard(
     *, settlement_plan: Mapping[str, Any] | None,
-    scheduler_args: str, typed_quota_guard: str, settlement_args: str,
+    scheduler_args: str, typed_quota_guard: str,
 ) -> str | None:
     """Render this host's guard for an existing TS-owned pure replan identity."""
     if not scheduler_args or not settlement_plan:
@@ -642,14 +658,18 @@ def _render_replan_successor_closeout_guard(
     if not isinstance(identity, Mapping) or identity.get("binding_kind") != "autonomous_replan":
         # Todo-bound replans retain their distinct closeout path.
         return None
-    return typed_quota_guard + settlement_args
+    # The receipt recovers the obligation; should-run accepts only its Turn.
+    return render_host_cli_command([
+        *shlex.split(typed_quota_guard),
+        "--turn-instance-id", str(identity["turn_instance_id"]),
+    ])
 
 
 def _deferred_resume_continuation(
     todo_id: str, settlement_plan: Mapping[str, Any] | None,
     scheduler_args: str, typed_quota_guard: str,
 ) -> list[str] | None:
-    """Render the existing same-Todo admission path; reopening is not a grant."""
+    """Render the existing same-Todo admission path."""
     identity = (settlement_plan or {}).get("identity")
     binding_args = settlement_binding_args(settlement_plan)
     if (not scheduler_args or not binding_args or not isinstance(identity, Mapping)
@@ -732,6 +752,77 @@ def _automation_prompt_upgrade_cli_actions(
         actions.append(completion_command)
     return [action for action in actions if action] or [
         f"{command_prefix} heartbeat-prompt --thin --goal-id {goal_id} --agent-id <registered-agent> --agent-scope '<scope>'",
+    ]
+
+
+def _successor_replan_required_cli_actions(
+    payload: Mapping[str, object],
+    *,
+    command_prefix: str,
+    goal_id: str,
+    lifecycle_actor_args: str,
+    typed_quota_guard: str,
+    settlement_plan: Mapping[str, object],
+    scheduler_args: str,
+    settlement_args: str,
+    scoped_cli_args: str,
+    quota_spend_action: str,
+) -> list[str]:
+    agent_scope_frontier = (
+        frontier if isinstance(frontier := payload.get("agent_scope_frontier"), dict)
+        else {}
+    )
+    if cycle_actions := _dependency_cycle_cli_actions(
+        agent_scope_frontier, command_prefix=command_prefix, goal_id=goal_id,
+        lifecycle_actor_args=lifecycle_actor_args, typed_quota_guard=typed_quota_guard,
+    ):
+        return cycle_actions
+    monitor_candidates = agent_scope_frontier.get("monitor_blocked_resume_candidates")
+    if not isinstance(monitor_candidates, list):
+        monitor_candidates = []
+    if monitor_candidates:
+        first_candidate = (
+            monitor_candidates[0]
+            if isinstance(monitor_candidates[0], dict)
+            else {}
+        )
+        monitor_todo_id = str(
+            first_candidate.get("blocking_monitor_todo_id") or "<monitor_todo_id>"
+        )
+        gated_todo_id = str(first_candidate.get("todo_id") or "<gated_todo_id>")
+        return [
+            f"{command_prefix} todo complete --goal-id {goal_id} --todo-id {monitor_todo_id}{lifecycle_actor_args} --evidence '<validated gate evidence>'",
+            f"{command_prefix} todo update --goal-id {goal_id} --todo-id {gated_todo_id}{lifecycle_actor_args} --note '<public-safe gate repair reason>'",
+            f"{command_prefix} refresh-state --goal-id {goal_id} --classification standing_monitor_gate_repair_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
+            quota_spend_action,
+        ]
+    route_candidates = agent_scope_frontier.get("route_continuation_replan_candidates")
+    if not isinstance(route_candidates, list):
+        route_candidates = []
+    if route_candidates:
+        return [
+            f"{command_prefix} todo add --goal-id {goal_id} --role agent --text '<public-safe route continuation advancement todo>'",
+            f"{command_prefix} refresh-state --goal-id {goal_id} --classification route_continuation_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
+            quota_spend_action,
+        ]
+    candidates = agent_scope_frontier.get("deferred_resume_candidates")
+    if not isinstance(candidates, list):
+        candidates = []
+    first_candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+    todo_id = str(first_candidate.get("todo_id") or "<todo_id>")
+    reopen = (
+        f"{command_prefix} todo update --goal-id {goal_id} --todo-id {todo_id}"
+        f"{lifecycle_actor_args} --status open --clear-resume-when "
+        "--reason '<public-safe successor replan reason>'"
+    )
+    if continuation := _deferred_resume_continuation(
+        todo_id, settlement_plan, scheduler_args, typed_quota_guard,
+    ):
+        return [reopen, *continuation]
+    return [
+        reopen,
+        f"{command_prefix} refresh-state --goal-id {goal_id} --classification successor_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
+        quota_spend_action,
     ]
 
 
@@ -904,62 +995,18 @@ def _admitted_interaction_next_cli_actions(
     ):
         return [typed_quota_guard]
     if mode == AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value:
-        agent_scope_frontier = (
-            frontier if isinstance(frontier := payload.get("agent_scope_frontier"), dict)
-            else {}
+        return _successor_replan_required_cli_actions(
+            payload,
+            command_prefix=command_prefix,
+            goal_id=goal_id,
+            lifecycle_actor_args=lifecycle_actor_args,
+            typed_quota_guard=typed_quota_guard,
+            settlement_plan=settlement_plan,
+            scheduler_args=scheduler_args,
+            settlement_args=settlement_args,
+            scoped_cli_args=scoped_cli_args,
+            quota_spend_action=quota_spend_action,
         )
-        if cycle_actions := _dependency_cycle_cli_actions(
-            agent_scope_frontier, command_prefix=command_prefix, goal_id=goal_id,
-            lifecycle_actor_args=lifecycle_actor_args, typed_quota_guard=typed_quota_guard,
-        ):
-            return cycle_actions
-        monitor_candidates = agent_scope_frontier.get("monitor_blocked_resume_candidates")
-        if not isinstance(monitor_candidates, list):
-            monitor_candidates = []
-        if monitor_candidates:
-            first_candidate = (
-                monitor_candidates[0]
-                if isinstance(monitor_candidates[0], dict)
-                else {}
-            )
-            monitor_todo_id = str(
-                first_candidate.get("blocking_monitor_todo_id") or "<monitor_todo_id>"
-            )
-            gated_todo_id = str(first_candidate.get("todo_id") or "<gated_todo_id>")
-            return [
-                f"{command_prefix} todo complete --goal-id {goal_id} --todo-id {monitor_todo_id}{lifecycle_actor_args} --evidence '<validated gate evidence>'",
-                f"{command_prefix} todo update --goal-id {goal_id} --todo-id {gated_todo_id}{lifecycle_actor_args} --note '<public-safe gate repair reason>'",
-                f"{command_prefix} refresh-state --goal-id {goal_id} --classification standing_monitor_gate_repair_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
-                quota_spend_action,
-            ]
-        route_candidates = agent_scope_frontier.get("route_continuation_replan_candidates")
-        if not isinstance(route_candidates, list):
-            route_candidates = []
-        if route_candidates:
-            return [
-                f"{command_prefix} todo add --goal-id {goal_id} --role agent --text '<public-safe route continuation advancement todo>'",
-                f"{command_prefix} refresh-state --goal-id {goal_id} --classification route_continuation_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
-                quota_spend_action,
-            ]
-        candidates = agent_scope_frontier.get("deferred_resume_candidates")
-        if not isinstance(candidates, list):
-            candidates = []
-        first_candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-        todo_id = str(first_candidate.get("todo_id") or "<todo_id>")
-        reopen = (
-            f"{command_prefix} todo update --goal-id {goal_id} --todo-id {todo_id}"
-            f"{lifecycle_actor_args} --status open --clear-resume-when "
-            "--reason '<public-safe successor replan reason>'"
-        )
-        if continuation := _deferred_resume_continuation(
-            todo_id, settlement_plan, scheduler_args, typed_quota_guard,
-        ):
-            return [reopen, *continuation]
-        return [
-            reopen,
-            f"{command_prefix} refresh-state --goal-id {goal_id} --classification successor_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
-            quota_spend_action,
-        ]
     if (
         mode == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
         and _blocked_successor_wait_observation_required(payload)
@@ -989,6 +1036,30 @@ def _admitted_interaction_next_cli_actions(
             ),
         ]
     if mode == "agent_workspace_repair":
+        guard = payload.get("workspace_guard")
+        if workspace_guard_missing_task_repository(
+            guard if isinstance(guard, Mapping) else None
+        ):
+            selected_todo = payload.get("selected_todo")
+            selected_todo_id = (
+                normalize_todo_id(selected_todo.get("todo_id"))
+                if isinstance(selected_todo, Mapping)
+                else None
+            )
+            todo_arg = (
+                f" --todo-id {shlex.quote(selected_todo_id)}"
+                if selected_todo_id
+                else ""
+            )
+            return [
+                (
+                    f"if this Todo targets the current repository: {command_prefix} todo update "
+                    f"--goal-id {goal_id}{todo_arg}{lifecycle_actor_args} "
+                    "--task-repository <credential-free-git-identity>; otherwise create or switch "
+                    "to an independent worktree of the Goal repository"
+                ),
+                typed_quota_guard,
+            ]
         return [
             "create or switch to an independent git worktree/branch",
             typed_quota_guard,
@@ -1019,7 +1090,7 @@ def _admitted_interaction_next_cli_actions(
             ),
             successor_closeout_guard=_render_replan_successor_closeout_guard(
                 settlement_plan=settlement_plan, scheduler_args=scheduler_args,
-                typed_quota_guard=typed_quota_guard, settlement_args=settlement_args,
+                typed_quota_guard=typed_quota_guard,
             ),
         )
     return _terminal_cli_actions(
@@ -1072,8 +1143,8 @@ def _interaction_reads_and_arbitration(
         "command" in recommendation or recommendation.get("source") == "interaction_contract"
     ):
         # Transport configured-command compatibility guidance and its readback.
-        # The existing typed quota projection uses interaction admission; neither
-        # this bridge nor later host projections choose another action.
+        # The existing typed quota projection uses interaction admission.
+
         projection_params.update({
             "heartbeat_recommendation": recommendation,
             "primary_action": contract["agent_channel"].get("primary_action"),
@@ -1396,7 +1467,7 @@ def _build_interaction_cli_channel(
             registry_path=registry_path,
         )
     )
-    channel = {
+    channel: dict[str, Any] = {
         "next_cli_actions": _admitted_interaction_next_cli_actions(
             payload,
             mode=mode,
@@ -1436,6 +1507,10 @@ def _build_interaction_cli_channel(
     work_lane = payload.get("work_lane_contract")
     if not isinstance(work_lane, Mapping):
         work_lane = {}
+    if primary_monitor is not None and turn_instance_id and open_user_gate_todo_items(payload.get("user_todo_summary")):
+        # Keep the Monitor instruction first; the notice precedes the poll it qualifies.
+        actions = channel["next_cli_actions"]
+        channel["next_cli_actions"] = [*actions[:1], MONITOR_USER_GATE_NOTICE, *actions[1:]]
     auxiliary_monitor = work_lane.get("auxiliary_monitor_poll")
     if not isinstance(auxiliary_monitor, Mapping):
         auxiliary_monitor = None

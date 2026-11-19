@@ -67,7 +67,7 @@ loopx capability list --format json
 loopx extension --help
 ```
 
-命令存在不代表完整流程已验证。Host automation、visible Goal 和 Extension activation 需要各自的
+Host automation、visible Goal 和 Extension activation 需要各自的
 readback；`doctor --deep` 还会启动并探测发布物携带的 TypeScript Effect runtime。迁移中的
 Python facade 成功返回，也不单独证明 TypeScript semantic owner、runtime decoder 和 durable
 effect path 都已通过。
@@ -208,5 +208,4 @@ loopx check \
 - [ ] internal links 与 public boundary scan 通过；
 - [ ] 首页预览已由 owner 审阅。
 
-完成这些检查后，GitHub Pages workflow 才应从 `main` 发布站点。Pages 是展示面，不是内容或
-LoopX 状态的事实源。
+完成这些检查后，GitHub Pages workflow 才应从 `main` 发布站点。Pages 是展示面。

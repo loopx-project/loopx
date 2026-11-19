@@ -7,6 +7,13 @@ from ...chat_store import CHAT_STORE_SCHEMA_VERSION
 
 
 class ChatQueueRequestMixin:
+    def _project_queue_reply_history(
+        self,
+        store: Any,
+        session: dict[str, Any],
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return rows
     def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
         from .steward_managed_mode import ManagedSessionTurn
         service = ManagedSessionTurn(self.server.runtime_controller)
@@ -63,7 +70,12 @@ class ChatQueueRequestMixin:
                 self._session_context(session)
             rows: list[dict[str, Any]] = []
             for turn in store.queued_turns(session_id, strict=True, include_reserved=True):
-                text = str(turn.get("message") or "")
+                # Reuse history's exact admission/source checks before truncating;
+                # a preview cannot decode a partial context envelope.
+                original = {"role": "user", "origin": turn.get("origin"),
+                            "turn_id": turn["turn_id"], "text": str(turn.get("message") or "")}
+                visible = self._project_queue_reply_history(store, session, [original])[0]
+                text = visible.get("reply_context", {}).get("source_text", original["text"])
                 rows.append({
                     "turn_id": turn["turn_id"],
                     "created_at": turn["created_at"],

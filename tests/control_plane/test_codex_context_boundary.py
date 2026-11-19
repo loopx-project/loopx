@@ -80,7 +80,7 @@ def _input_text(request):
 
 
 def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only", resume=None,
-                turn_timeout_sec=30, before_turn=None):
+                turn_timeout_sec=30, before_turn=None, allow_managed_hooks=False):
     with (home / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
         [binary, "app-server", "--listen", "stdio://"], cwd=str(workspace), env=env,
         stderr=stderr, response_timeout_sec=20,
@@ -97,10 +97,18 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
             handlers = [h for entry in listed["data"] for h in entry["hooks"]]
             fixture_hooks = json.loads((home / "hooks.json").read_text())["hooks"]
             expected_handlers = sum(len(group["hooks"]) for groups in fixture_hooks.values() for group in groups)
-            assert expected_handlers > 0 and len(handlers) == expected_handlers
-            assert all(h["sourcePath"] == str((home / "hooks.json").resolve()) for h in handlers)
+            fixture_path = str((home / "hooks.json").resolve())
+            fixture_handlers = [h for h in handlers if h["sourcePath"] == fixture_path]
+            other_handlers = [h for h in handlers if h["sourcePath"] != fixture_path]
+            assert expected_handlers > 0 and len(fixture_handlers) == expected_handlers
+            if allow_managed_hooks:
+                # A qualified installed profile may retain native-managed policy.
+                # Never grant trust to an unexpected user/plugin handler.
+                assert all(h.get("isManaged") is True and h.get("trustStatus") == "managed" for h in other_handlers)
+            else:
+                assert not other_handlers
             params["config"] = {"hooks.state": {
-                h["key"]: {"trusted_hash": h["currentHash"]} for h in handlers}}
+                h["key"]: {"trusted_hash": h["currentHash"]} for h in fixture_handlers}}
         if resume:
             params["threadId"] = resume
         source = native.request("thread/resume" if resume else "thread/start", params)["thread"]["id"]

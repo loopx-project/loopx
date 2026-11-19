@@ -999,6 +999,96 @@ def test_app_steward_snapshot_rechecks_grant_after_core_discovery(steward, monke
     assert (capture.read_bytes(), store.messages(sid)) == before
 
 
+@pytest.mark.parametrize("change", ["close", "revocation"])
+def test_steward_final_discovery_keeps_session_live_until_grant_decision(steward, monkeypatch, change):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "final-live-decision", "Read the original workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    before = capture.read_bytes(), store.messages(sid), len(store.list_sessions())
+    recheck, close = bindings._recheck_local_bindings, store.close_managed_session
+    close_entered, close_completed = threading.Event(), threading.Event()
+
+    def close_original(session_id):
+        close_entered.set()
+        try:
+            return close(session_id)
+        finally:
+            close_completed.set()
+
+    monkeypatch.setattr(store, "close_managed_session", close_original)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        pending = []
+
+        def before_final_decision(observed):
+            if change == "revocation":
+                bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+            else:
+                pending.append(workers.submit(runtime.close_session, sid))
+                assert close_entered.wait(2)
+                assert not close_completed.wait(.15), "Close committed inside the final live Session decision"
+            recheck(observed)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(bindings, "_recheck_local_bindings", before_final_decision)
+            if change == "revocation":
+                with pytest.raises(ValueError, match="changed"):
+                    bindings.app_steward_target()
+            else:
+                assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": sid}
+        if pending:
+            assert pending[0].result(timeout=2) is True
+            assert store.load_session(sid)["status"] == "closed"
+        with pytest.raises(ValueError):
+            bindings.app_steward_target()
+    assert (capture.read_bytes(), store.messages(sid), len(store.list_sessions())) == before
+
+
+@pytest.mark.parametrize("fence", ["thread", "file"])
+def test_steward_session_writer_is_unavailable_without_waiting_and_retries(steward, fence):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "busy-original", "Read the original workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    before = capture.read_bytes(), store.messages(sid), store.load_session(sid)
+    held, release = threading.Event(), threading.Event()
+
+    def existing_writer():
+        lock = (store._session_lock(sid) if fence == "thread" else
+                exclusive_file_lock(store._session_path(sid), operation="hold_session_update"))
+        with lock:
+            held.set()
+            assert release.wait(5)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        writer = workers.submit(existing_writer)
+        try:
+            assert held.wait(2)
+            opened = workers.submit(bindings.app_steward_target)
+            with pytest.raises(ValueError, match="changing"):
+                opened.result(timeout=.75)
+        finally:
+            release.set()
+            writer.result(timeout=2)
+    assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": sid}
+    assert (capture.read_bytes(), store.messages(sid), store.load_session(sid)) == before
+
+
 def _request_for_event(transport, event):
     binding = transport._binding("notes-app")
     return transport.core.read_request(

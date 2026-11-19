@@ -217,8 +217,7 @@ the previously published archive intact. No raw-file fallback is used.
 Each database snapshot is transactionally consistent, including committed WAL
 data. The complete archive is **not one simultaneous snapshot across databases,
 registries, File journals, and project files**. Quiesce writers through the
-existing migration workflow before a coordinated cutover; a successful local
-backup does not grant restoration or promotion authority. Restore into an
+existing migration workflow before a coordinated cutover; Restore into an
 isolated directory first, verify the archived SQLite hashes and complete Goal
 history/receipts through `authority-archive`, and use the supported migration
 route to preserve writes made after the backup. Do not unpack old bytes over an
@@ -294,90 +293,17 @@ If the user only wants the pasteable TUI text, omit the wrapper:
 loopx codex-cli-bootstrap-message --project . --goal-id <goal-id> --message-only
 ```
 
-To review the whole one-message loop contract without running Codex, generate a
-pilot packet:
-
-```bash
-loopx codex-cli-one-message-loop-pilot --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-The pilot ties the first TUI paste message to the later
-`codex-cli-local-scheduler-exec` bridge. It stays dry-run by default and is for
-operators/contributors validating the path, not a prerequisite for first-time
-users.
-
-To review the returning-user local-driver loop without touching a real Codex
-session, generate the visible local-driver pilot packet:
-
-```bash
-loopx codex-cli-visible-local-driver-pilot --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-This keeps the first-message TUI start primary, then models later scheduler
-ticks, visible proof, idle guard, guarded execution, blocker writeback, and
-no-transcript boundaries as public-safe metadata.
-
-The later-turn rule is intentionally stricter than the first message: LoopX may
-add a visible steering turn only after public-safe visible proof,
-runtime idle evidence, a fresh guard, and explicit execution bounds. Without
-that proof, the driver should write a compact blocker or keep the one-message
-setup bootstrap as the product path.
-
-The commands below are optional automation checks after the setup path
-works. To evaluate future same-session automation support without touching
-transcripts or session files, run:
-
-```bash
-loopx codex-cli-session-probe
-```
-
-To turn that probe into a dry-run driver decision without mutating a Codex
-session, run:
-
-```bash
-loopx codex-cli-visible-driver-plan --project . --goal-id <goal-id>
-```
-
-To see the full local automation setup plan in one packet, including quota
-guard, visible-driver decision, TUI bootstrap command, the headless-disabled
-boundary, and idle-guard requirement, run:
-
-```bash
-loopx codex-cli-local-driver-plan --project . --goal-id <goal-id> --agent-id <agent-id>
-```
-
-This is still dry-run-only. It does not run Codex, read transcripts, read
-session files, mutate a session, or spend quota.
-
-When the driver plan says `resume [PROMPT]` or `remote-control` might support a
-visible same-session path, validate a public-safe proof fixture before treating
-that path as automation:
-
-```bash
-loopx codex-cli-visible-session-proof \
-  --project . \
-  --goal-id <goal-id> \
-  --agent-id <agent-id> \
-  --proof-fixture visible-proof.public.json
-```
-
-The fixture should contain only booleans and public-safe labels proving user
-opt-in, quota guard, idle guard, visible turn, interruptibility, no transcript
-or session-file reads, and compact writeback planning.
-
-The default Codex CLI setup-then-`/goal` product path does not offer a headless fallback.
-For compatibility, the old handoff command only reports the disabled boundary
-and points back to the message-only TUI bootstrap:
-
-```bash
-loopx codex-cli-exec-handoff --project . --goal-id <goal-id>
-```
+The default Codex CLI setup-then-`/goal` product path keeps execution visible in
+the TUI and preserves a headless-disabled boundary for onboarding. Explicit
+isolated-headless automation runs use `loopx turn plan` and `loopx turn run-once`
+instead; see the [LoopX Turn quickstart](../product/runtimes/codex-cli/loopx-turn-codex-cli-quickstart.md)
+and [Automation driver audit](../product/runtimes/codex-cli/codex-cli-automation-driver.md).
 
 See the [Codex CLI TUI-first loop](../product/runtimes/codex-cli/codex-cli-tui-loop.md) contract
 for the bootstrap, session-attached automation, and headless-disabled boundary.
 The [Codex CLI first-run rehearsal](../product/runtimes/codex-cli/codex-cli-first-run-rehearsal.md)
 keeps the shortest user-facing route in one place: no-clone install,
-one-message setup bootstrap, and proof-capture fixtures for later automation.
+one-message setup bootstrap, and explicit `loopx turn` boundaries.
 For current product scheduling, the
 [Codex CLI TUI continuation priority](../product/runtimes/codex-cli/codex-cli-tui-continuation-priority.md)
 keeps same-open-TUI continuation ahead of frontstage or showcase polish when
@@ -544,7 +470,7 @@ Install one shared local checkout when you want to develop LoopX itself
 or test a live canary wrapper:
 
 ```bash
-git clone https://github.com/huangruiteng/loopx ~/loopx
+git clone https://github.com/loopx-project/loopx ~/loopx
 ~/loopx/scripts/install-local.sh
 loopx doctor
 ```
@@ -1110,7 +1036,7 @@ The dashboard should answer, before raw log drill-down:
 - what boundary cannot be crossed yet.
 
 See
-[apps/presentation/dashboard/README.md](https://github.com/huangruiteng/loopx/blob/main/apps/presentation/dashboard/README.md).
+[apps/presentation/dashboard/README.md](https://github.com/loopx-project/loopx/blob/main/apps/presentation/dashboard/README.md).
 
 ## Public / Private Boundary
 
@@ -1183,7 +1109,7 @@ that omits dashboard validation; the runtime evidence records that skip.
 
 Start here:
 
-- [Documentation index](https://github.com/huangruiteng/loopx/blob/main/docs/README.md)
+- [Documentation index](https://github.com/loopx-project/loopx/blob/main/docs/README.md)
 - [Showcase catalog](../showcases/README.md)
 - [State interaction model](../state-interaction-model.md)
 - [Interaction pattern catalog](../concepts/interaction-pattern-catalog.md)
@@ -1194,10 +1120,10 @@ Start here:
 - [Heartbeat automation prompt](../heartbeat-automation-prompt.md)
 - [Long-task cadence hint](../operations/long-task-cadence-policy.md)
 - [Public/private boundary](../public-private-boundary.md)
-- [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md)
+- [Benchmark research workspace](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md)
 - [Dashboard status contract](../status-data-contract.md)
 - [Codex peer task orchestration](../integrations/codex-subagent-orchestration.md)
-- [DeepSWE research practice](https://github.com/huangruiteng/loopx/blob/main/benchmark/deepswe/README.md)
+- [DeepSWE research practice](https://github.com/loopx-project/loopx/blob/main/benchmark/deepswe/README.md)
 
 ## Command Reference
 

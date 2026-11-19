@@ -103,7 +103,7 @@ Owner-facing state follows four rules:
   another's observed activity. Distinguish a recent ended turn from execution.
   Show missing coverage neutrally beside the Goal state, with each affected
   Agent, host and read failure available through the shared contextual help.
-  A cadence miss is an older observation, not proof of a stopped worker.
+  A cadence miss is an older observation.
 - **Group by responsibility.** Collaboration surfaces place work under the
   member, Agent or owner responsible for it, so one glance shows who is doing
   what and who is blocked. Work with no resolvable owner goes into an explicit
@@ -207,7 +207,7 @@ the chart. Show one finding at a time with its declared status and full text;
 keep all findings selectable and failed or tentative counts visible. Preserve
 the exact finding event on reload and Back, including an earlier judgment later
 revised under the same finding identity. Period selection opens the original
-event from that period; current-state projection does not replace its text. Offer the whole recorded history in place
+event from that period; Offer the whole recorded history in place
 and through the existing return action, without letting it bury the chosen text.
 When opening a specific finding, put its parent question in accessible contextual
 help rather than another collapsed title row. Opening a route's question still
@@ -299,10 +299,9 @@ model or rewrite a saved result. Record remaining content failures in the
 existing task and review.
 
 译文验收须对照原文及引用语境，核对数量所指、否定和不确定性。字段齐全、原始标记
-未变，不代表含义已经清楚。有来源支持的数量用界面语言正文说清，不能只留下括号内
+未变。有来源支持的数量用界面语言正文说清，不能只留下括号内
 的连写英文；准确原词仍可查，含义不明的计数、单位和标识不猜测。修订沿版本化分析
 处理，评审不自动重跑模型或覆盖已存结果；剩余正文问题记入原任务和评审。
-
 
 刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
 Goal 和来源隔离。研究中从侧栏切换 Goal 仍停留在研究页，读取新 Goal 自身证据；
@@ -584,8 +583,7 @@ keys do not define tokens. PostCSS and its declared value parser distinguish
 stylesheet declarations and variable functions from quoted examples, comments
 and other declaration values. Parse errors fail the check.
 
-This is a syntactic inventory: it does not prove runtime reachability, resolve
-object spreads or aliases, or model CSS inheritance and selector scope. Tokens
+Tokens
 that are genuinely optional may keep a fallback (`var(--pw-surface, #fff)`).
 
 ### Type Scale
@@ -923,7 +921,6 @@ For feature development, carry one user task through the
 [task-first delivery workflow](frontend-delivery.md#task-first-delivery--从用户任务开始).
 A visually consistent composition must also eliminate unnecessary re-entry and
 confirmation, identify the affected target, and show truthful state after action.
-
 
 For UI implementation, migration, or reproduction:
 

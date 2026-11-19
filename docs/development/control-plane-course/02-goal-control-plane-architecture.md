@@ -25,10 +25,9 @@ prompt / transcript
 ```
 
 Codex 原生 Goal 已经完成关键的第一步：`thread/goal/set` 把 objective、status 与可选预算绑定到
-thread，`thread/goal/get` 允许读回，host 可以围绕它继续 `turn/start`。LoopX 解决的不是
-“再存一遍 goal string”，而是原生 Goal 故意没有承担的项目控制状态：todo graph、claim、
+thread，`thread/goal/get` 允许读回，host 可以围绕它继续 `turn/start`。LoopX 解决的是原生 Goal 故意没有承担的项目控制状态：todo graph、claim、
 scoped gate、effect receipt、跨 host cadence、领域 observation、replan 和 recovery。每轮模型
-只接收这些状态派生出的 compact interaction contract，而不是全部历史。
+只接收这些状态派生出的 compact interaction contract。
 
 长程 Agent 的困难不只在模型推理。一次模型 turn 结束后，下面的事实仍要继续成立：
 
@@ -36,7 +35,7 @@ scoped gate、effect receipt、跨 host cadence、领域 observation、replan �
 - 外部世界变化后，Agent 能区分“继续做”“等一等”“问人”和“已经结束”；
 - 多个 Agent 不会把软认领、执行占用和写权限混成同一个 owner；
 - 一次成功调用不会在缺少验证和写回时被误报成进展；
-- 失败、重启、换 session 后，下一轮从已提交事实恢复，而不是重猜上一轮发生了什么。
+- 失败、重启、换 session 后，下一轮从已提交事实恢复。
 
 LoopX 解决的是这组 **goal-level control-plane** 问题：无人干预时靠确定性合同跑稳，有人
 干预时把反馈写成 scoped decision、路线修订或经验，使下一轮跑得更好。先看三个差异很大的
@@ -52,7 +51,7 @@ LoopX 解决的是这组 **goal-level control-plane** 问题：无人干预时�
 
 ## 先分清四种运行责任
 
-LoopX 的目录、状态文件和执行角色不是同一个分类维度。读一轮真实执行时，先问四个
+读一轮真实执行时，先问四个
 owner：
 
 | 角色 | 负责什么 | 不负责什么 |
@@ -70,15 +69,13 @@ owner：
 恢复：Kernel -> next todo / gate / monitor / turn -> Agent
 ```
 
-Domain State、evidence、receipt 和 projection 是这些角色交换或派生的工件，不是第五个
-owner。Extension 负责 provider 的安装、启停、升级和分发，也不是第五种运行责任；
+Domain State、evidence、receipt 和 projection 是这些角色交换或派生的工件。Extension 负责 provider 的安装、启停、升级和分发；
 host/runtime 承载 session、工具和调用，也不新增领域 decision owner。
 
 ## Showcase A：PR Issue Fix
 
 Issue-Fix 的产品承诺是：把一条公开 issue 持续推进成小而聚焦、验证充分、可审阅的 PR，
-并跟进到 merged、closed 或明确 no-follow-up。它不是“一次 prompt 生成 patch”，因为真实
-交付还包含候选判断、复现、修改、CI、review correction、冲突、通知、等待和终局收口。
+并跟进到 merged、closed 或明确 no-follow-up。
 
 ```mermaid
 flowchart LR
@@ -130,14 +127,14 @@ fact，使下一轮可以重新计算 frontier：
 | 外部写入结果不确定 | effect receipt + provider readback/reconcile | 先确认外部事实，再决定 retry、successor 或 closeout |
 | PR merged、closed 或明确不再跟进 | terminal evidence + no-follow-up rationale | monitor 可关闭，后续 Turn 不会继续轮询已经结束的工作 |
 
-因此，这个 bot 的“稳定执行”不是一段永不中断的推理，也不是一个永不犯错的 Agent。它允许
+它允许
 模型、session、host 和外部系统在边界处失败，但不允许丢失已经确认的事实、effect identity
 和下一步恢复路径。长程稳定的目标，是让错误可发现、可归因、可恢复；即使 Agent 犯错，
 已提交事实仍然有效，系统仍能形成下一步 frontier。
 
 这也是后续课程的索引：第 3 讲解释 packet 与一次 Turn，第 5 讲解释 claim、successor 和
 handoff，第 7 讲解释 monitor cadence 与 quiet wake，第 8 讲解释 evidence、reconcile 和
-self-repair。这里先记住一个判断标准：**稳定不是不中断，而是每次中断后都能从外置事实恢复。**
+self-repair。这里先记住一个判断标准：**稳定是每次中断后都能从外置事实恢复。**
 
 ### 一条交付主线，怎样反哺执行系统
 
@@ -182,7 +179,7 @@ flowchart LR
 Capability Pack；可选或独立版本的实现进入 extension/provider；host 特有的 session、工具
 和事件适配留在 host adapter。只有 LoopX 默认必须拥有的通用生命周期规则才进入 Kernel。
 
-因此，“系统能力自进化”不是第七个架构层，也不是模型拥有了修改自身的特权。它是同一条
+它是同一条
 goal-level lifecycle 管理的一类进阶工作：交付证据发现缺口，Kernel 授权改进，独立执行面
 产出候选版本，验证与发布合同决定是否激活，readback 和 guardrail 决定保留还是回滚。
 
@@ -244,7 +241,7 @@ issue body、raw check log、凭据或本地路径。GitHub 仍是权威来源�
 ## Showcase B：Multi-Agent 研究团队
 
 研究协作复用 Goal、Todo、claim、lease、证据与独立验收。角色只声明自己的研究工作与
-写入边界；创建任务或发送消息不等于启动 worker，也不授予实验、推广或发布权限。
+写入边界；
 
 当前可运行示例见
 [managed research team](../../../examples/managed-research-team/README.md)，
@@ -283,8 +280,8 @@ flowchart LR
 ```
 
 图中只有经过 Kernel 接受的 transition 才能改变工作生命周期。Explore Graph 上的
-`supports`、`refutes`、`depends_on` 或 `leads_to` 是证据关系，不是执行边；Explore Harness
-输出的是候选组合和风险说明，不是 claim、launch 或 spend receipt。
+`supports`、`refutes`、`depends_on` 或 `leads_to` 是证据关系；Explore Harness
+输出的是候选组合和风险说明。
 
 ### Graph 记住什么，Harness 计算什么
 
@@ -383,7 +380,7 @@ Domain State 保存 feasibility、PR lifecycle、experiment result、hypothesis 
 
 ## Goal Control Plane Authority Map
 
-下面的总览图不是源码层次图。它表示事实、决策、执行和回执怎样跨边界流动。
+它表示事实、决策、执行和回执怎样跨边界流动。
 
 ```mermaid
 flowchart TB
@@ -420,8 +417,7 @@ flowchart TB
 
 读图时先记住四种运行责任，再看两个工件边界：
 
-1. **Kernel 拥有 goal lifecycle。** Host 被唤醒不等于获得 delivery 权限，一轮结束也不等于
-   goal 完成。
+1. **Kernel 拥有 goal lifecycle。**
 2. **Capability 拥有翻译规则。** 它理解 `CHANGES_REQUESTED`、experiment result 或
    holdout metric，但只返回 typed proposal。
 3. **Provider 拥有外部 I/O。** 它返回 bounded observation 或 readback，不决定后续 transition。
@@ -457,9 +453,6 @@ sequenceDiagram
 
 关键不变量：
 
-- observation 不是 transition；
-- proposal 不是 authority；
-- result 不是 accepted result；
 - accepted result 在 durable writeback 后才构成进展；
 - spend 晚于验证与写回；
 - scheduler proposal 在 host apply 并形成 ACK 前仍未结算。

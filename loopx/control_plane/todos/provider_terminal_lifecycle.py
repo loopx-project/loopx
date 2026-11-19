@@ -17,6 +17,7 @@ from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
+    ambiguous_todo_write,
     claim_worktree_candidate,
     read_canonical_todos_if_promoted,
     require_canonical_authority,
@@ -25,14 +26,16 @@ from ..coordination.local_authority import (
 from ...paths import effective_runtime_root
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
 from .completion_policy import build_completion_policy_request
 from .completion_transaction import require_completion_successor_todo_ids
 from .completion_validation import (
-    resolve_private_completion_validation_declaration,
-    execute_completion_validation_effects,
+    completion_validation_execution,
     completion_validation_failure,
+    execute_completion_validation_effects,
+    resolve_private_completion_validation_declaration,
 )
 from .contract import resolve_next_user_task_class
 from .mutation_authority import todo_lifecycle_facts
@@ -242,6 +245,76 @@ def _persist_validated_completion_result(
             raise ValueError("completion result changed during acceptance validation")
 
 
+def _dispatch_terminal_with_validation(
+    request: dict[str, Any],
+    *,
+    registry_path: Path,
+    runtime_root: Path,
+    state_file: Path | None,
+    target: Mapping[str, Any],
+    delivery_workspace: Mapping[str, Any] | None,
+    validation_workspace_path: Path | None,
+    completion_result_file: Path | None,
+    result_descriptor: Mapping[str, Any] | None,
+) -> tuple[Any, bool]:
+    goal_id, todo_id = request["goal_id"], request["todo_id"]
+    role, dry_run = request["role"], request["dry_run"]
+
+    def dispatch() -> Any:
+        return effect_runtime_result(
+            "coordination.local_authority.todo_terminal", request,
+            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+        )
+
+    result = dispatch()
+    if isinstance(result, Mapping) and result.get("status") == "resolve_validation":
+        # Admission and receipt recovery precede host-local declaration IO.
+        # Resolving private argv grants no authority to run it; re-enter the
+        # same transaction and original source witness before executing effects.
+        if state_file is None:
+            raise ValueError("canonical Todo completion validation requires its private state projection")
+        request["validation_source_provider_revision"] = result["provider_revision"]
+        request["validation_declaration"] = resolve_private_completion_validation_declaration(
+            canonical_todo=target, state_file=state_file, runtime_root=runtime_root,
+            registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
+            persist_if_resolved=not dry_run,
+        )
+        result = dispatch()
+    if not isinstance(result, Mapping) or result.get("status") != "execute_validation":
+        return result, False
+
+    request["validation_source_provider_revision"] = result["provider_revision"]
+    with completion_validation_execution(runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id):
+        # Recheck admission and recover any original receipt while owning execution.
+        request["observed_at"] = now_local()
+        result = dispatch()
+        if not isinstance(result, Mapping) or result.get("status") != "execute_validation":
+            return result, False
+
+        # Use the admitted identity, including any implicit Monitor cycle.
+        operation_id = result.get("operation_id")
+        request.update(execute_completion_validation_effects(
+            result, registry_path=registry_path, goal_id=goal_id,
+            delivery_workspace=delivery_workspace,
+            validation_workspace_path=validation_workspace_path,
+        ))
+        if completion_result_file is not None and not dry_run:
+            _persist_validated_completion_result(
+                request=request, source=completion_result_file, runtime_root=runtime_root,
+                goal_id=goal_id, expected_descriptor=result_descriptor,
+            )
+        request["observed_at"] = now_local()
+        try:
+            return dispatch(), True
+        except EffectRuntimeResponseAmbiguous as error:
+            if not isinstance(operation_id, str) or not operation_id:
+                raise
+            raise ambiguous_todo_write(
+                error, registry_path=registry_path, runtime_root=request["runtime_root"],
+                goal_id=goal_id, todo_id=todo_id, operation_id=operation_id,
+            ) from error
+
+
 def terminal_canonical_todo_if_promoted(
     *,
     registry_path: Path,
@@ -416,45 +489,13 @@ def terminal_canonical_todo_if_promoted(
             "dry_run": dry_run,
             "observed_at": now_local(),
         }
-    result = effect_runtime_result(
-        "coordination.local_authority.todo_terminal", request,
-        timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    result, completion_validation_executed = _dispatch_terminal_with_validation(
+        request, registry_path=registry_path, runtime_root=runtime_root,
+        state_file=state_file, target=target,
+        delivery_workspace=completion_delivery_workspace,
+        validation_workspace_path=completion_validation_workspace_path,
+        completion_result_file=completion_result_file, result_descriptor=result_descriptor,
     )
-    if isinstance(result, Mapping) and result.get("status") == "resolve_validation":
-        # Admission and receipt recovery precede host-local declaration IO.
-        # Resolving private argv grants no authority to run it; re-enter the
-        # same transaction and original source witness before executing effects.
-        if state_file is None:
-            raise ValueError("canonical Todo completion validation requires its private state projection")
-        request["validation_source_provider_revision"] = result["provider_revision"]
-        request["validation_declaration"] = resolve_private_completion_validation_declaration(
-            canonical_todo=target, state_file=state_file, runtime_root=runtime_root,
-            registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
-            persist_if_resolved=not dry_run,
-        )
-        result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request,
-            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-        )
-    completion_validation_executed = False
-    if isinstance(result, Mapping) and result.get("status") == "execute_validation":
-        request["validation_source_provider_revision"] = result["provider_revision"]
-        request.update(execute_completion_validation_effects(
-            result, registry_path=registry_path, goal_id=goal_id,
-            delivery_workspace=completion_delivery_workspace,
-            validation_workspace_path=completion_validation_workspace_path,
-        ))
-        if completion_result_file is not None and not dry_run:
-            _persist_validated_completion_result(
-                request=request, source=completion_result_file, runtime_root=runtime_root,
-                goal_id=goal_id, expected_descriptor=result_descriptor,
-            )
-        completion_validation_executed = True
-        request["observed_at"] = now_local()
-        result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request,
-            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
-        )
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
             "canonical Todo terminal transaction returned an invalid result",

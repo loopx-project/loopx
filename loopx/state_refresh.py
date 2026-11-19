@@ -888,6 +888,13 @@ def refresh_state_run(
                 goal_ref=goal_ref,
                 source_admission=source_admission,
                 borrow_source_admission=source_admission is not None,
+                # refresh-state closes the exact admitted Turn.  A semantic
+                # replan may retain ``--todo-id`` as its planning selection
+                # while the immutable settlement identity is the replan
+                # obligation recorded by quota should-run.  Resolve that
+                # original receipt binding, while the read model still rejects
+                # a different Todo or obligation.
+                resolve_original_binding=True,
                 refresh_retry=(refresh_retry_request := {
                     "checkpoint_read_context_id": checkpoint_read_context_id,
                     "external_delivery": external_delivery,
@@ -1132,6 +1139,7 @@ def refresh_state_run(
                     "explore_review", {}).get("result_pages"))
 
         replan_qualification = qualify_refresh_replan_writeback(
+            goal_ref=goal_ref,
             replan_explore_reader=read_explore_context,
             replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root)},
             capability_evidence=capability_evidence,
@@ -1148,7 +1156,15 @@ def refresh_state_run(
             settlement_guard_scoped=(
                 settlement_replan_guard.get("scope") == "turn_guard"
             ),
-            receipt_bound_guard_recorded_at=(settlement_readback.heartbeat_receipt or {}).get("recorded_at") if settlement_readback else None,
+            receipt_bound_guard_recorded_at=(
+                settlement_readback.admission_recorded_at
+                if settlement_readback is not None and settlement_readback.admission_recorded_at
+                else (settlement_readback.heartbeat_receipt or {}).get("recorded_at")
+                if settlement_readback else None
+            ),
+            admission_event_id=(
+                settlement_readback.admission_event_id if settlement_readback is not None else None
+            ),
             receipt_bound_guard_turn_instance_id=(settlement_identity.turn_instance_id if settlement_identity else None),
             receipt_bound_replan_review=settlement_replan_guard.get("selected_review_source"),
             settlement_guard_semantic_replan_obligation_id=(

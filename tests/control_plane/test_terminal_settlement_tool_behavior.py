@@ -42,6 +42,32 @@ def _latest_quota_packet(request: Mapping[str, Any]) -> dict[str, Any]:
     raise AssertionError("scripted model did not receive the real quota packet")
 
 
+def test_missing_context_reference_returns_a_bounded_failed_receipt(tmp_path, monkeypatch):
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    fixture = _build_fixture(tmp_path / "oracle")
+    missing_reader = tmp_path / "missing" / "current.reader.json"
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command.replace(
+            '"${LOOPX_TURN:?}"', "missing-reader-turn")),
+        ScriptedExecToolAction(command=shlex.join([
+            "loopx", "--format", "json", "quota", "context-read",
+            "--reference-file", str(missing_reader),
+        ])),
+    ])
+
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="missing-reader", fixture_root=tmp_path / "actor")
+
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "tool_execution_failed"
+    assert receipt["observed_tool_sequence"] == ["quota_should_run", "tool_execution_failed"]
+    assert receipt["settlement_receipt_steps"] == []
+    assert len(transport.requests) == 2
+    assert str(missing_reader) not in json.dumps(receipt)
+    assert not receipt["boundary"]["external_writes_executed"]
+
+
 def _writeback_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     packet = _latest_quota_packet(request)
     command = packet["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
@@ -65,12 +91,15 @@ def _writeback_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     return ScriptedExecToolAction(command=command)
 
 
-def _spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+def _unprojected_spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     packet = _latest_quota_packet(request)
-    command = packet["interaction_contract"]["cli_channel"]["next_cli_actions"][1]
-    return ScriptedExecToolAction(
-        command=command.replace('"${LOOPX_TURN:?}"', "turn-test-001")
-    )
+    identity = packet["heartbeat_receipt"]["settlement_identity"]
+    return ScriptedExecToolAction(command=shlex.join([
+        "loopx", "--format", "json", "quota", "spend-slot",
+        "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
+        "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
+        "--source", "heartbeat", "--execute",
+    ]))
 
 
 def _completion_action(
@@ -160,7 +189,6 @@ def test_real_tool_loop_settles_final_todo_after_spend(
             )),
             *([partial(_completion_action, kind="validation")] if ordinary_completion else []),
             _writeback_action,
-            _spend_action,
             _completion_action,
         ]
     )
@@ -180,7 +208,6 @@ def test_real_tool_loop_settles_final_todo_after_spend(
         "delivery_validation",
         *(["todo_completion"] if ordinary_completion else []),
         "durable_writeback",
-        "quota_spend",
         "terminal_closeout",
     ]
     assert receipt["settlement_receipt_steps"] == [
@@ -475,7 +502,7 @@ def test_terminal_native_draft_preserves_proof_and_authority(
             ScriptedExecToolAction(command="cat > " + shlex.quote(target) + " <<'JSON'\n" +
                                   json.dumps(vision) + "\nJSON"),
             *([partial(writeback, omit_scope=True)] if correct_input else []),
-            writeback, _spend_action, _completion_action,
+            writeback, _completion_action,
     ])
 
     def next_action(request):
@@ -497,8 +524,8 @@ def test_terminal_native_draft_preserves_proof_and_authority(
     # changes which planned settlement actions fit, never when EOF is reached.
     budgeted_steps = [("validation", initial_page_count + 4),
                       ("durable_writeback", initial_page_count + 7),
-                      ("quota_spend", initial_page_count + 8),
-                      ("terminal_closeout", initial_page_count + 9)]
+                      ("quota_spend", initial_page_count + 7),
+                      ("terminal_closeout", initial_page_count + 8)]
     assert receipt["settlement_receipt_steps"] == (
         ["validation", "durable_writeback", "quota_spend", "terminal_closeout"] if passed
         else [kind for kind, ordinal in budgeted_steps
@@ -508,7 +535,10 @@ def test_terminal_native_draft_preserves_proof_and_authority(
     assert (tmp_path / "actor/project/fixture/settlement-proof.json").read_bytes() == fixture.proof_target.read_bytes()
     assert outside.read_text() == "Owner artifact.\n"
     if correct_input:
-        assert receipt["tool_call_count"] == (10 if page_bytes is not None else 8)
+        assert receipt["tool_call_count"] == min(
+            initial_page_count + 8 if page_bytes is not None else 7,
+            TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
+        )
         assert receipt["observed_tool_sequence"].count("progress_observation_invalid_arguments") == (
             int(initial_page_count + 6 <= TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS)
             if page_bytes == 12000 else 1
@@ -586,13 +616,13 @@ def test_terminal_corrects_rejected_vision_within_original_budget(tmp_path: Path
         ScriptedExecToolAction(command=fixture.quota_guard_command),
         ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
         partial(_completion_action, kind="validation"), draft, writeback,
-        partial(draft, corrected=True), writeback, _spend_action, _completion_action,
+        partial(draft, corrected=True), writeback, _completion_action,
     ])
     receipt = DoubaoTerminalSettlementToolBehaviorActor(
         api_key="test-only-placeholder", transport=transport,
     ).qualify(qualification_id="native-vision-input-correction", fixture_root=tmp_path / "actor")
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["tool_call_count"] == len(transport.requests) == 9
+    assert receipt["tool_call_count"] == len(transport.requests) == 8
     assert receipt["settlement_receipt_steps"] == [
         "validation", "durable_writeback", "quota_spend", "terminal_closeout",
     ]
@@ -667,13 +697,13 @@ def test_terminal_authors_missing_draft_after_unchanged_cli_rejection(tmp_path: 
         ScriptedExecToolAction(command=fixture.quota_guard_command), initial_read,
         ScriptedExecToolAction(command="cat fixture/settlement-proof.json"), vision_read,
         partial(_completion_action, kind="validation"), missing_writeback, draft,
-        writeback, _spend_action, _completion_action,
+        writeback, _completion_action,
     ])
     receipt = DoubaoTerminalSettlementToolBehaviorActor(
         api_key="test-only-placeholder", transport=transport,
     ).qualify(qualification_id="missing-draft-correction", fixture_root=tmp_path / "actor")
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["tool_call_count"] == len(transport.requests) == TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS
+    assert receipt["tool_call_count"] == len(transport.requests) == 9
     assert receipt["settlement_receipt_steps"] == [
         "validation", "durable_writeback", "quota_spend", "terminal_closeout",
     ]
@@ -753,14 +783,14 @@ def test_terminal_shell_error_can_be_corrected_without_resetting_budget(
                 f"print({private_output!r}); raise SystemExit(7)"
             )
         ))] * failed_drafts),
-        corrected_draft, writeback, _spend_action, _completion_action,
+        corrected_draft, writeback, _completion_action,
     ])
     receipt = DoubaoTerminalSettlementToolBehaviorActor(
         api_key="test-only-placeholder", transport=transport,
     ).qualify(qualification_id="terminal-shell-correction", fixture_root=tmp_path / "actor")
 
     assert receipt["qualification_passed"] is (failed_drafts == 1), receipt
-    assert receipt["tool_call_count"] == (8 if failed_drafts == 1 else 10)
+    assert receipt["tool_call_count"] == (7 if failed_drafts == 1 else 10)
     assert receipt["observed_tool_sequence"].count("shell_nonzero") == failed_drafts
     assert receipt["settlement_receipt_steps"] == (
         ["validation", "durable_writeback", "quota_spend", "terminal_closeout"]
@@ -795,7 +825,7 @@ def test_terminal_shell_error_with_protected_mutation_stops_before_writeback(
         ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
         partial(_completion_action, kind="validation"),
         ScriptedExecToolAction(command="python3 -c 'raise SystemExit(7)'"),
-        _writeback_action, _spend_action, _completion_action,
+        _writeback_action, _completion_action,
     ])
     receipt = DoubaoTerminalSettlementToolBehaviorActor(
         api_key="test-only-placeholder", transport=transport,
@@ -831,7 +861,7 @@ def test_terminal_input_rejections_do_not_reset_the_call_budget(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(("payload_ok", "payload_appended"), [(False, True), (True, True), (False, False)])
-def test_nonzero_after_actual_writeback_cannot_advance_to_spend(
+def test_nonzero_after_composed_writeback_cannot_advance_to_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload_ok: bool, payload_appended: bool,
 ) -> None:
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
@@ -860,7 +890,7 @@ def test_nonzero_after_actual_writeback_cannot_advance_to_spend(
         ScriptedExecToolAction(command=fixture.quota_guard_command),
         ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
         partial(_completion_action, kind="validation"), _writeback_action,
-        _spend_action, _completion_action,
+        _completion_action,
     ])
     receipt = DoubaoTerminalSettlementToolBehaviorActor(
         api_key="test-only-placeholder", transport=transport,
@@ -871,14 +901,100 @@ def test_nonzero_after_actual_writeback_cannot_advance_to_spend(
     assert receipt["settlement_receipt_steps"] == ["validation"]
     assert "synthetic post-effect" not in json.dumps(receipt)
     # Independent canonical readback proves that the failure did not roll back
-    # the real write; neither a debit nor terminal effect followed it.
+    # the real write and its runtime-owned debit; no terminal effect followed.
     readback = read_heartbeat_settlement(
         tmp_path / "actor/runtime", goal_id=committed["goal_id"],
         agent_id=committed["agent_id"], todo_id=committed["todo_id"],
         turn_instance_id=committed["turn_instance_id"],
     )
     assert readback is not None
-    assert readback.progress["next_step"] == "quota_spend"
+    assert readback.progress["state"] == "settled"
+    assert readback.spend.failure is None
+    assert readback.terminal_closeout.failure is not None
+
+
+@pytest.mark.parametrize("damage", ["missing_spend", "foreign_receipt", "foreign_identity",
+                                    "unknown_receipt", "uncommitted", "reported_failure"])
+def test_composed_writeback_requires_original_committed_spend_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str,
+) -> None:
+    from loopx.control_plane.testing import terminal_settlement_tool_behavior as terminal
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+    fixture = _build_fixture(tmp_path / "oracle")
+    execute = terminal._execute_cli
+    committed = {}
+
+    def damaged_receipt(command, state):
+        payload = execute(command, state)
+        if "refresh-state" in command:
+            committed.update(payload["settlement_identity"])
+            receipts = payload["settlement_result"]["receipts"]
+            spend = next(row for row in receipts if row["step_kind"] == "quota_spend")
+            if damage == "missing_spend":
+                receipts.remove(spend)
+            elif damage == "foreign_identity":
+                payload["settlement_identity"]["effect_id"] = "foreign-effect"
+                for row in receipts:
+                    row["effect_id"] = "foreign-effect"
+            elif damage == "foreign_receipt":
+                spend["effect_id"] = "foreign-effect"
+            elif damage == "unknown_receipt":
+                spend["schema_version"] = "quota_settlement_receipt_v99"
+            elif damage == "uncommitted":
+                spend["status"] = "pending"
+            else:
+                payload["settlement_result"]["failure"] = {"reason": "synthetic contradictory failure"}
+        return payload
+
+    monkeypatch.setattr(terminal, "_execute_cli", damaged_receipt)
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command),
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+        partial(_completion_action, kind="validation"), _writeback_action, _completion_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="original-composed-receipts", fixture_root=tmp_path / "actor")
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "writeback_receipt_mismatch"
+    assert receipt["tool_call_count"] == len(transport.requests) == 4
+    assert receipt["settlement_receipt_steps"] == ["validation"]
+    readback = read_heartbeat_settlement(
+        tmp_path / "actor/runtime", goal_id=committed["goal_id"],
+        agent_id=committed["agent_id"], todo_id=committed["todo_id"],
+        turn_instance_id=committed["turn_instance_id"],
+    )
+    assert readback is not None and readback.progress["state"] == "settled"
+    assert readback.spend.failure is None
+    assert readback.terminal_closeout.failure is not None
+
+
+def test_model_cannot_spend_again_after_runtime_writeback(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane.testing import terminal_settlement_tool_behavior as terminal
+
+    fixture = _build_fixture(tmp_path / "oracle")
+    execute = terminal._execute_cli
+    commands = []
+
+    def observed_execute(command, state):
+        commands.append(command)
+        return execute(command, state)
+
+    monkeypatch.setattr(terminal, "_execute_cli", observed_execute)
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command),
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+        partial(_completion_action, kind="validation"), _writeback_action,
+        _unprojected_spend_action, _completion_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="no-second-runtime-spend", fixture_root=tmp_path / "actor")
+    assert receipt["failure_code"] == "quota_spend_contract_mismatch"
+    assert receipt["tool_call_count"] == len(transport.requests) == 5
+    assert receipt["settlement_receipt_steps"] == ["validation", "durable_writeback", "quota_spend"]
+    assert not any("spend-slot" in command for command in commands)
 
 
 @pytest.mark.parametrize("change", [
@@ -936,7 +1052,7 @@ def test_input_rejection_with_changed_fixture_cannot_continue(
     transport = ScriptedDoubaoExecTransport([
         ScriptedExecToolAction(command=fixture.quota_guard_command),
         ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
-        partial(_completion_action, kind="validation"), reject, _spend_action,
+        partial(_completion_action, kind="validation"), reject, _completion_action,
     ])
     receipt = DoubaoTerminalSettlementToolBehaviorActor(
         api_key="test-only-placeholder", transport=transport,
@@ -1050,7 +1166,7 @@ def test_tool_loop_rejects_spend_before_writeback(
                 "fixture/settlement-proof.json"
                 if batch_read else "cat fixture/settlement-proof.json"
             )),
-            _spend_action,
+            _unprojected_spend_action,
         ]
     )
 

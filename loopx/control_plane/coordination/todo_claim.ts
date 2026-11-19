@@ -11,6 +11,8 @@ import {
   AuthorityStoreProtocolError,
   canonicalAuthorityObject,
   canonicalAuthoritySha256,
+  requireAuthorityBoolean,
+  requireAuthorityDate,
   requireAuthorityStoreId,
 } from "./authority_store_codec.ts";
 import {validateContinuationNote, computeContinuationTodoFacts} from "./continuation_note.ts";
@@ -28,7 +30,6 @@ import {
 import {
   leaseInteger,
   leaseIsActive,
-  normalizeAgent,
   normalizeIdempotencyKey,
   normalizeTtl,
 } from "../work_items/task_lease_acquire.ts";
@@ -376,21 +377,15 @@ async function executeClaimAttempt(
       registered_agents: normalizeRegisteredTodoAgents(rawInput.registered_agents),
       lease_request: normalizeLeaseRequest(rawInput.lease_request),
     };
-    if (input.manage_execution !== undefined && typeof input.manage_execution !== "boolean") {
-      throw new AuthorityStoreProtocolError("manage_execution must be a boolean");
-    }
+    if (input.manage_execution !== undefined) requireAuthorityBoolean(input.manage_execution, "manage_execution");
     if (input.required_handoff_mode !== undefined && !EXECUTION_HANDOFF_MODES.includes(input.required_handoff_mode)) {
       throw new AuthorityStoreProtocolError("required_handoff_mode must be a current execution mode");
     }
     if (input.manage_execution && (input.lease_request != null || input.actor_agent_id !== input.claimed_by)) {
       throw new AuthorityStoreProtocolError("Managed execution requires the claiming actor and no explicit lease request");
     }
-    if (typeof input.dry_run !== "boolean") {
-      throw new AuthorityStoreProtocolError("dry_run must be a boolean");
-    }
-    if (!(input.now instanceof Date) || Number.isNaN(input.now.valueOf())) {
-      throw new AuthorityStoreProtocolError("now must be a valid Date");
-    }
+    requireAuthorityBoolean(input.dry_run, "dry_run");
+    requireAuthorityDate(input.now, "now");
   } catch (error) {
     return failure(
       "invalid_coordination_todo_claim",

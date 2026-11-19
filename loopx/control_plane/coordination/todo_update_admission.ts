@@ -4,6 +4,9 @@
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {leaseRepositoryRejection, ownerAdministrativeRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {isExploreReferenceAppend} from "../todos/field_update.ts";
+import {isInactiveUserCompletionTarget} from "../todos/user_completion.ts";
+import {decisionScopeRelation} from "../todos/decision_scope.ts";
+import {todoDoneResumeTargetId} from "../todos/resume_condition.ts";
 import {acceptanceRestoration} from "./todo_acceptance_restoration.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
 import type {JsonObject} from "../effect_program.ts";
@@ -110,8 +113,8 @@ export function todoUpdateAdmissionRejection(
     mode === "hard_lease" && lease === undefined &&
     input.lease_idempotency_key == null && input.lease_expected_version == null;
   // Preserve the single-agent compatibility path only for genuinely
-  // unowned work. An empty registry is not evidence that an arbitrary actor
-  // may rewrite an already-owned Todo.
+  // unowned work.
+
   if (input.registered_agents.length === 0 && input.actor_agent_id !== null) {
     return reject("actor_not_registered", "Todo update requires a registered actor");
   }
@@ -219,14 +222,49 @@ export function todoUpdateAdmissionRejection(
     const repositoryRejection = leaseRepositoryRejection(todo, lease);
     return repositoryRejection === null ? null : reject(repositoryRejection, "Evidence association must retain the completed work repository");
   }
-  // User reminders use an administrative provider-CAS edit. Retained released
+  // An initial gate link is planning, not execution or an owner decision.
+  const boundUserGateLink = todo.role === "user" && todo.task_class === "user_gate" &&
+    todo.status === "open" && todo.claimed_by == null && todo.unblocks_todo_id == null &&
+    input.actor_agent_id !== null && todo.bound_agent === input.actor_agent_id &&
+    todo.blocks_agent === input.actor_agent_id &&
+    typeof intent.unblocks_todo_id === "string" && intent.unblocks_todo_id.length > 0 &&
+    Object.keys(input.patch).every(field => field === "note") &&
+    input.clear_fields.every(field => field === "note") &&
+    Object.keys(intent).every(field => ["unblocks_todo_id", "evidence", "reason"].includes(field));
+  // User planning uses an administrative provider-CAS edit. Retained released
   // history is not an execution grant; active/expired history needs exact
   // release first. Explicit or partial proof never grants this exception.
   const boundUserActionMetadata = isBoundUserActionMetadataUpdate(todo, input);
-  if (boundUserActionMetadata && (lease === undefined || lease.status === "released") &&
+  if ((boundUserActionMetadata || boundUserGateLink) && (lease === undefined || lease.status === "released") &&
       input.lease_idempotency_key == null && input.lease_expected_version == null) {
     try {
       if (lease !== undefined) canonicalTaskLease(lease, input.goal_id, input.todo_id);
+      if (boundUserGateLink) {
+        const target = indexCoordinationProjection(head, input.goal_id).todos.get(intent.unblocks_todo_id as string);
+        if (target?.role !== "agent" || target.claimed_by !== todo.blocks_agent ||
+            target.archive_state !== "active" || isInactiveUserCompletionTarget(target)) {
+          return reject("user_gate_link_target_invalid",
+            "Initial gate link requires an active, open or blocked Agent Todo in this Goal claimed by the gate's bound/blocked agent");
+        }
+        // The link must describe one decision: a scoped gate takes only a target
+        // awaiting that scope; an unscoped dependency gate takes only a target
+        // awaiting no scoped decision. Absence of a match is not a dependency.
+        const relation = decisionScopeRelation(todo, target);
+        const awaitsScopedDecision = Array.isArray(target.required_decision_scopes) && target.required_decision_scopes.length > 0;
+        if (relation === null ? awaitsScopedDecision : relation.state !== "gate_covers_action") {
+          return reject("user_gate_link_target_invalid",
+            "Initial gate link requires a target whose required decision scopes are covered by this gate's decision scope, or neither side to declare one");
+        }
+        // A target that declares any resume condition other than completion of this
+        // exact gate (another Todo, a Monitor change, a time or a capacity) waits for
+        // that; approving this gate cannot satisfy it, so it cannot take the first link.
+        const declared = typeof target.resume_when === "string" ? target.resume_when.trim() : "";
+        const waitsForThisGate = todoDoneResumeTargetId(declared) === input.todo_id;
+        if (declared && !waitsForThisGate) {
+          return reject("user_gate_link_target_invalid",
+            "Initial gate link requires a target that declares no resume condition other than this gate");
+        }
+      }
     } catch (error) {
       return reject("invalid_coordination_projection",
         error instanceof Error ? error.message : "invalid retained lease facts");

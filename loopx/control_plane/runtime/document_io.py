@@ -1,8 +1,7 @@
 """Durable local document effects, independent of Todo editing or authority.
 
 Callers own locking, admission and recovery policy. These Python Host IO
-primitives preserve UTF-8 bytes, permissions and file/directory durability;
-they neither choose an authority provider nor authorize a mutation.
+primitives preserve UTF-8 bytes, permissions and file/directory durability.
 """
 from __future__ import annotations
 

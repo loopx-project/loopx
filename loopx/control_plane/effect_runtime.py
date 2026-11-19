@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
@@ -82,7 +83,7 @@ _SOURCE_DIGEST_SETTLE_NS = 2_000_000_000
 def source_number_tokens(value: object) -> list[list[Any]]:
     """Carry numeric IO spellings that a JavaScript number cannot distinguish.
 
-    This is transport metadata, not a hash codec or a projection policy.
+    This is transport metadata.
     Fractional doubles and safe integers keep their existing object transport.
     """
     tokens: list[list[Any]] = []
@@ -611,23 +612,50 @@ def _recorded_pid_alive(value: object) -> bool | None:
         return None
 
 
-def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> None:
+def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> bool:
     """Let a dead directly spawned child fail the next non-signaling probe.
 
     A stopped child can remain a zombie until its Python parent reaps it;
-    ``kill(pid, 0)`` still reports that zombie as present. This helper does
-    nothing for a live child or a runtime owned by another process.
+    ``kill(pid, 0)`` still reports that zombie as present. Returns ``True``
+    only when POSIX ``waitpid`` confirms ``ECHILD`` (the target is not a child
+    of this process), and ``False`` otherwise.
     """
 
     if os.name == "nt" or not isinstance(info, Mapping):
-        return
+        return False
     pid = info.get("pid")
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
-        return
+        return False
     try:
         os.waitpid(pid, os.WNOHANG)
-    except (ChildProcessError, OSError):
-        pass
+    except ChildProcessError:
+        return True
+    except OSError as exc:
+        return exc.errno == errno.ECHILD
+    return False
+
+
+def _linux_thread_group_is_zombie(pid: int) -> bool:
+    """Return True only when every Linux thread in ``pid`` has exited to ``Z``.
+
+    Detached runtimes spawned by short-lived CLI subprocesses reparent to
+    container PID 1 or a subreaper that may not reap orphans while running.
+    A zombie thread-group leader with any live worker thread returns False.
+    """
+    if sys.platform != "linux":
+        return False
+    task_dir = Path("/proc") / str(pid) / "task"
+    try:
+        tids = os.listdir(task_dir)
+        if not tids:
+            return False
+        for tid in tids:
+            stat_text = (task_dir / tid / "stat").read_text(encoding="utf-8")
+            if stat_text.rsplit(")", 1)[1].split()[0] != "Z":
+                return False
+        return set(os.listdir(task_dir)) <= set(tids)
+    except (OSError, IndexError, ValueError):
+        return False
 
 
 def _start_lock_holder_pid(path: Path) -> int | None:
@@ -838,7 +866,7 @@ def _serving_token(path: Path) -> tuple[bool, str | None]:
     except FileNotFoundError:
         return False, None
     except (json.JSONDecodeError, OSError):
-        # An unreadable file is not evidence of a stopped runtime; keep waiting
+        #  keep waiting
         # until the deadline instead of claiming a restart that did not happen.
         return True, None
     if not isinstance(payload, dict):
@@ -927,8 +955,10 @@ def _stop_effect_runtime(
         if wait_for_process_exit:
             if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
                 break
-            _reap_exited_runtime_child(info)
-            if not _pid_is_alive(pid):
+            not_caller_child = _reap_exited_runtime_child(info)
+            if not _pid_is_alive(pid) or (
+                not_caller_child and _linux_thread_group_is_zombie(pid)
+            ):
                 stopped = True
                 break
             # A zombie leader can still have threads writing into the namespace.
@@ -1559,8 +1589,7 @@ def effect_runtime_request(
                 continue
             raise
         except TimeoutError as exc:
-            # A connect timeout is not evidence that an existing runtime died.
-            # In particular it must not replace a live server which may still
+                        # In particular it must not replace a live server which may still
             # be completing an earlier mutation under the per-Goal lock.
             raise EffectRuntimeStartupError(
                 f"TypeScript Effect runtime did not connect for {method} "
@@ -1609,8 +1638,8 @@ def effect_runtime_result(
 ) -> Any:
     state = _REQUEST_RUNTIME_REVISION.get() if method == "todo.context.page" else None
     def validate_result(result: Any) -> Any:
-        # A caller must explicitly request a bundle. A request scope or a small
-        # source does not establish that it will consume additional views.
+        # A caller must explicitly request a bundle.
+
         if set(params) == {"summary_display_views"}:
             requested = params["summary_display_views"].get("view_names", ("summary", "planning", "terminal"))
             if not isinstance(result, dict) or any(

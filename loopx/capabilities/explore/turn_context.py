@@ -133,6 +133,9 @@ def explore_turn_context(
             # applied. New unrelated findings must not hide an older refutation.
             events, goal_id=goal_id, finding_limit=len(events),
             mermaid_node_limit=3,
+            # Yardstick's typed owner needs the canonical append ordinal for
+            # execution feedback. Presentation callers keep their v0 wire.
+            include_internal_finding_order=yardstick,
         )
     if gate["enabled"] or graph and (todo_id is not None or page_tasks or yardstick):
         todos = list_goal_todos(
@@ -307,7 +310,7 @@ def project_settlement_attachment(plan: dict[str, Any], *, registry_path: Path, 
     """Compose the existing optional result option into a Todo-bound CLI plan.
 
     Registry access and hook dispatch are adapters. The typed Explore owner
-    supplies the guidance; neither the ordinary command nor obligations change.
+    supplies the guidance.
     """
     identity = plan.get("identity") or {}
     if not identity.get("todo_id") or not identity.get("agent_id"):

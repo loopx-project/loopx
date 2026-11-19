@@ -12,12 +12,29 @@ from contextlib import contextmanager, ExitStack, nullcontext
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ...file_lock import exclusive_file_lock
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
+
+_USER_ACTION_DEDUPE_KEY = re.compile(r"^[a-z0-9][a-z0-9._:@/-]{0,119}$")
+_REPORT_VALIDATOR_PREFIX = (
+    "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
+    "validate_private_generation(Path("
+)
+
+
+def _same_report_validator_command(frozen_cmd: Any, request_cmd: Any) -> bool:
+    """Allow report validation commands whose only drift is the host Python path."""
+    return (isinstance(frozen_cmd, list) and isinstance(request_cmd, list)
+        and len(frozen_cmd) == 3 and len(request_cmd) == 3
+        and all(isinstance(part, str) and bool(part) for part in [*frozen_cmd, *request_cmd])
+        and frozen_cmd[1] == "-c" and request_cmd[1] == "-c"
+        and frozen_cmd[2] == request_cmd[2] and frozen_cmd[2].startswith(_REPORT_VALIDATOR_PREFIX)
+        and frozen_cmd[2].endswith("))"))
 
 
 def native_steward_client_id(actor: Mapping[str, Any], turn_instance_id: str) -> str:
@@ -96,8 +113,8 @@ class StewardTurnHost:
         binding = next((row for row in current["bindings"] if row["binding_id"] == saved["binding_id"]), None)
         if binding != observed["binding"]:
             raise ValueError("the original steward authorization changed during identity verification")
-        # Identity IO may have waited. Its result is not a cached grant: the
-        # existing typed owner checks the current binding and Session again.
+        # Identity IO may have waited.
+
         selected = {**self.bindings._resolve_observed(current, binding, observed["observation"], {
             "source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
             "private_human_message": False, "origin": "web", "session_context": saved,
@@ -106,8 +123,9 @@ class StewardTurnHost:
         goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
         from .steward_monitor import StewardMonitor
         canonical_actor = selected["binding"].get("managed_actor")
-        monitor = StewardMonitor(self.controller).current(canonical_actor) if canonical_actor else None
-        monitor = monitor if monitor and monitor["todo_id"] == request.get("todo_id") else None
+        monitor = (next((row for row in StewardMonitor(self.controller).todos(canonical_actor)
+                         if row["todo_id"] == request.get("todo_id") and row.get("task_class") == "continuous_monitor"), None)
+                   if canonical_actor and request.get("work_kind") == "monitor" and request.get("todo_id") else None)
         report = {}
         if request.get("work_kind") == "report":
             from .steward_reports import StewardReports
@@ -169,9 +187,14 @@ class StewardTurnHost:
                 raise_on_error=True, strict=True)
             present = any(row.get("classification") == "quota_monitor_poll"
                 and row.get("turn_instance_id") == request["turn_instance_id"] for row in rows)
-            from .steward_monitor import TARGET
+            from .steward_monitor import TARGET, StewardMonitor
             target = ("managed-session-watch." + actor["session_id"]
                 if actor.get("schema_version") == "loopx_managed_session_actor_v0" else TARGET)
+            if actor.get("schema_version") != "loopx_managed_session_actor_v0":
+                matched = next((row for row in StewardMonitor(self.controller).todos(actor)
+                                if row.get("todo_id") == request.get("todo_id")), None)
+                if matched and matched.get("target_key"):
+                    target = matched["target_key"]
             for todo, key in [(request["todo_id"], target), (None, target), (None, None)]:
                 effect = _monitor_poll_effect_id(runtime_root=root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_instance_id=request["turn_instance_id"],
@@ -192,10 +215,29 @@ class StewardTurnHost:
     def monitor_restart_request(original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Prepare correlation only; current typed admission decides recovery."""
         prior = original.get("loopx_request") or {}
-        if (original.get("status") != "failed" or original.get("error_code") not in {"server_restarted", "runtime_error"}
-                or prior.get("work_kind") != "monitor" or prior.get("monitor_restart_recovery") is not None):
+        error = original.get("error_code")
+        if (original.get("status") != "failed" or error not in {"server_restarted", "runtime_error"}
+                or prior.get("work_kind") != "monitor"
+                or (prior.get("monitor_restart_recovery") is not None and error != "server_restarted")):
             return None
         return {**prior, "monitor_restart_recovery": {"original_turn_id": original["turn_id"]}}
+
+    def monitor_restart_carrier(self, original: dict[str, Any], client_id: str) -> dict[str, Any] | None:
+        """Find the latest carrier for the same observation; typed admission proves a safe restart."""
+        request = self.monitor_restart_request(original)
+        if request is None:
+            return None
+        base = client_id + ".restart-recovery"
+        next_client_id = base
+        while (carrier := self.store.turn_for_client(original["session_id"], next_client_id)) is not None:
+            if ((carrier.get("loopx_request") or {}).get("monitor_restart_recovery")
+                    != request["monitor_restart_recovery"]):
+                raise ValueError("native watch continuation identity conflict")
+            request = self.monitor_restart_request(carrier)
+            if request is None:
+                return {"turn": carrier}
+            next_client_id = base + "." + carrier["turn_id"]
+        return {"request": request, "client_id": next_client_id}
 
     def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """Transport original journal observations; the typed owner admits work."""
@@ -294,7 +336,7 @@ class StewardTurnHost:
 
             journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
             # Transport canonical observations to the shared typed admission
-            # owner. Neither a missing model event nor Python prose decides.
+            # owner.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
@@ -424,7 +466,7 @@ class StewardTurnHost:
     def recover_report_settlement(self, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]) -> None:
         """Resume only cached, validated native effects of the original report.
 
-        Neither Todo DONE nor outer Chat completion is a native commit. The
+        The
         journal owner must authorize a no-host continuation; its existing
         effect readbacks reconcile ambiguous writeback/debit outcomes.
         """
@@ -519,7 +561,13 @@ class StewardTurnHost:
             frozen = {key: value for key, value in (existing.get("loopx_request") or {}).items()
                 if key not in {"monitor_lease_version", "monitor_deadline"}}
             frozen.setdefault("work_kind", "native_turn")
-            if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
+            comparable_frozen = (
+                {**frozen, "validation_command": request["validation_command"]}
+                if work_kind == "report" and _same_report_validator_command(
+                    frozen.get("validation_command"), request.get("validation_command"))
+                else frozen
+            )
+            if comparable_frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
                 raise ValueError("native steward request identity conflict")
             if work_kind == "report":
                 retained = report_turn(self.store, actor, report_window)
@@ -535,14 +583,12 @@ class StewardTurnHost:
         if existing is not None:
             # Keep the separately proven legacy admission-refusal route
             # below ahead of broader runtime-error observation candidates.
-            restart_request = (self.monitor_restart_request(existing)
+            recovery = (self.monitor_restart_carrier(existing, client_id)
                 if work_kind == "monitor" and not self._monitor_selection_failed_before_poll(existing) else None)
-            if restart_request is not None:
-                client_id += ".restart-recovery"
-                continued = self.store.turn_for_client(actor["session_id"], client_id)
-                if continued is not None:
-                    return {"turn": continued}
-                request, existing = restart_request, None
+            if recovery is not None:
+                if "turn" in recovery:
+                    return recovery
+                request, client_id, existing = recovery["request"], recovery["client_id"], None
         if existing is not None:
             monitor_retry = work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
             if not monitor_retry and work_kind != "report":
@@ -633,6 +679,17 @@ class StewardTurnHost:
                     "生成本期授权项目日报。" if work_kind == "report" else "推进管家的 LoopX 任务。", origin="native_loopx",
                 loopx_execution=True, loopx_request=request)
             try:
+                if (not admitted["observation_only"] and work_kind != "report"
+                        and actor.get("schema_version") == "loopx_steward_managed_actor_v0"
+                        and session and session.get("steward_context")):
+                    from ..manager_context import register_ingress
+
+                    register_ingress(self.controller.coordination_runtime_root,
+                        session_id=actor["session_id"], client_turn_id=client_id,
+                        channel=session["channel_id"], sender_id=session["steward_context"]["operator_ref"],
+                        message=accepted.turn["message"],
+                        source_id=f"native_steward:{actor['goal_id']}:{request['turn_instance_id']}",
+                        origin="native_loopx")
                 if admitted["observation_only"]:
                     from .steward_monitor import StewardObservationAdapter
                     adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
@@ -648,6 +705,138 @@ class StewardTurnHost:
                 controller._fail_queue_preparation(actor["session_id"], accepted.turn["turn_id"], exc)
                 raise
             return accepted.turn, accepted.created
+
+    def _steward_followup_context(self, actor: Mapping[str, Any], session_id: str,
+                                  request: Mapping[str, Any], authority: Mapping[str, Any]) -> dict[str, Any]:
+        from ...control_plane.todos.list_readback import list_goal_todos
+        from .steward_monitor import FOLLOWUP_TARGET_PREFIX, steward_monitor_snapshot_path
+        todo_id = (authority.get("_work_identity") or {}).get("todo_id") or request.get("todo_id")
+        agent_todos = list_goal_todos(registry_path=self.controller.registry_path,
+            runtime_root_arg=str(self.controller.coordination_runtime_root),
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"], role="agent").get("todos", [])
+        selected = next((row for row in agent_todos if row.get("todo_id") == todo_id), None)
+        payload: dict[str, Any] = {"selected_todo": selected}
+        target_key = str((selected or {}).get("target_key") or "")
+        if target_key.startswith(FOLLOWUP_TARGET_PREFIX):
+            source_id = target_key.removeprefix(FOLLOWUP_TARGET_PREFIX)
+            payload["source_monitor"] = next((row for row in agent_todos if row.get("todo_id") == source_id), None)
+            snap = steward_monitor_snapshot_path(self.controller.coordination_runtime_root, actor["goal_id"], source_id)
+            if snap.is_file():
+                try:
+                    payload["signal_snapshot"] = json.loads(snap.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    payload["signal_snapshot"] = None
+        user_todos = list_goal_todos(registry_path=self.controller.registry_path,
+            runtime_root_arg=str(self.controller.coordination_runtime_root),
+            goal_id=actor["goal_id"], role="user").get("todos", [])
+        payload["open_user_todos"] = [
+            {k: row.get(k) for k in ("todo_id", "status", "priority", "text", "updated_at")}
+            for row in user_todos if row.get("status") == "open"
+        ][:40]
+        prior: list[dict[str, Any]] = []
+        for msg in reversed(self.store.messages(session_id)[-30:]):
+            tid = msg.get("turn_id")
+            if not tid:
+                continue
+            turn_row = self.store.load_turn(session_id, tid)
+            resp = (turn_row or {}).get("response") or {}
+            receipts = list(resp.get("context_handoff_receipts") or [])
+            if resp.get("context_handoff_receipt"):
+                receipts.append(resp["context_handoff_receipt"])
+            for receipt in receipts:
+                if isinstance(receipt, dict):
+                    prior.append({k: receipt.get(k) for k in ("goal_id", "agent_id", "source_id", "request_id", "delivered_at")})
+        payload["prior_handoff_receipts"] = prior[:40]
+        return payload
+
+    @staticmethod
+    def _normalize_steward_actions(candidate: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
+        from ...control_plane.collaboration.inbox import normalize_handoff
+        state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "validation_error": None}
+        allowed_targets = {
+            (row["goal_id"], row["agent_id"])
+            for row in ((context.get("context_delegation") or {}).get("targets") or [])
+            if isinstance(row, Mapping) and row.get("goal_id") and row.get("agent_id")
+        }
+        raw_handoff = candidate.get("context_handoff")
+        if raw_handoff is not None:
+            try:
+                normalized = normalize_handoff(raw_handoff)
+            except ValueError as exc:
+                state["validation_error"] = f"invalid context_handoff: {exc}"
+                return state
+            if normalized:
+                items = normalized if isinstance(normalized, list) else [normalized]
+                for item in items:
+                    if (item["goal_id"], item["agent_id"]) not in allowed_targets:
+                        state["validation_error"] = f"unauthorized context_handoff recipient: {item['goal_id']}/{item['agent_id']}"
+                        return state
+                state["context_handoff"] = normalized
+        raw_actions = candidate.get("steward_user_actions")
+        if raw_actions is not None:
+            if not isinstance(raw_actions, list) or len(raw_actions) > 16:
+                state["validation_error"] = "steward_user_actions must be a bounded list of at most 16 items"
+                return state
+            cleaned: list[dict[str, str]] = []
+            seen_keys: set[str] = set()
+            for item in raw_actions:
+                if not isinstance(item, Mapping):
+                    state["validation_error"] = "each steward_user_actions entry must be an object"
+                    return state
+                key = str(item.get("dedupe_key") or "").strip().lower()
+                text = " ".join(str(item.get("text") or "").split()).strip()
+                prio = str(item.get("priority") or "P1").strip().upper()
+                if (not _USER_ACTION_DEDUPE_KEY.fullmatch(key) or key in seen_keys
+                        or not text or len(text) > 800 or prio not in {"P0", "P1", "P2"}):
+                    state["validation_error"] = "invalid steward_user_actions entry"
+                    return state
+                seen_keys.add(key)
+                cleaned.append({"dedupe_key": key, "priority": prio, "text": text})
+            state["user_actions"] = cleaned
+        return state
+
+    def _apply_steward_user_actions(self, actor: Mapping[str, Any], actions: Sequence[Mapping[str, str]],
+                                    turn_instance_id: str) -> list[dict[str, Any]]:
+        if not actions:
+            return []
+        from ...control_plane.todos.list_readback import list_goal_todos
+        from .steward_commands import native_command
+        existing = list_goal_todos(registry_path=self.controller.registry_path,
+            runtime_root_arg=str(self.controller.coordination_runtime_root),
+            goal_id=actor["goal_id"], role="user").get("todos", [])
+        open_by_key: dict[str, tuple[dict[str, Any], str]] = {}
+        for row in existing:
+            if row.get("status") != "open":
+                continue
+            title = str(row.get("title") or "").strip() or re.sub(
+                r"^\[p\d\]\s*", "", str(row.get("text") or ""), flags=re.IGNORECASE,
+            ).strip()
+            if title.startswith("[") and "]" in title:
+                open_by_key[title[1:title.index("]")].strip().lower()] = (row, title)
+        receipts: list[dict[str, Any]] = []
+        for idx, action in enumerate(actions):
+            key, prio, body = action["dedupe_key"], action["priority"], action["text"]
+            rendered = f"[{key}] {body}"
+            op_id = "steward-ua." + hashlib.sha256(f"{turn_instance_id}:{idx}:{key}".encode()).hexdigest()[:24]
+            matched = open_by_key.get(key)
+            if matched is not None:
+                prior, prior_title = matched
+                if prior_title == rendered and str(prior.get("priority") or "") == prio:
+                    receipts.append({"dedupe_key": key, "action": "unchanged", "todo_id": prior["todo_id"]})
+                    continue
+                res = native_command(self.controller, ["todo", "update", "--goal-id", actor["goal_id"],
+                    "--role", "user", "--agent-id", actor["agent_id"], "--todo-id", prior["todo_id"],
+                    "--text", rendered,
+                    *(["--note", f"Priority: {prio}"] if str(prior.get("priority") or "") != prio else []),
+                    "--update-operation-id", op_id, "--execute"])
+                receipts.append({"dedupe_key": key, "action": "updated", "todo_id": prior["todo_id"], "ok": res.get("ok")})
+            else:
+                res = native_command(self.controller, ["todo", "add", "--goal-id", actor["goal_id"],
+                    "--role", "user", "--task-class", "user_action", "--priority", prio,
+                    "--text", rendered, "--bound-agent", actor["agent_id"],
+                    "--operation-id", op_id, "--execute"])
+                receipts.append({"dedupe_key": key, "action": "added", "todo_id": res.get("todo_id"), "ok": res.get("ok")})
+        return receipts
 
     def execute(self, *, session_id: str, turn_id: str, adapter: Any,
                 event_sink: Any, context: dict[str, Any]) -> dict[str, Any]:
@@ -682,12 +871,12 @@ class StewardTurnHost:
         actor = admitted["actor"]
         local_session = actor.get("schema_version") == "loopx_managed_session_actor_v0"
         report_work = request.get("work_kind") == "report"
+        steward_advancement = not local_session and not report_work
         managed_turn = ManagedSessionTurn(self.controller) if local_session and not report_work else None
         if admitted["observation_only"]:
             from .steward_monitor import StewardMonitor
             monitor = StewardMonitor(self.controller)
-            todo = (next((row for row in monitor.todos(actor) if row["todo_id"] == request["todo_id"]), None)
-                if managed_turn else monitor.current(actor))
+            todo = next((row for row in monitor.todos(actor) if row["todo_id"] == request["todo_id"]), None)
             return monitor.observe(host=self, request=request, turn=turn, context=context, todo=todo)
         if not isinstance(adapter, CodexAppServerAdapter):
             raise ValueError("native steward work requires the original Codex app-server adapter")
@@ -699,6 +888,7 @@ class StewardTurnHost:
         managed_answer = ""
         managed_lease, managed_lease_request = None, None
         preparation_status = None
+        steward_actions_state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "validation_error": None}
 
         def report_lease_proof():
             return self._task_lease_proof(request, report_lease)
@@ -778,9 +968,24 @@ class StewardTurnHost:
                 self._task_lease_proof(selected_request, managed_lease)
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
-            prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
+            prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn or steward_advancement) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
             if report_work and not governance_work:
                 prompt += report_context
+            if steward_advancement and not governance_work:
+                selected_todo_id = (authority.get("_work_identity") or {}).get("todo_id") or request.get("todo_id")
+                if selected_todo_id and managed_lease is None:
+                    managed_lease_request = {**request, "todo_id": selected_todo_id}
+                    managed_lease = managed_leases.enter_context(
+                        self._task_execution_lease(managed_lease_request, turn_id))
+                followup_ctx = self._steward_followup_context(actor, session_id, request, authority)
+                prompt += (
+                    "\nSteward advancement instructions: Evaluate the monitor prompt and signal snapshot against authorized recipients (`context_delegation.targets`), prior receipts (`prior_handoff_receipts`, avoid duplicate delivery for unchanged PR@headRefOid), and open user todos (`open_user_todos`). "
+                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
+                    "You may include optional top-level JSON fields alongside the normal kernel fields: "
+                    "`context_handoff` (single object or array <=32 of {goal_id, agent_id, brief} with `schema_version='collaboration_brief_v0'` and `inputs=[]` when referencing URLs/PRs, restricted to `context_delegation.targets`), "
+                    "and `steward_user_actions` (array <=16 of {dedupe_key, priority:'P0'|'P1'|'P2', text}). Set `result_kind='validated_completion'` when triage/handoff/user-action preparation is complete.\n"
+                    "Steward monitor & dedupe context (data):\n" + json.dumps(followup_ctx, ensure_ascii=False)
+                )
             if request.get("work_kind") == "scheduled_task":
                 from .session_calendar_tasks import SessionCalendarTasks
                 basis = SessionCalendarTasks(self.controller).admission(request)
@@ -831,22 +1036,27 @@ class StewardTurnHost:
                 adapter.session._launch_guard = previous_guard
             current()  # Revocation/stop/retarget after a long model call wins.
             candidate = parse_model_json(str(response.get("message") or ""))
-            if governance_work and candidate and candidate.get("result_kind") not in {"replan_required", "wait", "user_action_required", "iteration_failed"}:
-                candidate = {"result_kind": "wait", "classification": "report_replan_not_settled",
+            kernel_candidate = dict(candidate) if candidate is not None else None
+            if steward_advancement and not governance_work and kernel_candidate is not None:
+                steward_actions_state.update(self._normalize_steward_actions(kernel_candidate, context))
+                kernel_candidate.pop("context_handoff", None)
+                kernel_candidate.pop("steward_user_actions", None)
+            if governance_work and kernel_candidate and kernel_candidate.get("result_kind") not in {"replan_required", "wait", "user_action_required", "iteration_failed"}:
+                kernel_candidate = {"result_kind": "wait", "classification": "report_replan_not_settled",
                     "next_action": "Retain the original report until its native semantic replan is settled."}
-            if report_work and not governance_work and candidate and candidate.get("result_kind") in {"validated_progress", "validated_completion"}:
+            if report_work and not governance_work and kernel_candidate and kernel_candidate.get("result_kind") in {"validated_progress", "validated_completion"}:
                 observed = self._observe(actor)
                 with self.controller.lock, self._report_fence(request):
                     current(observed)
-                    reports.freeze(request, candidate)
+                    reports.freeze(request, kernel_candidate)
                     # This finite task's postcondition is the complete validated
                     # generation, not the model's choice of progress wording.
                     # The kernel still runs its independent validator and lease
                     # fence before closing only this window's generation Todo.
-                    candidate["result_kind"] = "validated_completion"
-            built = build_result(native_request, candidate, host_name="Codex app-server",
-                **({"allow_completion": True} if (report_work or managed_turn) and not governance_work else {}))
-            managed_answer = str(built.get("summary") or "") if managed_turn else ""
+                    kernel_candidate["result_kind"] = "validated_completion"
+            built = build_result(native_request, kernel_candidate, host_name="Codex app-server",
+                **({"allow_completion": True} if (report_work or managed_turn or steward_advancement) and not governance_work else {}))
+            managed_answer = str(built.get("summary") or "") if (managed_turn or steward_advancement) else ""
             return built
 
         argv = ["turn", "run-once", "--goal-id", actor["goal_id"], "--agent-id", actor["agent_id"],
@@ -924,6 +1134,17 @@ class StewardTurnHost:
                 report_context = reports.prepare(request, adapter,
                     authorization_scope_id=admitted.get("observed_scope_id"))
                 current()
+            def steward_validator(_plan: Mapping[str, Any], candidate_result: Mapping[str, Any]) -> dict[str, Any]:
+                if steward_actions_state.get("validation_error"):
+                    return {"status": "failed", "validator_kind": "callback",
+                        "summary": str(steward_actions_state["validation_error"]),
+                        "recovery_kind": "repair_required"}
+                if candidate_result.get("result_kind") in {"validated_progress", "validated_completion"}:
+                    return {"status": "passed", "validator_kind": "callback",
+                        "summary": "steward advancement actions passed validation"}
+                return {"status": "passed", "validator_kind": "callback",
+                    "summary": "steward advancement non-completion result recorded"}
+
             handle_turn_command(args, registry_path=self.controller.registry_path,
                 runtime_root_arg=str(self.controller.coordination_runtime_root),
                 output_format=lambda *_a, **_kw: "json",
@@ -933,7 +1154,9 @@ class StewardTurnHost:
                 **({"native_completion_lease_resolver": report_lease_proof,
                     "native_task_validator": self._report_validator(request)} if report_work else
                    {"native_task_validator": managed_turn.validator(request, turn_id=turn_id),
-                    "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if managed_turn else {}))
+                    "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if managed_turn else
+                   {"native_task_validator": steward_validator,
+                    "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if steward_advancement else {}))
         if preparation_status is not None:
             # Validation stopped preparation before the claim or model call.
             result["status"] = preparation_status
@@ -967,9 +1190,21 @@ class StewardTurnHost:
                 "proposals": [], "gate": None, "native_loopx": result,
                 "periodic_report": {"window_id": window["window_id"], "generation_id": generation["generation_id"],
                     "delivery_verified": delivered}}
+        user_action_receipts: list[dict[str, Any]] = []
+        if steward_advancement and result.get("status") == "committed" and steward_actions_state["user_actions"]:
+            observed = self._observe(actor)
+            with self.controller.lock:
+                self._admit(request, turn=self.store.load_turn(session_id, turn_id),
+                            observed=observed, selection_recovery=selection_recovery)
+                user_action_receipts = self._apply_steward_user_actions(
+                    actor, steward_actions_state["user_actions"], request["turn_instance_id"])
+        committed_handoff = (steward_actions_state["context_handoff"]
+            if steward_advancement and result.get("status") == "committed" else None)
         return {"schema_version": "loopx_chat_agent_response_v0", "message":
             "当前没有可执行且已配置独立验收的原生任务，尚未启动模型；请检查原任务的验收配置。" if managed_turn and managed_turn.validation_unavailable else
             (managed_answer or "本轮任务已完成结果回写。") if result.get("status") == "committed" else
             "本轮等待后续执行条件。" if result.get("status") == "stopped" and result.get("result_kind") == "wait" else
             "本轮任务尚未完成；执行状态已保留。",
-            "proposals": [], "gate": None, "native_loopx": result}
+            "proposals": [], "gate": None, "native_loopx": result,
+            **({"context_handoff": committed_handoff} if committed_handoff else {}),
+            **({"steward_user_action_receipts": user_action_receipts} if user_action_receipts else {})}

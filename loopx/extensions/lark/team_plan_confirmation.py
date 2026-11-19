@@ -12,7 +12,12 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...chat_action_store import ActionConflictError, ChatActionStore
+from ...chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from ...control_plane.runtime.runtime_projection_route import (
     resolve_goal_source_runtime_route,
 )
@@ -63,6 +68,7 @@ from .presentation.team_plan import (
     build_team_plan_review_card,
 )
 from .private_steward_triage import TRIAGE_CARD_ACTION, profile_supports_cards
+from .goal_channel_operation import OPERATION_CARD_ACTION_SCHEMA_VERSION
 
 
 TEAM_PLAN_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_team_plan_callback_receipt_v0"
@@ -80,7 +86,7 @@ class TeamPlanReviewCallbackStream:
         args: list[str],
         process_factory: ProcessFactory,
         parent_stop: threading.Event,
-        handler: Callable[[str], None],
+        handler: Callable[[Mapping[str, Any]], None],
         profile: str,
         required: bool,
     ) -> None:
@@ -89,6 +95,7 @@ class TeamPlanReviewCallbackStream:
         self._lock = threading.Lock()
         self._process: Any = None
         self._ready = threading.Event()
+        self._failure_code: str | None = None
         self._parent_stop = parent_stop
         self._thread = threading.Thread(
             target=self._consume, args=(args, process_factory, handler),
@@ -110,6 +117,13 @@ class TeamPlanReviewCallbackStream:
                 and self._process is not None and self._process.poll() is None
             )
 
+    def readiness_error(self) -> str | None:
+        if self.ready():
+            return None
+        if self._ready.is_set():
+            return "lark_review_callback_source_disconnected"
+        return self._failure_code or "lark_review_callback_source_starting"
+
     def disconnected(self) -> bool:
         # Group-only routes retain the parent listener's reconnect policy.
         if not self.required:
@@ -120,11 +134,12 @@ class TeamPlanReviewCallbackStream:
             )
 
     def _consume(
-        self, args: list[str], process_factory: ProcessFactory, handler: Callable[[str], None],
+        self, args: list[str], process_factory: ProcessFactory, handler: Callable[[Mapping[str, Any]], None],
     ) -> None:
         retry_seconds = 1.0
         while not self._stopping():
             observed_ready = False
+            failure_code = "lark_review_callback_source_start_failed"
             try:
                 with self._lock:
                     if self._stopping():
@@ -134,16 +149,31 @@ class TeamPlanReviewCallbackStream:
                     if self._stopping():
                         return
                     stripped = line.strip()
-                    if stripped.startswith(EVENT_READY_PREFIX):
+                    if stripped == f"{EVENT_READY_PREFIX}event_key=card.action.trigger":
                         observed_ready = True
+                        self._failure_code = None
+                        failure_code = "lark_review_callback_source_disconnected"
                         self._ready.set()
                     elif stripped.startswith("[event] exited "):
                         self._ready.clear()
                     elif not stripped.startswith(EVENT_DIAGNOSTIC_PREFIX):
-                        handler(line)
+                        try:
+                            payload = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(payload, Mapping):
+                            continue
+                        if payload.get("ok") is False:
+                            error = payload.get("error")
+                            if (isinstance(error, Mapping) and error.get("type") == "validation"
+                                    and error.get("subtype") == "failed_precondition"):
+                                failure_code = "lark_review_callback_source_precondition_failed"
+                            continue
+                        handler(payload)
             except OSError:
                 logging.getLogger(__name__).debug("Lark review callback consumer unavailable")
             finally:
+                self._failure_code = failure_code
                 self._close_process()
             if self.required or self._stopping():
                 return
@@ -233,7 +263,7 @@ def start_team_plan_review_callback_stream(
     process_factory: ProcessFactory,
     parent_stop: threading.Event,
     handler: ReviewCallbackHandler,
-    availability_sink: Callable[[Callable[[], bool]], None] | None = None,
+    availability_sink: Callable[[TeamPlanReviewCallbackStream], None] | None = None,
 ) -> TeamPlanReviewCallbackStream | None:
     """Start the filtered callback consumer paired with a message stream."""
 
@@ -245,22 +275,18 @@ def start_team_plan_review_callback_stream(
     chat_filter = " or ".join(
         f".chat_id == {json.dumps(chat_id)}" for chat_id in chat_ids
     )
-    # Private cards match a locally recorded message and chat. This source
-    # only forwards the Steward action shape alongside existing group chats.
+    # The App has one callback subscription. Each private/operation handler
+    # independently verifies its own recorded message, chat and authority.
     if private_steward:
         steward_filter = (
             "((.action_value | if type == \"string\" then (fromjson? // {}) else . end "
-            f"| .schema_version) == {json.dumps(TRIAGE_CARD_ACTION)})"
+            "| if type == \"object\" then .schema_version else null end) as $schema | "
+            f"($schema == {json.dumps(TRIAGE_CARD_ACTION)} or "
+            f"$schema == {json.dumps(OPERATION_CARD_ACTION_SCHEMA_VERSION)}))"
         )
         chat_filter = f"{chat_filter} or {steward_filter}" if chat_filter else steward_filter
 
-    def dispatch(callback_line: str) -> None:
-        try:
-            callback_event = json.loads(callback_line)
-        except json.JSONDecodeError:
-            return
-        if not isinstance(callback_event, Mapping):
-            return
+    def dispatch(callback_event: Mapping[str, Any]) -> None:
         raw_action = callback_event.get("action_value")
         try:
             action = json.loads(raw_action) if isinstance(raw_action, str) else raw_action
@@ -271,6 +297,10 @@ def start_team_plan_review_callback_stream(
         schema = action.get("schema_version")
         if schema == TRIAGE_CARD_ACTION:
             if not private_steward:
+                return
+            callback_event = {**callback_event, "action_value": action}
+        elif schema == OPERATION_CARD_ACTION_SCHEMA_VERSION:
+            if not private_steward and callback_event.get("chat_id") not in chat_ids:
                 return
             callback_event = {**callback_event, "action_value": action}
         elif schema != TEAM_PLAN_CARD_ACTION_SCHEMA_VERSION or callback_event.get("chat_id") not in chat_ids:
@@ -294,7 +324,7 @@ def start_team_plan_review_callback_stream(
         required=bool(chat_ids) and not private_steward,
     )
     if availability_sink is not None:
-        availability_sink(stream.ready)
+        availability_sink(stream)
     stream.start()
     return stream
 
@@ -842,6 +872,8 @@ def handle_team_plan_review_callback(
             "confirmed_at": callback_timestamp(
                 event.get("timestamp"), subject="team plan"
             ),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
     decided_review_card = decided.get("review_card")

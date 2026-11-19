@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import argparse
-import os
 import shlex
 from collections.abc import Callable
 from pathlib import Path
 
 from ..control_plane.effect_runtime import EffectRuntimeResponseAmbiguous, effect_runtime_result
-from ..paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
-from ..control_plane.projects.registry_codec import (
-    load_registry,
-    read_activation_upgrade_registry,
+from ..paths import resolve_runtime_root
+from ..control_plane.projects.registry_codec import load_registry
+from ..control_plane.goals.activation_service import (
+    authority_upgrade_registries,
+    authority_upgrade_roots,
+    upgrade_goal_activation_registries,
 )
-from ..control_plane.goals.activation_service import upgrade_goal_activation_registries
 
 
 def register_authority_archive_command(
@@ -149,46 +149,3 @@ def handle_authority_archive_command(
         f"{value.get('audit', '')}{recovery_hint}"
     ))
     return 1 if result.get("status") in {"failed", "outcome_unknown"} else 0
-
-
-def authority_upgrade_roots(registry_path: Path, runtime_root_arg: str | None,
-                            *, all_known: bool) -> list[str]:
-    """Bounded discovery from existing registries; never scan arbitrary home paths."""
-    registry = read_activation_upgrade_registry(registry_path)
-    override = runtime_root_arg or os.environ.get("LOOPX_RUNTIME_ROOT")
-    selected = resolve_runtime_root(registry, override, registry_path=registry_path).resolve()
-    roots = {selected}
-    if all_known:
-        common = Path(override).expanduser().resolve() if override else select_default_runtime_root().resolve()
-        roots.add(common)
-        global_path = global_registry_path(common)
-        global_registry = read_activation_upgrade_registry(global_path)
-        for goal in global_registry.get("goals", []):
-            source = goal.get("source_registry") if isinstance(goal, dict) else None
-            if not source:
-                continue
-            path = Path(str(source)).expanduser()
-            if not path.is_absolute():
-                raise ValueError("Registered source_registry must be absolute for automatic upgrade")
-            # A disconnected checkout does not hide the common runtime store.
-            if path.exists():
-                roots.add(resolve_runtime_root(read_activation_upgrade_registry(path), registry_path=path).resolve())
-    return sorted(str(root) for root in roots)
-
-
-def authority_upgrade_registries(registry_path: Path, runtime_root_arg: str | None,
-                                *, all_known: bool) -> list[Path]:
-    """Use the same registered routes as store discovery, including the selection."""
-    roots = authority_upgrade_roots(registry_path, runtime_root_arg, all_known=all_known)
-    paths = {registry_path.expanduser().resolve()}
-    for root in roots:
-        path = global_registry_path(Path(root))
-        paths.add(path)
-        for goal in read_activation_upgrade_registry(path).get("goals", []):
-            source = goal.get("source_registry") if isinstance(goal, dict) else None
-            if source:
-                source_path = Path(str(source)).expanduser()
-                if not source_path.is_absolute():
-                    raise ValueError("Registered source_registry must be absolute for automatic upgrade")
-                paths.add(source_path.resolve())
-    return sorted(path for path in paths if path.exists())

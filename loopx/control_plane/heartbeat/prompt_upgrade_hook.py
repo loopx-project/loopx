@@ -1,7 +1,7 @@
 """Content-free update receipts and a read-only, conditional turn-start hint.
 
 Installed-prompt reconciliation owns discovery. The existing typed hook owns
-observation admission; neither this receipt nor its hint authorizes adoption.
+observation admission.
 """
 from __future__ import annotations
 

@@ -63,13 +63,12 @@ loopx doctor
 - **Codex App：** 把复制出来的项目设为工作目录，在项目对话里发送下面的 `$loopx`
   请求。App 使用 heartbeat automation 自动续跑。
 - **Codex CLI：** 在练习项目目录运行 `codex`，在 Codex 内发送同一条 `$loopx`
-  请求，不是在 shell 中执行它。CLI 使用当前会话可见的原生 `/goal` 续跑。
+  请求。CLI 使用当前会话可见的原生 `/goal` 续跑。
   OpenAI 文档注明 Goals 从 Codex 0.128.0 开始提供，先确认当前版本有 `/goal`。
 - **Claude Code：** 打开同一目录，把 `$loopx` 换成已安装的 `/loopx` 命令技能。
   其他差异见[宿主选择表](newcomer-command-path.md#choose-the-loop-driver)。
 
-在 Codex 中，用 `$loopx` 或 `/skills` → `loopx` 显式调用技能。用户自定义的原生
-`/loopx` 不是这里的入口。LoopX 生成的入口关闭了隐式调用，单发普通任务文本不保证
+在 Codex 中，用 `$loopx` 或 `/skills` → `loopx` 显式调用技能。LoopX 生成的入口关闭了隐式调用，单发普通任务文本不保证
 启动 LoopX。找不到技能时，核对当前 Codex 进程使用的安装位置，包括 `CODEX_HOME`；
 修好安装后若仍不可见，再重启 Codex。
 
@@ -169,7 +168,7 @@ $loopx 持续检查 <我负责的模块或目录> 中可复现的 bug。先读�
 ```
 
 这里的“无限循环”，是允许有用且已授权的工作持续推进或恢复。每次修复仍有验收终点。
-没有新问题时，监控按事件或计划等待；唤醒频率更高，不代表取得了更多进展。
+没有新问题时，监控按事件或计划等待；
 初次只选一个模块、一个明确的测试命令，以及自己接受的费用边界。
 
 暂停时，让 Agent 暂停这个 LoopX 目标及其对应驱动，并读回两者的实际状态。
@@ -202,7 +201,7 @@ Goal、任务归属和待评审 PR，确认写入范围、测试命令、当前�
 例如，两个导入入口复制了同一套字段校验，可以评估提取共享校验函数，同时保留
 各入口原有的默认值、合法输入和错误行为。前后对照要说明规则如何从两处维护变成
 一处，测试仍覆盖两条真实入口及错误输入；若新抽象反而让调用更绕，就不值得采用。
-这是选题示例，不代表你的仓库已经存在该问题。英文完整示例见
+英文完整示例见
 [长程编程任务指南](long-running-coding-agents.md#example-keep-improving-repository-quality)。
 
 <a id="when-to-use-loopx"></a>
@@ -238,7 +237,7 @@ Agent 开始；增加宿主或 Agent 需要各自接入。要检查的是，留�
 作者[公开报告的用法](https://x.com/huangruiteng/status/2118539848235803121)包括研究看护、
 PR 评审、产品迭代和持续重构。这些是使用场景，不是受控性能对照。如果现有 Goal
 工作流已经能交付你需要的结果，可以继续沿用。LoopX 的状态维护、验证与续跑也有
-成本；这个小练习不能证明它比原生 Goal 效果更好或效率更高。
+成本；
 
 ## 准备成本、持续费用与适用范围
 
@@ -250,6 +249,5 @@ PR 评审、产品迭代和持续重构。这些是使用场景，不是受控�
 本教程不承诺固定价格或节省比例，继续采用 LoopX 的额度和调度，不另写 shell
 `while true` 循环。
 
-示例从红到绿，只验证这份购物车逻辑；它不能证明宿主会无限无人值守地恢复，也不
-保证找到真实项目的所有 bug。进一步操作见[长程编程任务指南](long-running-coding-agents.md)。
+示例从红到绿，只验证这份购物车逻辑；进一步操作见[长程编程任务指南](long-running-coding-agents.md)。
 Codex 原生 Goal 行为见 [OpenAI 官方指南](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)。

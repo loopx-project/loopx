@@ -37,17 +37,23 @@ def assert_explicit_off_keeps_legacy_prompt(original, disabled):
     assert disabled["interface_budget"]["max_chars"] == original["interface_budget"]["max_chars"]
 
 
-def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp_path):
+@pytest.mark.parametrize(("alias", "field"), [
+    ("--turn-envelope", "turn_envelope"), ("--complete-turn", "complete_turn"),
+])
+def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp_path, alias, field):
     from loopx.cli import build_parser
-    from loopx.control_plane.heartbeat.bootstrap_prompt import goal_bootstrap, host_bootstrap_binding
+    from loopx.control_plane.heartbeat.bootstrap_prompt import (
+        goal_bootstrap, host_bootstrap_binding, render_heartbeat_bootstrap,
+    )
 
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_heartbeat",
-        thin=True, decision_output_root=tmp_path, codex_context_root=str(tmp_path), context_delivery="on", turn_envelope=True)
+        thin=True, decision_output_root=tmp_path, codex_context_root=str(tmp_path), context_delivery="on")
+    assert build_heartbeat_prompt(**args, **{field: True}) == build_heartbeat_prompt(**args)
     prompt = build_heartbeat_prompt(**args)
     guard = prompt["quota_guard_command"]
     assert '--turn-instance-id "${LOOPX_TURN:?}"' in guard
     assert "--begin-turn" not in guard
-    assert "--codex-context-root" in guard and "--turn-envelope" in guard
+    assert "--codex-context-root" in guard and alias not in shlex.split(guard)
     assert "LOOPX_TURN=<current_time_iso>" in prompt["task_body"]
     # The shell refuses an unbound wake before the CLI can create a receipt.
     result = subprocess.run(guard, shell=True, env={"PATH": os.environ["PATH"]},
@@ -56,18 +62,21 @@ def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp
     assert list(tmp_path.iterdir()) == []
     parser = build_parser()
     cli = ["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--decision-output-root", str(tmp_path), "--context-delivery", "on", "--codex-app", "--codex-context-root", str(tmp_path), "--turn-envelope", "--bootstrap"]
+        "--decision-output-root", str(tmp_path), "--context-delivery", "on", "--codex-context-root", str(tmp_path), alias, "--bootstrap"]
     parsed = parser.parse_args(cli)
     bootstrap = goal_bootstrap(parsed, registry=tmp_path / "registry.json")
     command = shlex.split(bootstrap.split("```sh\n")[1].split("\n```")[0])
     assert "--bootstrap" not in command and "--turn-instance-id" not in command
     assert command[command.index("--codex-context-root") + 1] == str(tmp_path)
-    assert "--turn-envelope" in command
-    binding = host_bootstrap_binding(bootstrap)
-    assert binding is not None and binding["context_delivery"] == "on" and binding["turn_envelope"] is True
+    assert alias not in command
+    saved = render_heartbeat_bootstrap([*command, alias])
+    binding = host_bootstrap_binding(saved)
+    assert binding is not None and binding["context_delivery"] == "on" and binding[field] is True
+    assert binding["goal_id"] == GOAL_ID and binding["agent_id"] == AGENT_ID
+    assert host_bootstrap_binding(render_heartbeat_bootstrap([*command, alias, alias])) is None
 
 
-def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tmp_path):
+def test_capture_preserves_full_dispatcher_with_complete_source_alias(tmp_path):
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli",
                 turn_instance_id=TURN_ID, thin=True)
     assert build_heartbeat_prompt(**args) == build_heartbeat_prompt(**args, decision_output_root=None)
@@ -81,15 +90,9 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
         build_heartbeat_prompt(**args, turn_envelope=True)
     payload = build_heartbeat_prompt(**args, decision_output_root=tmp_path, turn_envelope=True)
     assert payload['interface_budget']['within_budget'], payload['interface_budget']
-    assert '--turn-envelope --decision-output-root' in payload['quota_guard_command']
-    assert 'writeback.settlement_plan.ordered_steps' in payload['task_body']
-    assert 'When present, read inline `agent_context` before planning.' in payload['task_body']
-    assert 'an `agent_context.detail_ref`' in payload['task_body']
-    assert 'using inline ACK argv' in payload['task_body']
-    assert 'needed missing/truncated/referenced command' in payload['task_body']
-    assert 'failure argv only after host update failure' in payload['task_body']
+    assert payload == captured
+    assert 'interaction_contract.cli_channel.settlement_plan.ordered_steps' in payload['task_body']
     assert '--decision-output-root' in payload['thin_prompt_command']
-    assert '--turn-envelope' in payload['thin_prompt_command']
     # The captured allowance must neither leak into ordinary thin nor disable
     # overflow diagnostics, including when Reward Memory is absent.
     no_memory = dict(args, reward_memory_enabled=False)
@@ -99,9 +102,9 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     assert captured_only['interface_budget']['max_chars'] == 5_100
     oversized = build_heartbeat_prompt(
         **no_memory, decision_output_root=tmp_path, turn_envelope=True,
-        agent_scopes=[letter * 320 for letter in 'stuv'],
+        agent_scopes=[letter * 320 for letter in 'stuvwx'],
     )
-    assert oversized['interface_budget']['max_chars'] == 5_500
+    assert oversized['interface_budget']['max_chars'] == 5_100
     assert oversized['interface_budget']['within_budget'] is False
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
                       dict(runtime_profile='codex_app_ssh_goal')):
@@ -128,16 +131,12 @@ def test_captured_scheduler_ack_is_inline_and_failure_detail_stays_on_original_s
     assert code == 0, envelope
     original = (capture / 'decision.json').read_bytes()
     source = json.loads(original)['scheduler_hint']['app_automation']
-    projected = envelope['scheduler']['app_automation']
-    assert projected['ack_cli_args'] == source['ack_hint']['cli_args']
-    assert 'ack_cli_args_detail_ref' not in projected
-    assert projected['failure_cli_args_detail_ref']['detail_ref'] == (
-        'full_decision.scheduler_hint.app_automation.failure_hint.cli_args'
-    )
+    assert envelope['schema_version'] == 'loopx_turn_envelope_v1'
+    assert envelope['scheduler_hint']['app_automation'] == source
     before = _heartbeat_receipt_count(runtime, TURN_ID)
-    read = subprocess.run(shlex.split(envelope['detail_ref']['full_decision']),
-        capture_output=True, check=True).stdout
-    assert read == original
+    from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+    read, _, _ = read_pinned_cli_body(envelope['detail_ref']['full_decision'])
+    assert read.encode() == original
     assert _heartbeat_receipt_count(runtime, TURN_ID) == before
 
 
@@ -176,13 +175,11 @@ def test_bound_captured_prompt_fits_budget_without_reward_memory(
         assert '--reward-memory-reflection-json' not in body
         assert str(runtime) in body and str(capture) in body
         assert payload['turn_instance_id'] == TURN_ID
-        assert payload['interface_budget']['max_chars'] == 5_500
+        assert payload['interface_budget']['max_chars'] == 5_100
         assert payload['interface_budget']['within_budget'], payload['interface_budget']
         assert len(result.stdout) <= 5_400  # Shipped Agent JSON, not generator metadata.
-        assert 'using inline ACK argv' in body
-        assert 'needed missing/truncated/referenced command' in body
-        assert 'failure argv only after host update failure' in body
-        assert 'same-invocation observation, not fresh admission' in body
+        assert 'interaction_contract.cli_channel.settlement_plan.ordered_steps' in body
+        assert 'work_context' in body and 'required_reads' in body
         assert 'goal_acceptance' in body  # Retain the complete outcome guidance too.
 
 
@@ -272,6 +269,11 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     guard = next(line for line in block.splitlines() if 'quota should-run' in line)
     guard = guard.replace('${LOOPX_TURN:?}', TURN_ID)
     argv = shlex.split(guard)
+    assert '--turn-envelope' not in argv
+    # A saved historical guard still executes. Its fresh reentry must use
+    # the complete contract without propagating the retired view option.
+    if enabled:
+        argv.append('--turn-envelope')
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
@@ -304,24 +306,23 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         captures = list(root.glob('*/decision.json'))
         assert len(captures) == 1
         full = json.loads(captures[0].read_text())
+        assert first == full and first['schema_version'] == 'loopx_turn_envelope_v1'
         if enabled:
-            assert first['action_signature']['matches']
             detail = shlex.split(first['detail_ref']['full_decision'])
-            assert detail[:2] == ['cat', '--']  # Depends on the saved-detail reader contract.
             receipts = _heartbeat_receipt_count(runtime, TURN_ID)
             readback = subprocess.run(detail, env=env, cwd=project, capture_output=True,
                                       text=True, check=True)
-            assert json.loads(readback.stdout) == full
+            assert complete_page(json.loads(readback.stdout)) == full
             assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
         else:
             assert first['interaction_contract'] == full['interaction_contract']
             assert 'action_signature' not in first and 'quota' in first
             assert 'Use TurnEnvelope:' not in body
-            assert '--turn-envelope' not in argv
     else:
         assert not root.exists()
         full = first
     selection = full['interaction_contract']['cli_channel']['selection_command']
+    assert '--turn-envelope' not in shlex.split(selection['command_args_template'])
     command = selection['route_prefix'] + ' ' + selection['command_args_template'].replace(
         '{todo_id}', ALTERNATIVE_TODO_ID)
     rc, selected = _run_generated_cli(command, registry_path=registry)
@@ -332,12 +333,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert len(paths) == 2
         assert json.loads(captures[0].read_text()) == full
         selected_full = json.loads(next(p for p in paths if p != captures[0]).read_text())
-        if enabled:
-            assert selected['action_signature']['matches']
-            assert selected['writeback']['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
-        else:
-            assert selected['interaction_contract'] == selected_full['interaction_contract']
-            assert 'action_signature' not in selected
+        assert selected == selected_full and selected['schema_version'] == 'loopx_turn_envelope_v1'
     else:
         selected_full = selected
     identity = selected_full['heartbeat_receipt']['settlement_identity']
@@ -462,8 +458,9 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
     assert "visible-goal" in enabled["quota_spend_command"]
     assert enabled["interface_budget"]["within_budget"]
     if turn_envelope:
-        assert "--turn-envelope" in guard
-        assert "detail_ref.full_decision" in enabled["task_body"]
+        ordinary = build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=tmp_path,
+            codex_context_root=str(tmp_path))
+        assert enabled == ordinary
 
 
 @pytest.mark.parametrize("turn_envelope", [False, True])
@@ -500,7 +497,9 @@ def test_ssh_goal_capture_fits_host_with_full_command_paths(tmp_path, turn_envel
         assert "--begin-turn" in command and "--heartbeat-turn-receipt" not in command
         assert "--context-delivery" in command and "LOOPX_TURN=" not in body
         if turn_envelope:
-            assert "detail_ref.full_decision" in body
+            source = build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=captures,
+                codex_context_root=str(context))
+            assert enabled == source
         with pytest.raises(ValueError, match="4000-character"):
             build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=captures,
                 codex_context_root=str(context), turn_envelope=turn_envelope, agent_scopes=[c * 320 for c in "stu"])

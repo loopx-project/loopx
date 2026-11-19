@@ -275,7 +275,10 @@ export function selectPrimaryActionInstruction(value: unknown, mode: string): st
   if (["user_gate", "user_todo_blocker_push", "user_action_required"].includes(mode)) return "wait for user/owner action after surfacing the blocker or gate";
   if (mode === EffectiveAction.OUTCOME_FLOOR_RECOVERY) return "produce the required outcome-floor evidence artifact or write the concrete blocker";
   if (mode === EffectiveAction.CAPABILITY_BRIDGE_REPAIR) return "execute interaction_contract.agent_channel.next_task_action.operation once with its real task-facing tool and exact target_ref when projected; preflight_allowed is false, and the instruction is context rather than CLI text; on success execute cli_channel.next_cli_actions[0] in the same turn and continue only when quota allows";
-  if (mode === EffectiveAction.AGENT_WORKSPACE_REPAIR) return "create or switch to an independent worktree/branch, then rerun quota guard before file edits";
+  if (mode === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    return text(facts, "workspace_repair_action")
+      || "create or switch to an independent worktree/branch, then rerun quota guard before file edits";
+  }
   if (mode === "automation_prompt_upgrade") return "update the installed automation once using the stable migration id, run its completion ack, then rerun quota guard";
   if (mode === "control_plane_self_repair") return "repair the bounded control-plane/status projection fault exposed by quota";
   if (mode === EffectiveAction.BOUNDARY_PROJECTION_REPAIR) return "repair goal_boundary.write_scope projection before attempting the selected write";

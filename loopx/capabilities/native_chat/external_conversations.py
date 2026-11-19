@@ -1,8 +1,8 @@
 """Native Chat admission/recovery IO for explicitly bound external sources.
 
 Sessions and Turns remain in ChatSessionStore. This journal only correlates a
-provider request with those canonical objects; it is not a second queue or model
-runner. Write it before admission so a crash can replay the same client identity.
+provider request with those canonical objects;
+Write it before admission so a crash can replay the same client identity.
 """
 from __future__ import annotations
 
@@ -13,21 +13,26 @@ from pathlib import Path
 import hashlib
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime as datetime, timezone as timezone
 from typing import Any
 
-from ...chat_actions import goal_workspace_ref
-from ...chat_ingress import STEWARD_BINDING_ADOPTION_PENDING, ensure_external_admission_scope, resolve_external_admission_source
-from ...chat_store import _atomic_write_json, _read_json, RESUMABLE_SESSION_STATES
+from ...chat_ingress import (
+    STEWARD_BINDING_ADOPTION_PENDING as STEWARD_BINDING_ADOPTION_PENDING,
+    ensure_external_admission_scope,
+    resolve_external_admission_source,
+)
+from ...chat_store import _atomic_write_json as _atomic_write_json, _read_json as _read_json, RESUMABLE_SESSION_STATES
 from ...chat_attachments import normalize_chat_image_attachments
+from ...control_plane import effect_runtime
 from ...control_plane.quota.automation_cadence_readback import (
     automation_cadence_readback,
     unavailable_automation_cadence_readback,
 )
-from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
+from ...file_lock import exclusive_file_lock as exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, source_control_fields
+from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, recovery_journal_fields, source_control_fields
+from .steward_commands import ExternalStewardCommissionMixin
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -48,15 +53,6 @@ def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
         return {"count": len(images), "sha256": hashlib.sha256(encoded).hexdigest()}
     except (ValueError, TypeError, OverflowError):
         return None
-
-
-def _commission_goal_identity(goal: dict[str, Any]) -> dict[str, str]:
-    identity: dict[str, str] = {}
-    for field in ("goal_instance_id", "creation_operation_id"):
-        value = str(goal.get(field) or "").strip()
-        if value:
-            identity[field] = value
-    return identity
 
 
 class _RecoveryDiscoveryReads:
@@ -99,7 +95,7 @@ class _RecoveryDiscoveryReads:
         return self.message_indexes[session_id].get(text, [])
 
 
-class ChatExternalConversations:
+class ChatExternalConversations(ExternalStewardCommissionMixin):
     def __init__(self, controller: Any) -> None:
         self.controller = controller
         self.bindings = controller.project_contexts.conversation_bindings
@@ -107,6 +103,7 @@ class ChatExternalConversations:
         self.root = controller.store.root / "external-requests"
         self._source_control_discovery = FileChatDiscovery()
         self._backlog_request_discovery = FileChatDiscovery()
+        self._recovery_discovery = FileChatDiscovery()
         self.actions: Any | None = None
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -135,7 +132,6 @@ class ChatExternalConversations:
                                metadata_capacity: dict[str, Any] | None = None,
                                discovery_reads: _RecoveryDiscoveryReads | None = None) -> dict[str, Any]:
         from ...chat_manager import MANAGER_CONTEXT_VERSION
-        from ...control_plane.effect_runtime import effect_runtime_result
 
         if discovery_reads is not None and not discovery_only:
             raise ValueError("discovery observations cannot authorize recovery")
@@ -166,9 +162,7 @@ class ChatExternalConversations:
             and reservation.get("failed_turn_id") == turn["turn_id"]
             and (retained_review is None or reservation.get("work_attempt") == 1
                  or reservation.get("legacy_result_review")) else None)
-        events = store.events_after(session["session_id"], turn["turn_id"], None)
-        anchors = [event["payload"]["native_input"] for event in events
-                   if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
+        events, anchors = self._started_native_inputs(session["session_id"], turn["turn_id"])
         session = self._original_native_session(session, anchors)
         unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
         related_review = (result_review_evidence.collect_related_result_review(self, row, turn, discovery_reads=discovery_reads)
@@ -227,7 +221,7 @@ class ChatExternalConversations:
                 if failed_review is not None:
                     review_preparation = {"turn": failed_review,
                         "events": store.events_after(session["session_id"], failed_review["turn_id"], None)}
-        return effect_runtime_result("collaboration.conversation.request", {
+        return effect_runtime.effect_runtime_result("collaboration.conversation.request", {
             "request": recovery_row,
             "current_session": session, "binding": selected_binding,
             "context_recovery": {"version": MANAGER_CONTEXT_VERSION,
@@ -265,6 +259,27 @@ class ChatExternalConversations:
                 "executor_configuration": steward_machine_defaults(self.controller) if metadata_capacity else None,
                 "native_observation": observation, "source_verified": source_verified},
         })
+
+    def _started_native_inputs(self, session_id: str, turn_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        events = self.controller.store.events_after(session_id, turn_id, None)
+        anchors = [item["payload"]["native_input"] for item in events
+                   if item.get("kind") == "turn.started" and item.get("payload", {}).get("native_input")]
+        return events, anchors
+
+    def _source_requests(self, row: dict[str, Any]) -> list[dict[str, Any]]:
+        return [item for item in self.pending()
+                if item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"]]
+
+    def _codex_quota_route_capacity(self, session: dict[str, Any]) -> dict[str, Any] | None:
+        from ...chat_manager import manager_session_quota_route
+        route = manager_session_quota_route(self.controller, session)
+        return route if route and route["allocation"]["executor_endpoint"] == "codex" else None
+
+    def _latest_selection_target(self, binding_id: str, source_ref: str) -> dict[str, Any] | None:
+        choices = [item for item in self.pending() if item.get("binding_id") == binding_id
+                   and item["source"]["source_ref"] == source_ref and item.get("selection_recorded")]
+        previous = max(choices, key=lambda item: item.get("selection_order", 0)) if choices else None
+        return previous.get("selection_target") if previous else None
 
     @staticmethod
     def _original_native_session(session: dict[str, Any], anchors: list[dict[str, Any]]) -> dict[str, Any]:
@@ -326,8 +341,6 @@ class ChatExternalConversations:
 
     @staticmethod
     def _quota_pending_flags(params: Sequence[dict[str, Any]]) -> list[bool]:
-        from ...control_plane.effect_runtime import effect_runtime_result
-
         flags: list[bool] = []
         batch: list[dict[str, Any]] = []
         size = 0
@@ -335,7 +348,7 @@ class ChatExternalConversations:
         def flush() -> None:
             if not batch:
                 return
-            result = effect_runtime_result("collaboration.conversation.request", {"pending_observations": batch})
+            result = effect_runtime.effect_runtime_result("collaboration.conversation.request", {"pending_observations": batch})
             values = result.get("pending_flags") if isinstance(result, dict) else None
             if (not isinstance(values, list) or len(values) != len(batch)
                     or any(type(value) is not bool for value in values)):
@@ -351,7 +364,7 @@ class ChatExternalConversations:
             if encoded > _QUOTA_BACKLOG_BATCH_BYTES:
                 # Preserve the original single-request transport and its byte
                 # refusal; batching must not introduce a new content limit.
-                result = effect_runtime_result("collaboration.conversation.request", values)
+                result = effect_runtime.effect_runtime_result("collaboration.conversation.request", values)
                 pending = result.get("pending") if isinstance(result, dict) else None
                 if type(pending) is not bool:
                     raise ValueError("pending observation result is unavailable")
@@ -449,11 +462,7 @@ class ChatExternalConversations:
                                else checked_session_home(self.controller.codex_home, session))
             context = self.controller.project_contexts.session_context(session)
 
-            def source_requests() -> list[dict[str, Any]]:
-                return [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
-                    and item.get("source") == row["source"]]
-
-            requests = source_requests()
+            requests = self._source_requests(row)
             # The read-only native client can consume its entire RPC deadline.
             # Retain this request's fence, but let new source input/control in.
             # Its observation is only usable if the original local state still
@@ -463,9 +472,7 @@ class ChatExternalConversations:
             capacity = None
             if not plan.get("admitted_turn_id") and (metadata_review or answer_review and not codex_answer or turn.get("error_code") == "antigravity_step_error"):
                 from .antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
-                events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
-                anchors = [item["payload"]["native_input"] for item in events
-                    if item.get("kind") == "turn.started" and item.get("payload", {}).get("native_input")]
+                _events, anchors = self._started_native_inputs(row["session_id"], row["turn_id"])
                 native_session = self._original_native_session(session, anchors)
                 if metadata_review:
                     proof = self._original_native_result(row, session, turn, context, include_raw_response=True,
@@ -479,14 +486,10 @@ class ChatExternalConversations:
                             request_ref=row["request_ref"], message=row["message"], started_at=turn["started_at"],
                             completed_at=turn["completed_at"], input_anchor=anchors[0])
                 if proof is not None:
-                    from ...chat_manager import manager_session_quota_route
-                    route = manager_session_quota_route(self.controller, session)
-                    if route and route["allocation"]["executor_endpoint"] == "codex":
-                        capacity = {"alternate_executor": route}
-                    else:
-                        capacity = AntigravityAdapter.metadata_review_capacity(
-                            cascade_id=native_session["upstream_thread_id"],
-                            model_id=native_session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL)
+                    route = self._codex_quota_route_capacity(session)
+                    capacity = ({"alternate_executor": route} if route is not None else AntigravityAdapter.metadata_review_capacity(
+                        cascade_id=native_session["upstream_thread_id"],
+                        model_id=native_session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL))
             elif not plan.get("admitted_turn_id") and not preparation_retry:
                 result_review = bool(plan.get("read_only_review")
                     and (plan.get("unfinished_work") or plan.get("legacy_result_review")))
@@ -524,18 +527,15 @@ class ChatExternalConversations:
                             and proof.get("only_original_user_item") is True and session.get("steward_context")):
                         # The steward may use its API pool while the desktop's
                         # subscription is exhausted. Reuse that same fresh owner;
-                        # it neither replaces native no-effects proof nor admits work.
-                        from ...chat_manager import manager_session_quota_route
-                        route = manager_session_quota_route(self.controller, session)
-                        if route and route["allocation"]["executor_endpoint"] == "codex":
+                        route = self._codex_quota_route_capacity(session)
+                        if route is not None:
                             if quota_answer:
                                 capacity = {"alternate_executor": route}
                             else:
                                 proof.update(quota_available=True, quota_observed_at=route["observed_at"])
             if codex_answer and not quota_answer and proof is not None:
-                from ...chat_manager import manager_session_quota_route
-                route = manager_session_quota_route(self.controller, session)
-                if route and route["allocation"]["executor_endpoint"] == "codex":
+                route = self._codex_quota_route_capacity(session)
+                if route is not None:
                     capacity = {"alternate_executor": route}
             facts = proof.pop("retained_result", None) if proof is not None and metadata_review else None
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
@@ -564,7 +564,7 @@ class ChatExternalConversations:
                         or self.controller.store.load_turn(row["session_id"], current_turn["turn_id"]) != current_turn
                         or (plan.get("completed_review_turn_id") or plan.get("original_result_turn_id"))
                         and self.controller.store.load_turn(row["session_id"], turn["turn_id"]) != turn
-                        or source_requests() != requests):
+                        or self._source_requests(row) != requests):
                     return row
                 plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
                     selected_binding=selected["binding"], preparation_scope_available=scope_available,
@@ -702,42 +702,33 @@ class ChatExternalConversations:
                                 include_retained_result: bool = False) -> dict[str, Any] | None:
         from .antigravity_adapter import AntigravityAdapter
 
-        events = self.controller.store.events_after(session["session_id"], turn["turn_id"], None)
-        anchors = [event["payload"]["native_input"] for event in events
-                   if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
+        _events, anchors = self._started_native_inputs(session["session_id"], turn["turn_id"])
         session = self._original_native_session(session, anchors)
         if len(anchors) > 1:
             return None
         # Retained facts can repair only a completed Turn's text. Failed-Turn
-        # recovery keeps its live native read and exact input requirements; old
-        # capture does not authorize another invocation or unknown-effect replay.
+        # recovery keeps its live native read and exact input requirements.
+
         retained = self.controller.store.native_result(session["session_id"], turn["turn_id"])
-        if (turn.get("status") == "completed" and len(anchors) == 1 and retained
-                and retained.get("upstream_turn_id") == turn.get("upstream_turn_id")):
-            return AntigravityAdapter.completed_result_observation(
-                cascade_id=session["upstream_thread_id"], request_ref=row["request_ref"], message=row["message"],
-                started_at=turn["started_at"], completed_at=turn["completed_at"], work_dir=Path(context["project"]),
-                input_anchor=anchors[0], include_raw_response=include_raw_response, retained_result=retained,
-                **({"include_retained_result": True} if include_retained_result else {}))
+        use_retained = (turn.get("status") == "completed" and len(anchors) == 1 and bool(retained)
+                        and (retained or {}).get("upstream_turn_id") == turn.get("upstream_turn_id"))
         return AntigravityAdapter.completed_result_observation(
             cascade_id=session["upstream_thread_id"], request_ref=row["request_ref"], message=row["message"],
             started_at=turn["started_at"], completed_at=turn["completed_at"], work_dir=Path(context["project"]),
             input_anchor=anchors[0] if anchors else None,
             **({"include_retained_result": True} if include_retained_result else {}),
-            **({"include_raw_response": True} if include_raw_response else {}))
+            **({"include_raw_response": True} if include_raw_response else {}),
+            **({"retained_result": retained} if use_retained else {}),
+        )
 
     def _recover_native_result(self, path: Path, row: dict[str, Any], session: dict[str, Any],
                                turn: dict[str, Any], source_observation: Callable) -> dict[str, Any]:
         """Adopt an original provider result, without reopening/dispatching a Turn."""
         store = self.controller.store
-        requests = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
-                    and item.get("source") == row["source"]]
+        requests = self._source_requests(row)
         context = self.controller.project_contexts.session_context(session)
         recovered = row.get("native_result_recovery")
-        if recovered is None:
-            proof = self._original_native_result(row, session, turn, context)
-        else:
-            proof = recovered.get("native_observation")
+        proof = self._original_native_result(row, session, turn, context) if recovered is None else recovered.get("native_observation")
         selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
         source = source_observation(selected)
         with try_exclusive_file_lock(external_source_route_path(self.root, row["binding_id"], row["source"]["source_ref"]),
@@ -750,8 +741,7 @@ class ChatExternalConversations:
             selected = self.bindings._resolve_observed(current, selected["binding"], selected["observation"], row["source"])
             if (store.load_session(session["session_id"]) != session
                     or store.load_turn(session["session_id"], turn["turn_id"]) != turn
-                    or [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
-                        and item.get("source") == row["source"]] != requests):
+                    or self._source_requests(row) != requests):
                 return row
             plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
                                                selected_binding=selected["binding"])
@@ -764,7 +754,7 @@ class ChatExternalConversations:
                 row["native_result_recovery"] = recovered
                 _atomic_write_json(path, row)
             # The same explicit message identity closes the journal/message
-            # crash gap. Neither the failed Turn nor its events are rewritten.
+            # crash gap.
             store.append_message(session["session_id"], role="agent", text=recovered["message_text"],
                 turn_id=turn["turn_id"], origin=turn["origin"], message_id=recovered["message_id"])
             return row
@@ -795,14 +785,13 @@ class ChatExternalConversations:
 
     def history_answer_correction_candidate(self, request_ref: str, binding: dict[str, Any]) -> bool:
         """Typed local discovery only; admission obtains fresh source/idle proof."""
-        from ...control_plane.effect_runtime import effect_runtime_result
         row = self.read_request(request_ref)
         recovery = row.get("context_recovery") or {}
         store = self.controller.store
         sid = row.get("session_id")
         if not sid or not row.get("turn_id"):
             return False
-        return effect_runtime_result("collaboration.conversation.request", {
+        return effect_runtime.effect_runtime_result("collaboration.conversation.request", {
             "request": row, "binding": binding, "current_session": store.load_session(sid),
             "history_answer_review": {"discovery_only": True, "version": recovery.get("version"),
                 "previous_turn": store.load_turn(sid, recovery.get("previous_answer_turn_id") or row["turn_id"])}}).get("pending") is True
@@ -812,16 +801,12 @@ class ChatExternalConversations:
                             source_preflight: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         """One new read-only answer to a verified, previously uncaptured source.
 
-        This is neither a normal delayed admission nor a retry of business.
         The provider retains history provenance; Core retains the answer-only
         reservation before the same canonical queue can dispatch it.
         """
         from ...chat_manager import MANAGER_CONTEXT_VERSION
-        from ...control_plane.effect_runtime import effect_runtime_result
 
-        if (not re.fullmatch(r"[a-f0-9]{24}", request_ref)
-                or not re.fullmatch(r"[a-f0-9]{24}", binding_id)
-                or not re.fullmatch(r"[a-f0-9]{24}", str(source.get("source_ref")))
+        if (not all(_REQUEST_JOURNAL_STEM.fullmatch(v) for v in (request_ref, binding_id, str(source.get("source_ref"))))
                 or not callable(source_preflight)):
             raise ValueError("invalid historical answer source")
         path = self.root / f"{request_ref}.json"
@@ -877,7 +862,7 @@ class ChatExternalConversations:
                 replaceable = adapter is None or not adapter.healthcheck()
                 if isinstance(adapter, CodexAppServerAdapter) and adapter.healthcheck():
                     replaceable = adapter.answer_review_replaceable()
-                plan = effect_runtime_result("collaboration.conversation.request", {
+                plan = effect_runtime.effect_runtime_result("collaboration.conversation.request", {
                     "request": row, "binding": selected["binding"], "current_session": current,
                     "history_answer_review": {"source_verified": True,
                         "version": (reservation or {}).get("version", MANAGER_CONTEXT_VERSION),
@@ -942,6 +927,40 @@ class ChatExternalConversations:
             raise ValueError("reserved result review correlation unavailable")
         return None
 
+    def _load_checked_review_state(
+        self, session: dict[str, Any], turn: dict[str, Any], continuation: dict[str, Any], *,
+        error_message: str, historical: bool = False, allowed_row_turns: set[str | None] | None = None,
+        require_project_context: bool = False, require_empty_queue: bool = False,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        from ...chat_agent import CodexChatAgentError
+
+        store = self.controller.store
+        sid = session["session_id"]
+        row = self.read_request(continuation["request_ref"])
+        original = None if historical else store.load_turn(sid, continuation["failed_turn_id"])
+        current = store.load_session(sid) or {}
+        binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
+        events = store.events_after(sid, turn["turn_id"], None)
+        if not historical:
+            events += store.events_after(sid, continuation["failed_turn_id"], None)
+        stop_source = {**row, "created_at": row["source_created_at"]} if historical else row
+        stop_turn = {"status": "completed"} if historical else original or {}
+        turn_ids = allowed_row_turns if allowed_row_turns is not None else {turn["turn_id"], continuation["failed_turn_id"]}
+        if (
+            (require_project_context and not session.get("project_context"))
+            or row["turn_id"] not in turn_ids
+            or (store.turn_for_client(sid, continuation["client_turn_id"]) or {}).get("turn_id") != turn["turn_id"]
+            or original != continuation.get("original_turn")
+            or binding != continuation.get("binding_snapshot")
+            or current.get("status") == "closed"
+            or current.get("active_turn_id") != turn["turn_id"]
+            or (require_empty_queue and bool(store.queued_turns(sid)))
+            or self._source_stop_observed(stop_source, stop_turn, events)
+            or any(event.get("kind") == "turn.steered" for event in events)
+        ):
+            raise CodexChatAgentError(error_message, error_code="host_gate", gate=None)
+        return row, original, current, binding, events
+
     def _checked_metadata_review(self, session: dict[str, Any], turn: dict[str, Any], *,
                                  observe_native: bool = False) -> dict[str, Any] | None:
         from ...chat_agent import CodexChatAgentError
@@ -949,25 +968,16 @@ class ChatExternalConversations:
         continuation = self.recovery_context(session, turn)
         if not continuation or continuation.get("metadata_review") is not True:
             return None
-        row = self.read_request(continuation["request_ref"])
-        store = self.controller.store
-        original = store.load_turn(session["session_id"], continuation["failed_turn_id"])
-        current = store.load_session(session["session_id"]) or {}
-        binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
-        events = store.events_after(session["session_id"], turn["turn_id"], None)
-        events += store.events_after(session["session_id"], continuation["failed_turn_id"], None)
-        refs = sorted(item["request_ref"] for item in self.pending()
-                      if item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"])
+        row, original, current, _binding, _events = self._load_checked_review_state(
+            session, turn, continuation,
+            error_message="The original source, grant or queue changed; metadata review is held.",
+            require_empty_queue=True,
+        )
+        refs = sorted(item["request_ref"] for item in self._source_requests(row))
         native_session = self._original_native_session(current, [continuation["native_observation"]])
         if (native_session.get("agent_id") != "antigravity"
-                or row["turn_id"] not in {turn["turn_id"], continuation["failed_turn_id"]}
-                or (store.turn_for_client(session["session_id"], continuation["client_turn_id"]) or {}).get("turn_id") != turn["turn_id"]
-                or original != continuation["original_turn"] or binding != continuation["binding_snapshot"]
-                or current.get("status") == "closed" or current.get("active_turn_id") != turn["turn_id"]
                 or native_session.get("upstream_thread_id") != continuation["native_observation"]["thread_id"]
-                or store.queued_turns(session["session_id"]) or refs != continuation["source_request_refs"]
-                or self._source_stop_observed(row, original or {}, events)
-                or any(event.get("kind") == "turn.steered" for event in events)):
+                or refs != continuation["source_request_refs"]):
             raise CodexChatAgentError("The original source, grant or queue changed; metadata review is held.",
                                       error_code="host_gate", gate=None)
         if observe_native:
@@ -1005,30 +1015,19 @@ class ChatExternalConversations:
         continuation = self.recovery_context(session, turn)
         if not continuation or continuation.get("answer_review") is not True:
             return None
-        row = self.read_request(continuation["request_ref"])
-        store = self.controller.store
         historical = continuation.get("history_review") is True
-        original = None if historical else store.load_turn(session["session_id"], continuation["failed_turn_id"])
-        current = store.load_session(session["session_id"]) or {}
-        binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
-        events = store.events_after(session["session_id"], turn["turn_id"], None)
-        if not historical:
-            events += store.events_after(session["session_id"], continuation["failed_turn_id"], None)
-        stop_source = {**row, "created_at": row["source_created_at"]} if historical else row
-        stop_turn = {"status": "completed"} if historical else original or {}
         # A later ordinary question cannot erase this read-only answer.
         # Binding changes, explicit stops and steering still hold the review.
-        source_turns = {turn["turn_id"], continuation["failed_turn_id"]}
+        source_turns: set[str | None] = {turn["turn_id"], continuation["failed_turn_id"]}
         if continuation.get("context_correction"):
             source_turns.add(continuation["previous_answer_turn_id"])
-        if (row["turn_id"] not in source_turns
-                or (store.turn_for_client(session["session_id"], continuation["client_turn_id"]) or {}).get("turn_id") != turn["turn_id"]
-                or original != continuation["original_turn"] or binding != continuation["binding_snapshot"]
-                or current.get("status") == "closed" or current.get("active_turn_id") != turn["turn_id"]
-                or historical and (row.get("capture_origin") != "provider_history"
-                    or continuation.get("failed_turn_id") is not None or continuation.get("native_observation") is not None)
-                or self._source_stop_observed(stop_source, stop_turn, events)
-                or any(event.get("kind") == "turn.steered" for event in events)):
+        row, original, _current, _binding, _events = self._load_checked_review_state(
+            session, turn, continuation,
+            error_message="The original answer review source, grant or queue changed; review held.",
+            historical=historical, allowed_row_turns=source_turns,
+        )
+        if historical and (row.get("capture_origin") != "provider_history"
+                or continuation.get("failed_turn_id") is not None or continuation.get("native_observation") is not None):
             raise CodexChatAgentError("The original answer review source, grant or queue changed; review held.",
                                       error_code="host_gate", gate=None)
         if observe_native and not historical:
@@ -1100,18 +1099,12 @@ class ChatExternalConversations:
     def execute_turn(controller: Any, adapter: Any, session: dict[str, Any], turn: dict[str, Any],
                      message: str, event_sink: Callable) -> dict[str, Any]:
         """Narrow a reserved format review; preserve ordinary adapter dispatch."""
-        from .codex_adapter import CodexAppServerAdapter
+        from .codex_adapter import CodexAppServerAdapter, start_bound_project_turn
+
         if session.get("project_context") and controller.project_contexts.conversation_bindings is not None:
-            external = ChatExternalConversations(controller)
-            review = external._checked_completed_result_review(session, turn)
-            if review is not None:
-                if not isinstance(adapter, CodexAppServerAdapter) or not adapter.session.read_only_review:
-                    raise ValueError("a completed result review requires its original read-only project adapter")
-                response = adapter.start_turn(message, event_sink)
-                external._checked_completed_result_review(session, turn)
-                if any(response.get(key) for key in
-                       ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work")):
-                    raise ValueError("a result review cannot admit actions or replace the retained work obligation")
+            response = start_bound_project_turn(ChatExternalConversations(controller), adapter, session, turn,
+                                                message, event_sink)
+            if response is not None:
                 return response
         if (session.get("agent_id") not in {"antigravity", "codex"} or session.get("steward_context") is None
                 or controller.project_contexts.conversation_bindings is None):
@@ -1150,7 +1143,7 @@ class ChatExternalConversations:
             response = adapter.start_turn(text, lambda kind, payload: event_sink(kind, payload)
                 if kind not in {"answer.delta", "answer.final"} else None)
             external._checked_answer_review(session, turn)
-            if any(response.get(key) for key in ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work")):
+            if any(response.get(key) for key in ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work", "memory_preferences")):
                 raise ValueError("an answer review cannot admit actions or business continuation")
             if answer_review.get("context_correction") and response.get("gate") is None:
                 response = {**response, "gate": {"kind": "evidence_gap",
@@ -1192,7 +1185,7 @@ class ChatExternalConversations:
         handoffs = response.get("context_handoff")
         expected = continuation["metadata_handoffs"]
         if (not isinstance(handoffs, list) or len(handoffs) != len(expected)
-                or any(response.get(key) for key in ("gate", "proposals", "protected_action", "goal_draft", "unfinished_work"))
+                or any(response.get(key) for key in ("gate", "proposals", "protected_action", "goal_draft", "unfinished_work", "memory_preferences"))
                 or any(set(item) != {"goal_id", "agent_id", "brief"}
                     or any(item.get(key) != original[key] for key in ("goal_id", "agent_id"))
                     or item["brief"].get("context") != original["brief"]
@@ -1222,24 +1215,17 @@ class ChatExternalConversations:
         if (not review or not review.get("read_only_review")
                 or not (review.get("unfinished_work") or review.get("legacy_result_review"))):
             return None
-        store = self.controller.store
-        row = self.read_request(review["request_ref"])
-        original = store.load_turn(session["session_id"], review["failed_turn_id"])
-        current = store.load_session(session["session_id"]) or {}
-        binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
-        events = store.events_after(session["session_id"], turn["turn_id"], None)
-        events += store.events_after(session["session_id"], review["failed_turn_id"], None)
         predecessor = (review.get("preparation_failed_turn_id")
             if review.get("legacy_result_review") and review.get("review_preparation_attempt") == 1 else None)
-        if (not session.get("project_context") or review.get("answer_review")
-                or original != review.get("original_turn") or binding != review.get("binding_snapshot")
-                or current.get("active_turn_id") != turn["turn_id"] or current.get("status") == "closed"
-                or row["turn_id"] not in {turn["turn_id"], review["failed_turn_id"], predecessor}
-                or (store.turn_for_client(session["session_id"], review["client_turn_id"]) or {}).get("turn_id") != turn["turn_id"]
-                or store.queued_turns(session["session_id"]) or self._source_stop_observed(row, original or {}, events)
-                or any(event.get("kind") == "turn.steered" for event in events)):
+        if review.get("answer_review"):
             raise CodexChatAgentError("The original result review source, grant or queue changed; review held.",
                                       error_code="host_gate", gate=None)
+        row, original, _current, _binding, _events = self._load_checked_review_state(
+            session, turn, review,
+            error_message="The original result review source, grant or queue changed; review held.",
+            allowed_row_turns={turn["turn_id"], review["failed_turn_id"], predecessor},
+            require_project_context=True, require_empty_queue=True,
+        )
         if (review.get("legacy_result_review") and result_review_evidence.collect_related_result_review(self, row, original)
                 != result_review_evidence.related_review_basis(review["related_result_review"])):
             raise CodexChatAgentError("The related result evidence changed; review held.", error_code="host_gate", gate=None)
@@ -1321,70 +1307,104 @@ class ChatExternalConversations:
             return recovery
         return {}
 
-    def _automation_cadence_observation(
-        self, target: Mapping[str, Any]
-    ) -> dict[str, Any]:
+    def _automation_cadence_observation(self, target: Mapping[str, Any]) -> dict[str, Any]:
         """Read the owner once for the exact selected Agent status scope."""
-
-        goal_id = str(target["goal_id"])
-        agent_id = str(target["agent_id"])
+        goal_id, agent_id = str(target["goal_id"]), str(target["agent_id"])
         runtime_root = getattr(self.controller, "coordination_runtime_root", None)
         if not runtime_root:
             return unavailable_automation_cadence_readback(
-                goal_id=goal_id,
-                agent_id=agent_id,
-                automation_id=None,
-                reason="runtime_root_unavailable",
-            )
+                goal_id=goal_id, agent_id=agent_id, automation_id=None, reason="runtime_root_unavailable")
         try:
-            from ...control_plane.effect_runtime import effect_runtime_result
-
-            owner_result = effect_runtime_result(
+            owner_result = effect_runtime.effect_runtime_result(
                 "quota.automation_cadence.manage",
-                {
-                    "runtime_root": str(runtime_root),
-                    "operation": "read",
-                    "goal_id": goal_id,
-                    "agent_id": agent_id,
-                    "automation_id": None,
-                },
+                {"runtime_root": str(runtime_root), "operation": "read",
+                 "goal_id": goal_id, "agent_id": agent_id, "automation_id": None},
                 retry_safe=True,
             )
             if not isinstance(owner_result, Mapping):
                 raise ValueError("automation cadence owner result must be an object")
             return automation_cadence_readback(
-                owner_result,
-                expected_goal_id=goal_id,
-                expected_agent_id=agent_id,
-                expected_automation_id=None,
-            )
+                owner_result, expected_goal_id=goal_id, expected_agent_id=agent_id, expected_automation_id=None)
         except (OSError, RuntimeError, TypeError, ValueError):
             return unavailable_automation_cadence_readback(
-                goal_id=goal_id,
-                agent_id=agent_id,
-                automation_id=None,
-                reason="owner_read_failed",
-            )
+                goal_id=goal_id, agent_id=agent_id, automation_id=None, reason="owner_read_failed")
+
+    def _source_session(self, selected: dict[str, Any], target: dict[str, Any] | None):
+        controller = self.controller
+        steward_candidate = authority = None
+        if target:
+            authority = self.bindings.resolve_agent_target(selected, target)
+            # Observation must retain failed or closed originals, so read the
+            # exact frozen target Session without lifecycle filtering.
+            current = next((candidate for candidate in controller.store.session_candidates(
+                goal_id=None, agent_id=selected["binding"]["executor_endpoint_id"],
+                channel_id=selected["channel_id"])
+                if candidate.get("session_id") == target["session_id"]),
+                controller.store.load_session(target["session_id"]))
+        else:
+            current = controller.store.latest_session(goal_id=None,
+            agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
+            if selected["binding"]["context_kind"] == "steward":
+                # A quota fallback keeps the original channel, source and Core
+                # Session. Agent filtering must not create another consumer or
+                # fork the conversation when its actual endpoint changed.
+                candidates = [item for item in controller.store.list_sessions(channel_id=selected["channel_id"])
+                              if item.get("status") in RESUMABLE_SESSION_STATES]
+                if candidates:
+                    latest = max(candidates, key=lambda item: str(item.get("created_at") or ""))
+                    steward_candidate = controller.store.load_session(latest["session_id"])
+                    allocation = (steward_candidate or {}).get("manager_executor_allocation")
+                    if isinstance(allocation, dict) and allocation.get("selection_policy") == "flexible":
+                        self.bindings.session_context(steward_candidate["steward_context"], session=steward_candidate)
+                        current = steward_candidate
+        return current, steward_candidate, authority
+
+    def capture_native_mention(self, binding: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+        """Observe local identities before provider IO, without granting input.
+
+        Do not wait behind an in-flight source admission. Current routing and
+        grants are checked again before the frozen target can receive anything.
+        """
+        target = self._latest_selection_target(binding["binding_id"], source["source_ref"])
+        current = self.controller.store.load_session(target["session_id"]) if target else None
+        if not target:
+            candidates = []
+            for _, session in self.controller.store.iter_session_metadata():
+                saved = session.get("steward_context") or session.get("project_context") or {}
+                allocation = session.get("manager_executor_allocation") or {}
+                if (saved.get("binding_id") == binding["binding_id"]
+                        and saved.get("source_ref") == source["source_ref"]
+                        and session.get("status") in RESUMABLE_SESSION_STATES
+                        and (session.get("agent_id") == binding["executor_endpoint_id"]
+                            or binding["context_kind"] == "steward" and allocation.get("selection_policy") == "flexible")):
+                    candidates.append(session)
+            current = max(candidates, key=lambda item: str(item.get("created_at") or ""), default=None)
+        return {"session_id": (current or {}).get("session_id"),
+            "target_turn_id": (current or {}).get("active_turn_id") or None,
+            "channel_id": (current or {}).get("channel_id")}
 
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
               attachments: list[dict[str, Any]] | None = None,
               origin: str = "lark", defer_background_stop: bool = False,
-              source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-        import re
+              source_preflight: Callable[[dict[str, Any]], None] | None = None,
+              native_mention: bool = False,
+              native_mention_capture: dict[str, Any] | None = None) -> dict[str, Any]:
         if origin not in {"lark", "external"}:
             raise ValueError("unsupported external conversation origin")
-        if not re.fullmatch(r"[a-f0-9]{24}", request_ref):
+        if not _REQUEST_JOURNAL_STEM.fullmatch(request_ref):
             raise ValueError("invalid external request reference")
         if command not in {None, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
             raise ValueError("unsupported external conversation command")
         if source_preflight is not None and not callable(source_preflight):
             raise ValueError("source preflight must be an in-process verifier")
+        if type(native_mention) is not bool or native_mention and (source_preflight is None or command is not None):
+            raise ValueError("native mentions require their original provider preflight")
         # These references enter the lock path before authority is resolved.
         # Check path-safe shape here; the typed owner checks current grants
         # and provider identity after both fences are acquired.
         for ref in (binding_id, source.get("source_ref")):
-            if not isinstance(ref, str) or not re.fullmatch(r"[a-f0-9]{24}", ref):
+            if not isinstance(ref, str) or not _REQUEST_JOURNAL_STEM.fullmatch(ref):
                 raise ValueError("invalid external conversation source reference")
         path = self.root / f"{request_ref}.json"
         # A duplicate waits on its own request before taking the route fence;
@@ -1394,9 +1414,13 @@ class ChatExternalConversations:
                                      operation="route_external_chat_request"):
                 # Resolve and verify the source inside both fences before
                 # creating or replaying any canonical request.
-                selected = resolve_external_admission_source(self.bindings, binding_id, source, source_preflight)
+                # Freeze a mention's original Session/Turn before its fenced
+                # source IO. A slow verifier cannot retarget a later Turn.
+                selected = resolve_external_admission_source(self.bindings, binding_id, source,
+                    None if native_mention else source_preflight)
                 expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
-                            "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
+                            "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin,
+                            **({"native_mention": True, "mention_capture": deepcopy(native_mention_capture)} if native_mention else {})}
                 recovering_request = path.exists()
                 if recovering_request:
                     row = _read_json(path)
@@ -1442,47 +1466,21 @@ class ChatExternalConversations:
                         *, recovering_request: bool = False,
                         source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         controller = self.controller
-        selected = ensure_external_admission_scope(self.bindings, selected, path, row, source_preflight=source_preflight)
+        selected = ensure_external_admission_scope(self.bindings, selected, path, row,
+            source_preflight=None if row.get("native_mention") else source_preflight)
         held_for_binding = row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
         if held_for_binding:
             row.pop("response_code")
         if not row.get("routing_recorded"):
-            choices = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
-                and item["source"]["source_ref"] == row["source"]["source_ref"]
-                and item.get("selection_recorded")]
-            previous = max(choices, key=lambda item: item.get("selection_order", 0)) if choices else None
-            row.update(routing_recorded=True, agent_target=previous.get("selection_target") if previous else None)
+            row.update(routing_recorded=True, agent_target=self._latest_selection_target(row["binding_id"], row["source"]["source_ref"]))
             _atomic_write_json(path, row)
         if row["command"] in {"agents", "select_agent", "select_project"}:
             row["agent_target"] = None
         target = row.get("agent_target")
         steward_candidate = None
-        if target:
-            authority = self.bindings.resolve_agent_target(selected, target)
+        current, steward_candidate, authority = self._source_session(selected, target)
+        if authority:
             row["agent_audience"] = authority["audience"]
-            # Observation must retain failed or closed originals, so read the
-            # exact frozen target Session without lifecycle filtering.
-            current = next((candidate for candidate in controller.store.session_candidates(
-                goal_id=None, agent_id=selected["binding"]["executor_endpoint_id"],
-                channel_id=selected["channel_id"])
-                if candidate.get("session_id") == target["session_id"]),
-                controller.store.load_session(target["session_id"]))
-        else:
-            current = controller.store.latest_session(goal_id=None,
-            agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
-            if selected["binding"]["context_kind"] == "steward":
-                # A quota fallback keeps the original channel, source and Core
-                # Session. Agent filtering must not create another consumer or
-                # fork the conversation when its actual endpoint changed.
-                candidates = [item for item in controller.store.list_sessions(channel_id=selected["channel_id"])
-                              if item.get("status") in RESUMABLE_SESSION_STATES]
-                if candidates:
-                    latest = max(candidates, key=lambda item: str(item.get("created_at") or ""))
-                    steward_candidate = controller.store.load_session(latest["session_id"])
-                    allocation = (steward_candidate or {}).get("manager_executor_allocation")
-                    if isinstance(allocation, dict) and allocation.get("selection_policy") == "flexible":
-                        self.bindings.session_context(steward_candidate["steward_context"], session=steward_candidate)
-                        current = steward_candidate
         if row["command"] in {"status", "help"} and not target:
             # Observation must retain failed/closed originals. Admission still
             # uses the resumable selector and never resumes from this snapshot.
@@ -1491,6 +1489,8 @@ class ChatExternalConversations:
                     agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"]))
             snapshot = max(candidates, key=lambda candidate: str(candidate.get("updated_at") or ""), default=None)
             current = controller.store.load_session(snapshot["session_id"]) if snapshot else None
+        if row.get("native_mention") and (row.get("mention_capture") or {}).get("session_id"):
+            row["session_id"] = row["mention_capture"]["session_id"]
         if row.get("session_id") and row["command"] is None:
             current = controller.store.load_session(row["session_id"])
             if current is None:
@@ -1510,7 +1510,6 @@ class ChatExternalConversations:
             if held_for_binding and current.get("status") == "closed":
                 raise ValueError("the original steward Session is unavailable for admission")
             steward_candidate = current
-        from ...control_plane.effect_runtime import effect_runtime_result
         observations = {}
         if (row["command"] is None and steward_candidate and selected["binding"]["context_kind"] == "steward"
                 and steward_candidate.get("executor_endpoint_id") != selected["binding"]["executor_endpoint_id"]):
@@ -1532,7 +1531,7 @@ class ChatExternalConversations:
                 observations["automation_cadence"] = self._automation_cadence_observation(target)
         # Routing needs presence, not private image bytes. Persisted attachments
         # remain in the native request/Turn and never enter the effect bridge.
-        plan = effect_runtime_result("collaboration.conversation.request", {
+        plan = effect_runtime.effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "attachment_count": len(row.get("attachments") or []),
             "recovering_request": recovering_request,
@@ -1556,7 +1555,6 @@ class ChatExternalConversations:
                 except (ValueError, OSError, KeyError):
                     continue
             if row["command"] == "select_agent":
-                import re
                 match = re.fullmatch(r"/agent ([a-f0-9]{24})", row["message"].strip())
                 chosen = next((item for item in choices if match and item["target_ref"] == match[1]), None)
                 if chosen is None:
@@ -1612,6 +1610,73 @@ class ChatExternalConversations:
                     mode="resume_latest", conversation_binding_id=row["binding_id"], source_context=row["source"])
             row["session_id"] = current["session_id"]
             _atomic_write_json(path, row)
+            if row.get("native_mention"):
+                from types import SimpleNamespace
+                from .queued_admission import deliver_native_mention
+
+                capture = row.get("mention_capture") or {}
+                if source_preflight is None:
+                    raise ValueError("native mentions require fresh original provider verification")
+                source_preflight(deepcopy(selected))
+                fresh_source = resolve_external_admission_source(self.bindings, row["binding_id"], row["source"], None)
+                if any(fresh_source.get(key) != selected.get(key) for key in ("binding", "context", "channel_id")):
+                    raise ValueError("native mention authority changed during source verification")
+                selected = fresh_source
+                selected = ensure_external_admission_scope(self.bindings, selected, path, row,
+                    source_preflight=source_preflight)
+
+                def steer_admitted(**kwargs):
+                    # The public steering endpoint intentionally rejects bound
+                    # conversations. Only this existing source-fenced admission
+                    # can reach the native IO with its current binding grant.
+                    saved = current.get("steward_context") or current.get("project_context")
+                    if not saved or saved.get("audience") not in {"bound_owner", "bound_group"}:
+                        return controller.steer_active_turn(**kwargs)
+                    with self.bindings.input_context(saved, origin=row["origin"], session=current,
+                                                     store=controller.store) as authorized:
+                        fresh = controller.store.load_session(current["session_id"])
+                        if (fresh is None or fresh.get("status") == "closed"
+                                or authorized["binding"] != selected["binding"]
+                                or any(fresh.get(key) != current.get(key) for key in
+                                       ("channel_id", "goal_id", "agent_id", "project_context", "steward_context"))):
+                            raise ValueError("original bound Session changed")
+                        controller.project_contexts.runtime_context(fresh, authorized)
+                        if fresh.get("project_context") is not None:
+                            from .project_context import validate_project_executor_scope
+                            validate_project_executor_scope(str(fresh["agent_id"]),
+                                fresh["project_context"], controller.capabilities)
+                        with controller.store.steering_delivery_lock(kwargs["session_id"], kwargs["client_ingress_id"]):
+                            return controller._steer_active_turn(session=fresh, _queued_turn_id=None, **kwargs)
+
+                scope_current = True
+                if current.get("steward_context") and capture.get("target_turn_id"):
+                    from ...chat_manager_context import manager_authorization_scope_is_current
+                    scope_current = manager_authorization_scope_is_current(
+                        controller.registry_path, controller.manager_scope_resolver, current,
+                        current.get("manager_authorization_scope_id"), runtime_root=controller.coordination_runtime_root)
+                decision = deliver_native_mention(
+                    SimpleNamespace(store=controller.store, steer_active_turn=steer_admitted),
+                    session_id=current["session_id"], ingress_id=plan["client_turn_id"],
+                    target_turn_id=capture.get("target_turn_id"),
+                    binding_matches=(scope_current and (capture.get("channel_id") == selected["channel_id"]
+                            or capture.get("channel_id") is None and capture.get("session_id") is None
+                            and capture.get("target_turn_id") is None and bool(capture))
+                        and current.get("status") != "closed"
+                        and (capture.get("session_id") == current["session_id"]
+                            or capture.get("session_id") is None and capture.get("target_turn_id") is None)
+                        and current.get("channel_id") == selected["channel_id"]),
+                    text_only=not row.get("attachments"), may_deliver_new=not recovering_request,
+                    steering_text=row["message"], queued_text=row["message"], origin=row["origin"])
+                row["mention_delivery"] = decision
+                if decision["action"] != "enqueue":
+                    row.update(status="prepared" if decision["action"] == "unresolved" else "command_completed",
+                        turn_id=decision.get("target_turn_id") or capture.get("target_turn_id"),
+                        response=("已送达当前回合。" if decision["action"] == "delivered" else
+                            "已收到，送达状态待核实。原消息已保留，不会自动改投下一回合。" if decision["action"] == "unresolved" else
+                            "本轮调整仅支持文字，原消息和附件已保留。" if decision.get("error_code") == "queue_steering_attachments_unavailable" else
+                            "未送达接收时的回合；原回合、授权或宿主能力已变化。原消息已保留。"))
+                    _atomic_write_json(path, row)
+                    return row
             self._record_steward_ingress(row, selected, current, plan["client_turn_id"])
             try:
                 turn, _ = controller.enqueue_turn(session_id=current["session_id"],
@@ -1629,7 +1694,6 @@ class ChatExternalConversations:
 
     def _finish_background_stop(self, path: Path, row: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
         from .codex_background_control import completed_background_turns, interrupt_completed_background_turns
-        from ...control_plane.effect_runtime import effect_runtime_result
 
         controller = self.controller
         row["background_turn_ids"] = completed_background_turns(
@@ -1637,7 +1701,7 @@ class ChatExternalConversations:
         _atomic_write_json(path, row)
         # Reuse the typed response after narrowing. No live terminals is idle;
         # failed inventory never reaches this point. Later work is ineligible.
-        plan = effect_runtime_result("collaboration.conversation.request", {
+        plan = effect_runtime.effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": controller.store.load_session(row["session_id"]),
             "binding": selected["binding"], "agent_target": row.get("agent_target")})
@@ -1673,22 +1737,20 @@ class ChatExternalConversations:
             channel=selected["channel_id"], sender_id=selected["context"]["operator_ref"],
             message=row["message"], source_id=row["request_ref"])
 
+    def _request_paths(self) -> Iterator[Path]:
+        return (path for path in sorted(self.root.glob("*.json")) if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
+
     def pending(self) -> list[dict[str, Any]]:
-        return [_read_json(path) for path in sorted(self.root.glob("*.json"))
-                if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
+        return [_read_json(path) for path in self._request_paths()]
+
+    def _recovery_rows(self) -> list[dict[str, Any]]:
+        return [r for _, r in self._recovery_discovery.rows(
+            self.root, self._request_paths(), read=_read_json, project=recovery_journal_fields)]
 
     def source_controls(self) -> list[dict[str, Any]]:
-        """Observe source controls and private text digests without reparsing unchanged bodies.
-
-        Recovery/stop rules remain with their original typed owner and callers.
-        A new, replaced or modified journal is read again; pending() and exact
-        request reads still expose the complete current canonical records.
-        """
-        paths = (path for path in sorted(self.root.glob("*.json"))
-                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
-
-        return [row for _path, row in self._source_control_discovery.rows(self.root, paths,
-            read=_read_json, project=source_control_fields)]
+        """Observe source controls and private text digests without reparsing unchanged bodies."""
+        return [r for _, r in self._source_control_discovery.rows(
+            self.root, self._request_paths(), read=_read_json, project=source_control_fields)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
@@ -1707,233 +1769,6 @@ class ChatExternalConversations:
         paths = (self.root / f"{ref}.json" for ref in request_refs)
         for _, row in self._backlog_request_discovery.rows(self.root, paths, read=_read_json, project=project):
             yield row
-
-    def commission_evidence(self, session: dict[str, Any]) -> list[dict[str, Any]]:
-        """Read original Core execution facts for this exact bound audience.
-
-        Native terminal status/result delivery is separate from Goal/Todo
-        acceptance. A portfolio reader must not infer one from the other.
-        """
-        saved = session["steward_context"]
-        allowed = set(self.bindings.steward_scope(session) or [])
-        latest: dict[str, dict[str, Any]] = {}
-        for row in sorted(self.pending(), key=lambda row: row.get("created_at", "")):
-            resources = row.get("commission_resources") or {}
-            if (resources.get("goal_id") in allowed
-                    and row["binding_id"] == saved["binding_id"]
-                    and row["source"]["source_ref"] == saved["source_ref"]):
-                latest[resources["goal_id"]] = row
-        facts = []
-        for goal_id, row in latest.items():
-            resources = row["commission_resources"]
-            current = self.controller.store.load_session(resources["session_id"])
-            turn = self.controller.store.load_turn(resources["session_id"], resources["turn_id"])
-            if self.actions is None:
-                continue
-            try:
-                goal_identity = _commission_goal_identity(
-                    self.actions._goal(goal_id)
-                )
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
-            if (
-                not goal_identity
-                or any(resources.get(key) != value for key, value in goal_identity.items())
-                or not current
-                or not turn
-                or current.get("goal_id") != goal_id
-                or (
-                    "goal_instance_id" in goal_identity
-                    and current.get("goal_instance_id")
-                    != goal_identity["goal_instance_id"]
-                )
-            ):
-                continue
-            facts.append({"goal_id": goal_id, **goal_identity, "turn_status": turn["status"],
-                "native_execution": current.get("native_goal"),
-                "result_delivery_verified": row.get("delivery_verified") is True,
-                "result_excerpt": str((turn.get("response") or {}).get("message") or "")[:500],
-                "canonical_acceptance_attested": False})
-        return facts
-
-    def todo_confirmation_reply(self, request_ref: str, response: dict[str, Any]) -> str:
-        """Project the completed reply and optional Todo preview through Core.
-
-        The original request journal freezes expiry and idempotency before IO.
-        This creates an action preview only; the authenticated /confirm worker
-        remains the sole route to the canonical Todo writer.
-        """
-        message = str(response.get("message") or "")
-        if not message.strip():
-            message = self.native_result_reply(request_ref) or ""
-        proposals = [p for p in response.get("proposals") or [] if p.get("kind") == "todo"]
-        if not proposals:
-            return message
-        path = self.root / f"{request_ref}.json"
-        with exclusive_file_lock(path, operation="offer_external_todo_confirmation"):
-            row = _read_json(path)
-            selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
-            if selected["binding"]["context_kind"] != "steward":
-                return message
-            if self.actions is None:
-                return message + "\n\n待办尚未写入：当前宿主的确认入口不可用。"
-            if row.get("todo_confirmation_reply") is not None:
-                return str(row["todo_confirmation_reply"])
-            context = selected["context"]
-            if "todo_confirmation_created_at" not in row:
-                row["todo_confirmation_created_at"] = datetime.now(timezone.utc).isoformat()
-                _atomic_write_json(path, row)
-            created = row["todo_confirmation_created_at"]
-            expiry = (datetime.fromisoformat(created) + timedelta(minutes=15)).isoformat()
-            audience = {key: context[key] for key in
-                        ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]}
-            lines = [message]
-            for index, todo in enumerate(proposals):
-                try:
-                    request = {"action_kind": "todo.create", "summary": str(todo["text"]),
-                        "idempotency_key": f"external-todo-{request_ref}-{index}",
-                        "context": {"kind": "manager", "goal_id": "loopx-manager", **audience, "expires_at": expiry},
-                        "normalized_parameters": {"goal_id": todo.get("goal_id"), "text": todo["text"],
-                                                  "priority": todo.get("priority", "P1")}}
-                    self.bindings._core("collaboration.steward.authorize_creation", {
-                        "context": context, "proposal": {**request, "created_at": created},
-                        "now": datetime.now(timezone.utc).isoformat(), "operation": "preview"})
-                except (OSError, ValueError, KeyError, RuntimeError):
-                    lines.append("待办尚未写入：目标 Goal、当前授权或规范预览不可用；请在原对话核对目标后重新准备预览。")
-                    continue
-                # An uncertain preview-store write is safe to recover by this
-                # same idempotency key. Do not cache a failure and strand a
-                # successfully persisted preview without its confirmation route.
-                proposal = self.actions.preview(request)
-                goal = self.actions._goal(str(todo["goal_id"]))
-                title = str(goal.get("title") or todo["goal_id"])
-                lines.append(f"目标：{title}\n待记录：{todo['text']}\n尚未写入，也未启动执行。"
-                    f"请在本私聊于预览生成后 15 分钟内发送 /confirm {proposal['proposal_id']}；"
-                    f"取消：/cancel {proposal['proposal_id']}。")
-            row["todo_confirmation_reply"] = "\n\n".join(lines)
-            _atomic_write_json(path, row)
-            return row["todo_confirmation_reply"]
-
-    def _run_steward_action(self, row: dict[str, Any]) -> None:
-        """The existing service worker advances a journaled native operation.
-
-        No provider owns Goal authority or a second scheduler. Confirmation is
-        persisted before the canonical action service performs any write.
-        """
-        if self.actions is None:
-            return
-        path = self.root / f"{row['request_ref']}.json"
-        with exclusive_file_lock(path, operation="advance_steward_action"):
-            row = _read_json(path)
-            if row["status"] != "command_queued":
-                return
-            try:
-                selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
-                context = selected["context"]
-                argument = row["command_argument"]["argument"]
-                if row.get("commission_adoption_pending"):
-                    applied = self.actions.load(row["proposal_id"])
-                    self.bindings._core("collaboration.steward.authorize_creation", {
-                        "context": context, "proposal": applied, "now": row["created_at"], "operation": "confirm"})
-                    if (applied.get("status") != "applied"
-                            or applied["receipt"]["resource_ids"] != row["commission_resources"]):
-                        raise ValueError("the applied commission receipt changed")
-                    self._adopt_commission(row, applied)
-                elif row["command"] == "commission":
-                    key = f"steward-commission-{row['request_ref']}"
-                    existing = next((p for p in self.actions.store.list() if p["idempotency_key"] == key), None)
-                    workspace = context["workspace_path"]
-                    expiry = (datetime.fromisoformat(row["created_at"]) + timedelta(minutes=15)).isoformat()
-                    audience = {key: context[key] for key in ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]}
-                    proposal = existing or self.actions.preview({"action_kind": "goal.create",
-                        "summary": f"新管家委托：{argument[:180]}", "idempotency_key": key,
-                        "context": {"kind": "manager", "goal_id": "loopx-manager", **audience, "expires_at": expiry},
-                        "normalized_parameters": {"goal_id": f"steward-{row['request_ref']}", "title": argument[:180],
-                            "objective": argument, "completion_criteria": "按明确委托返回可核验结果；原生执行结束不代表 LoopX 验收。",
-                            "execution_boundary": "只读所选工作区；不继承旧目标，不自动调度，不扩大宿主策略。",
-                            "agent_id": selected["binding"]["executor_endpoint_id"],
-                            "workspace_ref": goal_workspace_ref(Path(workspace)),
-                            "heartbeat": {"enabled": False},
-                            "native_token_budget": row["command_argument"]["native_token_budget"]}})
-                    row.update(proposal_id=proposal["proposal_id"], response=(
-                        f"待确认的新委托：{argument}\n只读执行；总 token 上限 {row['command_argument']['native_token_budget']}，运行中请求可能超过该上限。"
-                        "不自动设置长期调度；未继承旧目标。确认后创建 Goal 并启动原生持续执行；其完成状态不等于 LoopX 验收。"
-                        f"\n15 分钟内发送 /confirm {proposal['proposal_id']}；取消请发送 /cancel {proposal['proposal_id']}。"))
-                else:
-                    proposal = self.actions.load(argument)
-                    if proposal is None:
-                        raise ValueError("the exact commission preview is unavailable")
-                    from ...control_plane.effect_runtime import effect_runtime_result
-                    effect_runtime_result("collaboration.steward.authorize_creation", {
-                        "context": context, "proposal": proposal, "now": row["created_at"],
-                        "operation": "stop" if row["command"] == "stop_commission" else
-                                     "resume" if row["command"] == "resume_commission" else "confirm"})
-                    # An authenticated, canonical source selected this exact
-                    # preview; crash replay retains the same confirmation.
-                    row.update(proposal_id=argument, confirmation_recorded=True)
-                    _atomic_write_json(path, row)
-                    if row["command"] == "stop_commission":
-                        if row.get("target_turn_id"):
-                            self.controller.interrupt_turn(session_id=row["target_session_id"], turn_id=row["target_turn_id"])
-                        row["response"] = "已对受理时记录的确切执行请求停止；没有停止其它委托或改变 Goal 验收状态。" if row.get("target_turn_id") else "受理此停止请求时，该委托没有正在执行的消息。"
-                    elif row["command"] == "resume_commission":
-                        goal = self.actions._goal(row["target_goal_id"])
-                        turn, _ = self.controller.submit_turn(session_id=row["target_session_id"],
-                            client_turn_id=f"commission-resume-{row['request_ref']}",
-                            message=f"/goal resume --tokens {row['command_argument']['native_token_budget']}",
-                            work_dir=Path(goal["repo"]), objective=str(goal.get("objective") or ""))
-                        row.update(commission_resources={
-                            "goal_id": row["target_goal_id"],
-                            **_commission_goal_identity(goal),
-                            "session_id": row["target_session_id"],
-                            "turn_id": turn["turn_id"],
-                        }, response=f"已受理原委托的恢复，保留原生线程、目标及累计用量。总 token 上限 {row['command_argument']['native_token_budget']}；结果会返回此私聊。\n停止：/stop-commission {argument}")
-                    elif row["command"] == "cancel_commission":
-                        self.actions.cancel(argument)
-                        row["response"] = ("已取消待办预览；没有写入待办或启动执行。"
-                            if proposal["action_kind"] == "todo.create" else
-                            "已取消这份新委托预览；没有创建或启动 Goal。")
-                    else:
-                        result = self.actions.apply(argument, steward_context=context, steward_confirmed_at=row["created_at"])
-                        applied = result["proposal"]
-                        if applied.get("status") != "applied":
-                            raise ValueError("the creation preview became stale; prepare a new preview")
-                        resources = applied["receipt"]["resource_ids"]
-                        if applied["action_kind"] == "todo.create":
-                            row.update(todo_receipt=applied["receipt"], response=(
-                                f"已记录待办：{applied['normalized_parameters']['text']}\n"
-                                f"目标：{resources['goal_id']}；规范写入回执已读回。本次没有启动执行。"))
-                        else:
-                            # Persist a committed creation before fallible adoption.
-                            row.update(commission_resources=resources, commission_adoption_pending=True,
-                                       commission_gate=bool(result.get("gate")))
-                            _atomic_write_json(path, row)
-                            self._adopt_commission(row, applied)
-                row["status"] = "command_completed"
-            except (OSError, ValueError, KeyError, RuntimeError) as exc:
-                # No automatic wider permission, regenerated preview or new
-                # native thread is used to hide an unavailable operation.
-                if row["command"] == "confirm_commission" and row.get("commission_resources"):
-                    row.update(status="command_queued", commission_adoption_pending=True,
-                               failure_kind=type(exc).__name__,
-                               response="已持久受理此管家操作；正在核验原生操作与回执。")
-                else:
-                    row.update(status="command_completed", failure_kind=type(exc).__name__,
-                        response="管家操作未完成：原工作区、授权、预览有效期或原生执行入口没有通过核验。原操作已保留；请在本机核对回执后再决定是否重试。")
-            _atomic_write_json(path, row)
-
-    def _adopt_commission(self, row: dict[str, Any], applied: dict[str, Any]) -> None:
-        if self.actions is None:
-            raise ValueError("the native commission owner is unavailable")
-        resources = row["commission_resources"]
-        goal = self.actions._goal(resources["goal_id"])
-        self.bindings.adopt_created_goal(binding_id=row["binding_id"], source=row["source"], proposal=applied, goal=goal)
-        row.update(commission_adoption_pending=False, response=(
-            f"原生委托已创建：{resources['goal_id']}。操作回执已读回；处理结果会回到此私聊。没有自动设置调度。"
-            f"\n停止此执行：/stop-commission {row['proposal_id']}"))
-        row.pop("failure_kind", None)
-        if row.get("commission_gate"):
-            row["response"] += "首轮执行有待处理 Gate；请在本机查看该 Goal 的操作回执。"
 
     def record_delivery(self, request_ref: str, *, session_id: str | None, turn_id: str | None,
                         message_text: str | None = None) -> None:
@@ -1955,7 +1790,7 @@ class ChatExternalConversations:
             _atomic_write_json(path, row)
 
     def recover(self, *, request_ref: str | None = None) -> None:
-        rows = self.pending() if request_ref is None else [self.read_request(request_ref)]
+        rows = self._recovery_rows() if request_ref is None else [self.read_request(request_ref)]
         for row in rows:
             try:
                 if row.get("delivery_verified") and not row.get("commission_adoption_pending"):
@@ -1973,18 +1808,18 @@ class ChatExternalConversations:
                         # queue preparation. The transport checks its source.
                         continue
                 if row["status"] == "prepared":
-                    if row.get("capture_origin") == "provider_history":
+                    if row.get("capture_origin") == "provider_history" or row.get("native_mention"):
                         continue  # Only the original provider can reverify this source.
                     # Admission resolves current authority after both request
-                    # and route fences. A separate pre-fence network probe
-                    # neither authorizes recovery nor needs to precede it.
-                    self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],
-                               message=row["message"], command=row["command"],
-                               attachments=row.get("attachments"), origin=row.get("origin", "lark"))
+                    # and route fences.
+                    full_row = self.read_request(row["request_ref"]) if request_ref is None else row
+                    self.admit(binding_id=full_row["binding_id"], source=full_row["source"], request_ref=full_row["request_ref"],
+                               message=full_row["message"], command=full_row["command"],
+                               attachments=full_row.get("attachments"), origin=full_row.get("origin", "lark"))
                     continue
                 self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
                 if row["status"] == "command_queued":
-                    self._run_steward_action(row)
+                    self._run_steward_action(self.read_request(row["request_ref"]) if request_ref is None else row)
                 elif row["status"] == "accepted":
                     if row.get("agent_target"):
                         self.bindings.resolve_agent_target(self.bindings.resolve(binding_id=row["binding_id"], **row["source"]), row["agent_target"])

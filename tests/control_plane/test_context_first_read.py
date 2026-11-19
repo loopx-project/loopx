@@ -19,6 +19,26 @@ from loopx.control_plane.turn_driver.decision_capture import capture_page_range
 from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
 
+def test_small_native_navigation_keeps_both_reader_routes():
+    from loopx.cli_commands.quota_context_reader import _native_context_reference, _native_output_bytes
+
+    # Fixed reader paths isolate the caller's budget from checkout and temporary directory names.
+    capture = {"path": f"/project/{'x' * 255}/required-context.json", "sha256": "a" * 64}
+    view = _native_context_reference(
+        {}, capture, mode="full", current=capture, current_document={"ok": True},
+        total_bytes=2000, metadata=None, progressive_enabled=True, field_index=None,
+        initial_read_pointers=None, initial_read_reference=None, page_bytes=3200,
+        output_bytes=3200, first_read_budget=(3200, 3200),
+        reader_argv=["/install/bin/loopx", "--cli-bin", "/install/bin/loopx"],
+    )
+
+    assert len(_native_output_bytes(view)) <= 3200
+    recovery = shlex.split(view["recovery"]["command"])
+    assert recovery[recovery.index("--capture-file") + 1] == capture["path"]
+    assert recovery[recovery.index("--capture-sha256") + 1] == capture["sha256"]
+    assert recovery[recovery.index("--max-page-output-bytes") + 1] == "3200"
+    assert all(term in view["instruction"] for term in ("--select", "--list", "recovery.command", "context_details"))
+
 @pytest.fixture
 def decision():
     return {
@@ -77,23 +97,26 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
-def test_complete_guard_protocol_is_explicit_and_saved_selection_retains_it(tmp_path):
+@pytest.mark.parametrize(("flag", "option"), [
+    ("--turn-envelope", "turn_envelope"), ("--complete-turn", "complete_turn"),
+])
+def test_new_selection_omits_view_alias_and_saved_selection_retains_it(tmp_path, flag, option):
     from loopx.cli_commands.quota_context_reader import bind_capture_selection_transport
 
     original = {"schema_version": "loopx_turn_envelope_v1", "interaction_contract": {"cli_channel": {
         "selection_command": {"command_args_template": "quota should-run --todo-id <todo-id>"}}}}
-    legacy = deepcopy(original)
-    bind_capture_selection_transport(legacy, Namespace(decision_output_root=str(tmp_path), complete_turn=False))
-    command = legacy["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
-    assert "--complete-turn" not in shlex.split(command)
-    selected = deepcopy(original)
-    bind_capture_selection_transport(selected, Namespace(decision_output_root=str(tmp_path), complete_turn=True))
-    command = selected["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
-    assert shlex.split(command).count("--complete-turn") == 1
-    bind_capture_selection_transport(selected, Namespace(decision_output_root=str(tmp_path), complete_turn=False))
-    recovered = selected["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
-    assert shlex.split(recovered).count("--complete-turn") == 1
-    assert "--complete-turn" not in original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+    current = deepcopy(original)
+    request = Namespace(decision_output_root=str(tmp_path), **{option: True})
+    bind_capture_selection_transport(current, request)
+    current_command = current["interaction_contract"]["cli_channel"]["selection_command"]
+    assert flag not in shlex.split(current_command["command_args_template"])
+
+    # Stored selectors keep their recorded command for same-capture recovery.
+    saved = deepcopy(original)
+    saved_command = saved["interaction_contract"]["cli_channel"]["selection_command"]
+    saved_command["command_args_template"] += " " + flag
+    bind_capture_selection_transport(saved, Namespace(decision_output_root=str(tmp_path)))
+    assert shlex.split(saved_command["command_args_template"]).count(flag) == 1
 
 
 def pinned_initial_view(payload, directory):
@@ -870,12 +893,18 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     vision_path = next(path for path in expected_cli if path.endswith("/vision_authoring"))
     actions_path = cli_path + "/next_cli_actions"
     current_cli = source["interaction_contract"]["cli_channel"]
-    bound_steps = current_cli["settlement_plan"]["ordered_steps"]
-    actual_commands = [step["command_template"] for step in bound_steps
-                       if step["kind"] in ("durable_writeback", "quota_spend")]
-    assert len(actual_commands) == 2 and current_cli["next_cli_actions"] == actual_commands
-    # The ordered plan carries these exact templates and all their conditions.
-    # A ready first read should not present a second apparent route for them.
+    plan = current_cli["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    writeback, spend = (step for step in plan["ordered_steps"]
+                        if step["kind"] in ("durable_writeback", "quota_spend"))
+    assert writeback["kind"] == "durable_writeback" and writeback["owner"] == "agent"
+    assert spend["kind"] == "quota_spend" and spend["owner"] == "runtime"
+    assert spend["expected_receipt"] == "quota_spend_receipt" and "command_template" not in spend
+    command = writeback["command_template"]
+    assert {"--settle-turn", "--settlement-receipt"} <= set(shlex.split(command))
+    assert current_cli["next_cli_actions"] == [command]
+    # The ordered plan carries the composed command and its runtime spend step.
+    # The initial read omits the duplicate fallback.
     assert not any(path == actions_path or path.startswith(actions_path + "/") for path in values)
     # Every distinct CLI leaf outside the authoring reference is still delivered.
     for path, item in expected_cli.items():
@@ -893,7 +922,7 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     code, fallback = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
         view["recovery"]["reference_file"], "--select", actions_path, cwd=project)
     assert code == 0 and fallback["eof"]
-    assert selected_context_values(fallback["content"])[actions_path] == actual_commands
+    assert selected_context_values(fallback["content"])[actions_path] == [command]
     assert values["/heartbeat_receipt"] == source["heartbeat_receipt"]
     assert values["/selected_todo"] == source["selected_todo"]
     assert _heartbeat_receipt_count(runtime, turn_id) == 1 and _spend_run_count(runtime) == 0

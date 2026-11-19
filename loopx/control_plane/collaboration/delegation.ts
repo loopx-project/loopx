@@ -80,7 +80,7 @@ function currentOracleChecks(basis: JsonObject, effects: JsonObject[]): JsonObje
   return {oracle_checks: checks};
 }
 
-/** Fresh host check observation, not an independent-verifier or persisted receipt.
+/** Fresh host check observation.
  * Host IO brackets the actual checks; only stable declared output versions return. */
 export function delegationCheckedArtifacts(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "delegation binding");
@@ -151,7 +151,7 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   return binding.todo_id === undefined ? {...binding, todo_id: null} : binding;
 }
 
-/** An operation locator is not proof that a new selection owns its result.
+/**
  * Recover only the original source, peer work, binding and return conversation.
  * The host observes these records through the existing exact-Goal Inbox owner.
  */

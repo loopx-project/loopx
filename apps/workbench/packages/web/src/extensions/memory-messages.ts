@@ -1,0 +1,40 @@
+import type { MemoryMessages } from '@calli/extension-api';
+import { t } from '../i18n';
+
+export function memoryMessages(): MemoryMessages {
+  return {
+    title: t('memory.title'),
+    subtitle: t('memory.subtitle'),
+    source: t('memory.source'),
+    shared: t('memory.shared'),
+    refresh: t('memory.refresh'),
+    loading: t('memory.loading'),
+    search: t('memory.search'),
+    all: t('memory.all'),
+    summary: t('memory.summary'),
+    durable: t('memory.durable'),
+    raw: t('memory.raw'),
+    evidence: t('memory.evidence'),
+    skill: t('memory.skill'),
+    other: t('memory.other'),
+    missing: t('memory.missing'),
+    empty: t('memory.empty'),
+    unreadable: t('memory.unreadable'),
+    unsupported: t('memory.unsupported'),
+    noSources: t('memory.noSources'),
+    noResults: t('memory.noResults'),
+    choose: t('memory.choose'),
+    stale: t('memory.stale'),
+    checked: t('memory.checked'),
+    modified: t('memory.modified'),
+    partial: t('memory.partial'),
+    truncated: t('memory.truncated'),
+    back: t('memory.back'),
+    preview: t('memory.preview'),
+    original: t('memory.original'),
+    readFailed: t('memory.readFailed'),
+    readOnly: t('memory.readOnly'),
+    scope: t('memory.scope'),
+    documents: (count) => t('memory.documents', count),
+  };
+}

@@ -708,7 +708,13 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             assert list(source.parent.parent.glob("*/decision.json")) == [source]
         if placement == "explicit-before-session":
             assert bound["mode"] == "full", bound
-            assert machine_reference_oracle(cold)["recovery"]["sha256"] == hashlib.sha256(raw).hexdigest()
+            cold_source_digest = machine_reference_oracle(cold["navigation"])["capture_sha256"]
+            assert cold_source_digest == hashlib.sha256(raw).hexdigest()
+            rc, original = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(source),
+                "--capture-sha256", cold_source_digest, "--select", "/contract_binding", cwd=project)
+            assert rc == 0 and original["eof"], original
+            [binding] = json.loads(original["content"])["selections"]
+            assert binding["value"] == json.loads(raw)["contract_binding"] == presented["contract_binding"]
             for key in ("first_read_command", "command"):
                 rc, first_page = _run_cli(registry, runtime, *shlex.split(bound[key])[1:], cwd=project)
                 assert rc == 0 and first_page["ok"], first_page
@@ -734,7 +740,11 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+    from loopx.control_plane.quota.turn_envelope import (
+        COMPLETE_TURN_DECISION_VERSION, compose_turn_decision, prepare_context_delivery, restore_context_delivery,
+    )
+    from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
     from tests.control_plane.codex_checkpoint_fixture import (
         last_context_page, local_inference_provider, native_process_continuation,
         selected_context_values,
@@ -775,11 +785,14 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "saved-native-turn", "--codex-app", cwd=project)
         assert code == 0, decision
         if large_capture:
-            # Unknown supporting fields are part of the saved capture's
-            # forward-compatible lossless contract. Only the requested field
-            # should enter model input; the full material must remain recoverable.
-            decision["retained_material"] = {
+            # Include the new fixture material in the complete source binding.
+            # Only the selected field should reach native input.
+            large_source = {key: value for key, value in decision.items()
+                            if key not in {"schema_version", "contract_binding"}}
+            large_source["retained_material"] = {
                 "requirement": unicode_requirement, "supporting": supporting_material}
+            decision = compose_turn_decision(large_source,
+                scheduler_execution_context=scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"))
         source = workspace / (name + "-source.json")
         source.write_text(json.dumps(decision, ensure_ascii=False))
         if large_capture:
@@ -914,8 +927,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 descriptor = machine_reference_oracle(navigation)
                 # A selectively read large capture cannot become a retained
                 # full baseline; its next projection must remain full.
-                assert descriptor["ok"] and descriptor["mode"] == (
-                    "full" if name == "cold" or large_capture else "delta")
+                assert descriptor["ok"], descriptor
+                assert descriptor["mode"] == ("full" if name == "cold" or large_capture else "delta")
                 if benchmark:
                     assert len(json.dumps(navigation, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
                 data = Path(descriptor["path"]).read_bytes()
@@ -1118,14 +1131,35 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         assert _spend_run_count(runtime) == 1  # only the explicit inter-wake settlement above
     else:
         assert _heartbeat_receipt_count(runtime, "saved-native-turn") == receipts and _spend_run_count(runtime) == 0
-    cold = observed["cold"][0]
     baseline = None
-    for published, descriptor in observed.values():
-        projected = json.loads(Path(descriptor["recovery"]["path"]).read_text())
-        current = prepare_context_delivery(projected,
+    source_readback = {}
+    for name, (published, descriptor) in observed.items():
+        recovery = descriptor["recovery"]
+        _, raw, projected = read_context_capture_file(recovery["path"], recovery["sha256"], private=True)
+        assert projected["schema_version"] == COMPLETE_TURN_DECISION_VERSION
+        source, native_projection = projected, None
+        if details := projected.get("context_details"):
+            # The required view preserves the binding of the immutable source.
+            # Validate that source before recreating the full presentation.
+            assert set(details) == {"command_template"}
+            command = details["command_template"]
+            argv = shlex.split(command)
+            assert argv.count("--capture-file") == argv.count("--capture-sha256") == 1
+            capture_path = argv[argv.index("--capture-file") + 1]
+            capture_sha256 = argv[argv.index("--capture-sha256") + 1]
+            _, raw, source = read_context_capture_file(capture_path, capture_sha256, private=True)
+            assert source["contract_binding"] == projected["contract_binding"]
+            native_projection = {"path": capture_path, "source_path": capture_path,
+                "sha256": capture_sha256, "command_template": command}
+            selection = projected["interaction_contract"]["cli_channel"].get("selection_command")
+            if selection is not None:
+                native_projection["selection_command_args_template"] = selection["command_args_template"]
+        source_readback[name] = raw
+        prepared = prepare_context_delivery(source,
             scope={key: descriptor["target"][key] for key in
                 ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation") if key in descriptor["target"]},
-            capture_id=descriptor["target"]["capture_id"], surface="quota_packet")
+            capture_id=descriptor["target"]["capture_id"], surface="complete_turn", native_projection=native_projection)
+        current = prepared if native_projection is None else prepared["delivery"]
         # Full presentation publishes the original document; only deltas have
         # a separate wire target. Both retain the same typed recovery check.
         wire = current if descriptor["mode"] == "full" else published
@@ -1141,25 +1175,27 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         # reconstructed mapping need not preserve that capture's field order.
         baseline = {**current, "ancestry": 0 if wire.get("continuity_basis") == "captured_file" else wire["ancestry"]}
     if benchmark:
-        for name, (_, raw) in zip(("cold", "warm"), sources):
+        for name, (path, raw) in zip(("cold", "warm"), sources, strict=True):
             presentation = json.loads(Path(observed[name][1]["recovery"]["path"]).read_text())
             original = json.loads(raw)
             selected = presentation["interaction_contract"]["cli_channel"]["selection_command"]
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
             words = shlex.split(selected["command_args_template"])
             original_words = shlex.split(original_command)
-            transport = {
-                "--decision-output-root": str(home / "loopx-context"),
+            original_transport = {
+                "--decision-output-root": str(path.parent.parent),
                 "--context-delivery": "on",
                 "--delta-delivery": "auto",
                 "--codex-context-dir": str(home / "loopx-context"),
-                "--max-page-output-bytes": "32000",
             }
-            for option, value in transport.items():
-                assert option not in original_words and words.count(option) == 1
-                index = words.index(option)
-                assert words[index + 1] == value
-                del words[index:index + 2]
+            for option, value in original_transport.items():
+                assert original_words.count(option) == 1
+                assert original_words[original_words.index(option) + 1] == value
+            page_limit = "--max-page-output-bytes"
+            assert page_limit not in original_words and words.count(page_limit) == 1
+            index = words.index(page_limit)
+            assert words[index + 1] == "32000"
+            del words[index:index + 2]
             assert words == original_words
             selected["command_args_template"] = original_command
             # Main already deduplicates identical Todo rows within this exact
@@ -1176,10 +1212,14 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     assert "context_ref" not in value
                     rows[i] = value
             presentation.pop("context_reference_instruction", None)
+            presentation.pop("context_details")
             assert presentation == original  # only presentation transport differs
-    else:
-        assert cold == json.loads(sources[0][1]) and projected == json.loads(sources[1][1])
-    assert all(path.read_bytes() == raw for path, raw in sources)
+    for name, (path, raw) in zip(("cold", "warm"), sources, strict=True):
+        assert path.read_bytes() == raw
+        if benchmark:
+            assert source_readback[name] == raw
+        else:
+            assert json.loads(source_readback[name]) == json.loads(raw)
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")

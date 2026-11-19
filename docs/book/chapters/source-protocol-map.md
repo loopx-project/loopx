@@ -12,8 +12,7 @@
 
 - **命中的数量不说明任何事。** 一个权限概念通常在十几个模块里出现——schema、parser、projection、renderer、decision table、test fixture。它们在同一个概念上扮演完全不同的角色。
 - **文件会移动，协议责任不会。** 迁移把完整 transaction 的语义搬到了另一侧；按目录名建立的直觉会在下一个版本直接失效。
-- **评审看到的是一份函数清单。** 如果 PR 描述只能说“我改了这三个函数”，reviewer 无法判断被破坏的是哪条不变量，也无法判断在什么条件下应该拒绝它。
-- **测试全绿不代表切片正确。** 针对被改模块的回归测试，恰好会为错误的解释背书。
+- **评审看到的是一份函数清单。** 如果 PR 描述只能说“我改了这三个函数”，reviewer 无法判断被破坏的是哪条不变量，也无法判断在什么条件下应该拒绝它。 针对被改模块的回归测试，恰好会为错误的解释背书。
 
 所以需要一条更慢但更稳定的入口：先说清自己正在改变哪份合同，再去找实现。本章给的是这条入口。
 
@@ -30,7 +29,7 @@
   -> 当前实现与验证
 ```
 
-本章给出一张协议优先的源码地图。它不列完整 API，也不要求你记住当前版本的函数名；目标是让你在准备一个 Issue 或 PR 时，先说清自己正在改变哪份合同。
+本章给出一张协议优先的源码地图。目标是让你在准备一个 Issue 或 PR 时，先说清自己正在改变哪份合同。
 
 ## 读完之后你应该能
 
@@ -119,11 +118,11 @@ Why the nearest existing owner is or is not sufficient:
   authority 为准，见[状态底座](state-substrate.md)与
   [Shared Goal authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/)；
   run history 与 rollout events 仍有各自的记录职责；
-- [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
+- [`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
   从 active-state workbench 生成 typed、read-only projection；
-- [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：
+- [`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：
   以只读图表达 Todo、Gate、dependency、validation 与 handoff；
-- [`local_state_write_correctness_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)：
+- [`local_state_write_correctness_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)：
   revision、lock、idempotency key、conflict 与 durable write。
 
 适合从这组协议开始的任务包括：
@@ -143,11 +142,11 @@ Why the nearest existing owner is or is not sufficient:
 
 主要入口：
 
-- [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)：
+- [`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)：
   Gate 的 kind、granularity、scope coverage 与 fail-closed 行为；
-- [`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)：
+- [`goal_vision_replan_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)：
   per-Agent Vision、checkpoint、replan 与 bounded route；
-- [`peer_agent_runtime_v1`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md)：
+- [`peer_agent_runtime_v1`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md)：
   equal peer identity、claim、continuation 与协作边界。
 
 适合从这组协议开始的任务包括：
@@ -168,13 +167,13 @@ Why the nearest existing owner is or is not sufficient:
 
 主要入口：
 
-- [`turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)：
+- [`turn_envelope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)：
   在已完成的 quota decision 上提供 bounded next-action read model；
-- [`protocol_action_packet_decision_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/protocol-action-packet-decision-v0.md)：
+- [`protocol_action_packet_decision_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/protocol-action-packet-decision-v0.md)：
   action packet 的决策语义；
-- [Status Data Contract](https://github.com/huangruiteng/loopx/blob/main/docs/status-data-contract.md)：
+- [Status Data Contract](https://github.com/loopx-project/loopx/blob/main/docs/status-data-contract.md)：
   status、attention 与 operator-facing 数据边界；
-- [State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)：
+- [State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)：
   Todo、Gate、Quota、Evidence 和 Scheduler 如何组合。
 
 这组协议的核心是一个 `should_run` 布尔值之外的有优先级最终合同：
@@ -197,15 +196,15 @@ source facts
 
 主要入口：
 
-- [`loopx_turn_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)：
+- [`loopx_turn_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)：
   experimental 的 decide、execute、validate、writeback 与 spend transaction；
-- [`session_runtime_loopx_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/session-runtime-loopx-projection-v0.md)：
+- [`session_runtime_loopx_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/session-runtime-loopx-projection-v0.md)：
   外部 runtime 到 LoopX 的 read-only first-screen projection；
-- [`session_runtime_controlled_writeback_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/session-runtime-controlled-writeback-v0.md)：
+- [`session_runtime_controlled_writeback_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/session-runtime-controlled-writeback-v0.md)：
   session runtime metadata controlled writeback 的 draft 边界；
-- [`host_integration_surface_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)：
+- [`host_integration_surface_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)：
   Host lifecycle read、CLI-equivalent controlled write、能力声明和 fallback；
-- [`rollback_packet_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/rollback-packet-v0.md)：
+- [`rollback_packet_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/rollback-packet-v0.md)：
   补偿、回滚与证据链。
 
 这里要保持三个责任分离：
@@ -226,13 +225,13 @@ source facts
 
 主要入口：
 
-- [`model_behavior_qualification_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/model-behavior-qualification-v0.md)：
+- [`model_behavior_qualification_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/model-behavior-qualification-v0.md)：
   何时需要真实模型行为验证；
-- [Benchmark 研究 RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)：
+- [Benchmark 研究 RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)：
   如何保证研究双臂可比并由独立 outcome evidence 支撑；
-- [Testing and Quality](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md)：
+- [Testing and Quality](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md)：
   unit、contract、smoke、decision replay、canary 与 release gate；
-- [Public/Private Boundary](https://github.com/huangruiteng/loopx/blob/main/docs/public-private-boundary.md)：
+- [Public/Private Boundary](https://github.com/loopx-project/loopx/blob/main/docs/public-private-boundary.md)：
   哪些证据可以进入公开仓库。
 
 这属于验证设计的一部分，而非最后才补的“测试部分”。协议卡中的 forbidden outcome 和 expected receipt 会直接决定验证形态。
@@ -291,9 +290,9 @@ source facts
 | 操作投影 | status/frontstage/projection owner；renderer 只消费 typed read model |
 | 文档与验证 | owning protocol 文档、`tests/`、`examples/` 或 public-safe fixture |
 
-当前 capability 目录采用 package-owned documentation 与 `catalog_entry.py` 注册。贡献前运行 `loopx capability list --format json` 和 `loopx capability show <capability-id> --format json`，确认 capability 是否真实注册、有哪些 entry command、Provider 边界与 durable validation。仅有 目录或 README 不证明能力已经发布。
+当前 capability 目录采用 package-owned documentation 与 `catalog_entry.py` 注册。贡献前运行 `loopx capability list --format json` 和 `loopx capability show <capability-id> --format json`，确认 capability 是否真实注册、有哪些 entry command、Provider 边界与 durable validation。
 
-`loopx/capabilities/<name>/` 中有代码不自动证明它是公开 Capability；需要显式注册和真实 caller contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：只有独立 provider lifecycle 才属于这里。私有 helper 留在最近的 owner 中，不因为跨了几个文件就升级为新 Capability 或 Extension。
+`loopx/capabilities/<name>/` 中有代码不自动证明它是公开 Capability；需要显式注册和真实 caller contract。`loopx/extensions/` 独立 provider lifecycle 才属于这里。私有 helper 留在最近的 owner 中，不因为跨了几个文件就升级为新 Capability 或 Extension。
 
 ## 函数名是搜索锚点，不是课程目录
 
@@ -312,7 +311,7 @@ source facts
 外部开发者不应从本地 maintainer state 猜工作。公开入口是：
 
 1. 阅读
-   [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)；
+   [Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)；
 2. 选择 `Starter`、`Focused` 或已达成设计共识的任务；
 3. 阅读任务涉及的协议和 validation；
 4. 在关联 Issue 中声明准备处理的最小切片；
@@ -368,7 +367,7 @@ acceptance、terminal closure、quota budget 与 monitor cadence 四个可检查
 
 这些记录只是学习样本，并非当前任务状态的副本。准备参与时仍要重新打开 Issue，确认它尚未被
 关闭、改向或认领，并以
-[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+[Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
 为当前公开入口；`Maintainer-owned` 工作只能请求独立 helper slice，不能平行复刻。
 <!-- community-casebook:signal-to-bounded-work:end -->
 
@@ -379,9 +378,9 @@ acceptance、terminal closure、quota budget 与 monitor cadence 四个可检查
 <!-- community-casebook:rfc-review-lab:start -->
 <!-- community-casebook:rfc-status -->
 
-先从 [RFC Index](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/README.md)
+先从 [RFC Index](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/README.md)
 读取正式状态。`Accepted`、`Active research`、`Draft` 与 `Draft integration proposal` 允许的动作
-不同；一份 RFC 或 Discussion 存在，不等于某个实现已经发布，也不自动生成可认领任务。
+不同。
 
 <!-- community-casebook:rfc-community-proposal -->
 
@@ -399,7 +398,7 @@ acceptance、terminal closure、quota budget 与 monitor cadence 四个可检查
 
 一份有用的 RFC review 应输出 `accept`、`revise`、`require_evidence` 或 `defer` 之类的明确
 disposition，并指出 owner、下一产物与复核条件。需要跨方向同步讨论时，可以进入
-[Open Strategy Review](https://github.com/huangruiteng/loopx/blob/main/docs/community/open-strategy-reviews.md)；
+[Open Strategy Review](https://github.com/loopx-project/loopx/blob/main/docs/community/open-strategy-reviews.md)；
 会议不会替代版本化 RFC、bounded Issue、PR review 或 maintainer authority。
 <!-- community-casebook:rfc-review-lab:end -->
 
@@ -413,7 +412,7 @@ disposition，并指出 owner、下一产物与复核条件。需要跨方向同
 
 > 重构 status、quota、scheduler 和所有测试。
 
-缩小切片并不等于减少行数，它要保持一条完整因果链：
+缩小切片要保持一条完整因果链：
 
 ```text
 source
@@ -459,10 +458,10 @@ grep -rln "required_decision_scopes" loopx/control_plane/todos/ | head
 
 准备进入源码前，确认下面几条能独立成立：
 
-1. **一条规则的所有者是决定合法转换的模块，不是首次打印相关字样的模块。** 如果无法指出被保护的不变量，这次改动还没有定位到位。
+1. **一条规则的所有者是决定合法转换的模块。** 如果无法指出被保护的不变量，这次改动还没有定位到位。
 2. **PR 描述里必须有一条完整的因果链：source、invariant、decision、projection 或 effect、receipt、validation。** 只能列出函数名的切片无法被评审。
 3. **文档描述责任归属，代码描述当前行为。** 两者冲突时，按冲突类型选择权威，并让这次 PR 把另一方更新掉。
-4. **`loopx/capabilities/<name>/` 下有代码，不证明该 Capability 已经发布。** 注册与真实 caller contract 才是发布判据，用 `loopx capability list --format json` 核对。
+4. 注册与真实 caller contract 才是发布判据，用 `loopx capability list --format json` 核对。
 5. **placement 先于实现。** capability id、provider id 与 built-in/extension-delivered 的选择，必须在写第一行代码之前写下理由。
 6. **任务来自公开入口。** 公开的 Contributor Task、Issue 和 fixture 是可参与工作的唯一来源，live active state 与 maintainer-local 判断都不算。
 

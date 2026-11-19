@@ -594,10 +594,14 @@ def test_typed_result_recovery_does_not_start_a_pending_goal_host(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("first_attempt_fails", [False, True])
+@pytest.mark.parametrize(("first_attempt_fails", "restore_live_work"), [
+    pytest.param(False, False, id="committed"),
+    pytest.param(True, True, id="restore-live-work"),
+    pytest.param(True, False, id="changed-live-work"),
+])
 @pytest.mark.parametrize("legacy_pretty", [False, True])
 def test_real_host_reads_original_capture_after_source_change(
-    tmp_path, monkeypatch, provider, first_attempt_fails, legacy_pretty,
+    tmp_path, monkeypatch, provider, first_attempt_fails, restore_live_work, legacy_pretty,
 ):
     from loopx.cli_commands import turn_decision
 
@@ -701,8 +705,9 @@ def test_real_host_reads_original_capture_after_source_change(
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
     assert code == 0
+    original_text = current["todo"]["text"]
     code, update = f._run_cli([*prefix, "todo", "update", "--goal-id", f.GOAL_ID,
-        "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, "--text", current["todo"]["text"] + " SOURCE_B",
+        "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, "--text", original_text + " SOURCE_B",
         "--update-operation-id", "source-b", "--update-expected-provider-revision",
         current["authority_read"]["provider_revision"], "--execute"])
     assert code == 0, update
@@ -773,17 +778,30 @@ def test_real_host_reads_original_capture_after_source_change(
             assert (workspace / "received.txt").read_bytes() == received_before
             assert f._quota_spend_count(runtime) == 0
             path.write_bytes(original)
-        code, recovered = f._run_cli([*replay, "--resume-turn-key", request["turn_key"],
-                                      "--retry-failed-turn", "--execute"])
-        assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
-        retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
-        assert retried["task_context"] == request["task_context"]
-        assert retried["detail_ref"] == detail
+        # The snapshot remains readable when live work changes. Launching it
+        # again also requires the current Todo to match the original work.
+        if restore_live_work:
+            code, restored = f._run_cli([*prefix, "todo", "update", "--goal-id", f.GOAL_ID,
+                "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, "--text", original_text,
+                "--update-operation-id", "restore-source-a", "--update-expected-provider-revision",
+                current["authority_read"]["provider_revision"], "--execute"])
+            assert code == 0 and restored["changed"], restored
+        code, recovered = f._run_cli(retry)
+        if restore_live_work:
+            assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
+            retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
+            assert retried["task_context"] == request["task_context"]
+            assert retried["detail_ref"] == detail
+        else:
+            assert code == 1 and recovered["error_code"] == "current_turn_work_changed", recovered
+            assert not any(recovered["effects"].values())
+            assert (workspace / "received.txt").read_bytes() == received_before
         assert path.read_bytes() == original
     code, repeated = f._run_cli([*replay, "--resume-turn-key", request["turn_key"], "--execute"])
-    assert code == 0, repeated
-    assert not any(repeated["effects"].values())
-    assert f._quota_spend_count(runtime) == 1
+    blocked_retry = first_attempt_fails and not restore_live_work
+    assert code == (1 if blocked_retry else 0), repeated
+    assert repeated["replayed"] and not any(repeated["effects"].values())
+    assert f._quota_spend_count(runtime) == (0 if blocked_retry else 1)
     assert path.read_bytes() == original
     # Admission can run between source validation and publication. It cannot
     # replace or silently recreate an original capture changed in that window.
@@ -944,12 +962,17 @@ def test_complete_dsh_binds_session_and_tools_to_shared_work(
         return '{"result_kind":"wait"}'
 
     monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
-    pinned = {"LOOPX_TURN_TODO_ID": "stale-ambient-todo", "DSH_PERMISSION_MODE": "read-only"}
+    pinned = {
+        "LOOPX_TURN_KEY": "sha256:" + "a" * 64,
+        "LOOPX_TURN_TODO_ID": "stale-ambient-todo",
+        "DSH_PERMISSION_MODE": "read-only",
+    }
     config = turn_host_adapter.DshHostConfig(workspace=tmp_path, env=pinned)
     result = turn_host_adapter.run_dsh_host(request, config=config)
     assert result["result_kind"] == "wait"
     [call] = calls
-    assert call["env"] == {**pinned, "LOOPX_TURN_GOAL_ID": original["goal_id"],
+    assert call["env"] == {**pinned, "LOOPX_TURN_KEY": request["turn_key"],
+                           "LOOPX_TURN_GOAL_ID": original["goal_id"],
                            "LOOPX_TURN_AGENT_ID": original["agent_identity"]["agent_id"],
                            "LOOPX_TURN_TODO_ID": expected_todo,
                            "LOOPX_TURN_WORKSPACE": str(tmp_path.resolve())}
@@ -966,6 +989,7 @@ def test_complete_dsh_binds_session_and_tools_to_shared_work(
     assert call["session_id"] == expected_session
     model_input, _ = json.JSONDecoder().raw_decode(call["prompt"].split("Turn request:\n", 1)[1])
     assert_host_task_context(model_input, contract)
+    assert pinned["LOOPX_TURN_KEY"] == "sha256:" + "a" * 64
     assert pinned["LOOPX_TURN_TODO_ID"] == "stale-ambient-todo"
     for invalid in (None, {**contract, "reason": "changed source"},
                     {**contract, "schema_version": "unsupported_fixture_version"}):

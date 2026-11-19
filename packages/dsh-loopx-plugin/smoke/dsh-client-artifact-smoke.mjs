@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { reconcileClientPackage } from './dsh-sdk-client-registry.mjs'
 import { spawnSync } from 'node:child_process'
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -483,7 +484,7 @@ async function assertDshDiscovery(root) {
   assert.equal(resolved.meta.clientPath, join(root, 'lib', 'client.js'))
   assert.deepEqual(resolved.meta.inject, clientInject)
   assert.equal(resolved.meta.immediately, false)
-  assert.equal(registry.processOne(packageId, error => { throw error }), true)
+  assert.equal(reconcileClientPackage(registry, packageId, error => { throw error }), true)
   const record = registry.table.get(packageId)
   assert.equal(record.clientPath ?? record.meta?.clientPath, join(root, 'lib', 'client.js'))
   assert.equal(record.entry.id, packageId)

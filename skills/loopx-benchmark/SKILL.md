@@ -10,16 +10,13 @@ Use this skill to operate or analyze a LoopX-managed benchmark experiment. The b
 integrity boundaries. This packaged skill is its task-triggered Agent playbook.
 
 An assigned solver follows its task instructions and current execution contract.
-The words “benchmark”, “evaluation”, or “submission” in that task do not grant
-the operator role or require experiment-board discovery. Use this workflow when
+Use this workflow when
 the requested work actually includes run management, analysis of an active run,
 or post-run analysis; an explicit request to use the skill still applies. Keep
 the solver's task-local validation and authorized submission path distinct from
 experiment management.
 
-The capability is catalog-ready without a per-Goal enable switch. Installing
-this skill does not grant runner, shell, network, credential, private-evidence,
-or Goal mutation authority. Respect the selected todo's required capabilities,
+The capability is catalog-ready without a per-Goal enable switch. Respect the selected todo's required capabilities,
 any external provider binding, host permissions, and user gates.
 
 ## Capability surface
@@ -50,8 +47,7 @@ must match; the run row remains the only arm, score, countability, integrity, an
 treatment-fidelity authority. Reduce private post-run evidence to bounded prose
 and public-safe handles or digests before building the envelope.
 
-The local provider is a no-network simulation. It does not grant remote upload,
-publication, credentials, retention, or benchmark submission authority. Adapters
+The local provider is a no-network simulation. Adapters
 keep their native metric names and reduce private post-run evidence before envelope
 construction.
 
@@ -66,8 +62,7 @@ upload nor a full study manifest and have no score authority.
 
 Freeze the authorized disclosure projection before rendering. Review the same
 scope in visible text, foldouts, embedded data, downloads, and PR attachments.
-Permission to share duration does not grant permission to share outcome totals
-or deltas. Schema validity and a producer redaction attestation are not publication
+Schema validity and a producer redaction attestation are not publication
 approval or verification of unshared evidence. Keep selected-case observations
 explicitly exploratory and retain the relevant limitations and counterexamples.
 
@@ -213,7 +208,7 @@ source selection does not rewrite Goal accounting or establish billing coverage.
 When an authorized run encounters hard native account exhaustion, preserve its
 actual failure and task progress. Verify the exact job, terminal/runtime state,
 source account and original budget before selecting a replacement. Unknown
-quota, login errors or generic rate limits are not proof of exhaustion. Reuse
+quota. Reuse
 the installed native account provider's read-only observations and TypeScript
 selection through `python -m benchmark.runtime.codex_accounts`; inspect the
 preview, then execute only within the owner's explicit account allowlist.
@@ -308,8 +303,7 @@ become a second source of score, integrity, or countability truth.
   state; put only reusable guidance in the shipped skill.
 - Verify the rendered view: requested baselines and active ablations appear,
   retired attempts are reachable through history, and links survive a selection
-  update. Review the populated first viewport for readable labels and navigation;
-  a correct query alone does not establish a usable comparison view.
+  update. Review the populated first viewport for readable labels and navigation.
 
 ## Campaign monitoring and post-run insight
 

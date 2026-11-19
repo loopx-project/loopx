@@ -63,7 +63,7 @@ review skill 在判断当前 diff 前读取建议，在现有 `problem_context` 
 以当前 head 证据说明采用、拒绝或不适用。`context_delivery_verified=true` 只证明
 packet 投递；`semantic_disposition=null`、`decision_consumption_complete=false`
 和 `utility_verified=false` 保留，直到各自有独立证据。
-普通五段式评审仍返回原有会话；此内部来源 reader 不另建产品页面，也不授予 Agent 权限。
+普通五段式评审仍返回原有会话；此内部来源 reader 不另建产品页面。
 
 这是明确披露的 opt-in 行为扩展：已资格化、开启自动 recall 并配置 review surface
 的 Agent 会收到匹配的仓库建议。关闭、未绑定、其他 surface、配置过期、未资格化和

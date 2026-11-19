@@ -17,10 +17,10 @@ import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts";
 import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.ts";
 
-/** A stopped observation may get one new Chat carrier, never a new native
- * observation identity. The host independently reads the old worker lock,
- * complete journals and native poll receipts; normal admission still checks
- * current ownership, deadline, permissions and user work on every reentry. */
+/** A stopped observation may get a new Chat carrier for the same native
+ * identity. After a recovery starts, only another proven process restart can
+ * continue it. The host reads the stopped worker lock, journals and native poll
+ * receipts. Normal admission still checks ownership, deadline, permissions and user work. */
 function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
   if (request.monitor_restart_recovery === undefined) {
     if (params.monitor_restart_basis != null) throw new EffectRuntimeRequestError("watch recovery lacks its original request");
@@ -31,6 +31,9 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
   const original = requireJsonObject(basis.original, "original stopped watch");
   const prior = requireJsonObject(original.loopx_request, "original watch request");
   const keys = Object.keys(request).filter(key => key !== "monitor_restart_recovery");
+  const priorKeys = Object.keys(prior).filter(key => key !== "monitor_restart_recovery");
+  const predecessor = prior.monitor_restart_recovery === undefined ? null :
+    requireJsonObject(prior.monitor_restart_recovery, "previous watch continuation");
   const events = basis.event_kinds;
   // Compatibility with persisted Chat failures: the exact error alone is not
   // proof. Require the original collector's single, empty typed refusal too.
@@ -59,17 +62,37 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
     && Array.isArray(basis.phases) && basis.phases.length === 1
     && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
+  // A custom signal monitor may fail inside the read-only external signal
+  // check after manager_context completes and before any poll receipt is written.
+  // Allow at most one bounded recovery when zero-effect proofs hold.
+  let signalUnavailable = false;
+  if (original.error_code === "runtime_error"
+      && original.error === "steward monitor external signal source temporarily unavailable"
+      && requireJsonObject(prior.actor, "original watch actor").schema_version === "loopx_steward_managed_actor_v0"
+      && Array.isArray(basis.contexts) && basis.contexts.length === 1
+      && Array.isArray(basis.phases) && basis.phases.length === 1
+      && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
+      && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1
+      && Array.isArray(events) && events.filter(kind => kind === "manager.context").length === 1) {
+    const context = requireJsonObject(basis.contexts[0], "signal unavailable watch context");
+    signalUnavailable = context.schema_version === "manager_turn_context_v1";
+  }
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
-      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused || identityRefused)
+      || original.status !== "failed"
+      || !(original.error_code === "server_restarted" || scopeRefused || identityRefused || signalUnavailable)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
-      || prior.monitor_restart_recovery !== undefined || basis.old_worker_excluded !== true
-      || basis.poll_absent !== true || basis.lease_available !== true || !Array.isArray(events) || !events.includes("turn.failed")
+      || (predecessor !== null && (original.error_code !== "server_restarted"
+        || Object.keys(predecessor).join() !== "original_turn_id"
+        || typeof predecessor.original_turn_id !== "string" || !/^[a-f0-9]{32}$/.test(predecessor.original_turn_id)
+        || predecessor.original_turn_id === original.turn_id))
+      || basis.old_worker_excluded !== true || basis.poll_absent !== true || basis.lease_available !== true
+      || !Array.isArray(events) || !events.includes("turn.failed")
       || events.some(kind => !["turn.queued", "agent.phase", "manager.context", "turn.failed"].includes(String(kind)))
-      || Object.keys(prior).length !== keys.length
+      || priorKeys.length !== keys.length
       || keys.some(key => key !== "monitor_lease_version" && JSON.stringify(request[key]) !== JSON.stringify(prior[key]))
       || Number(params.queued_turn_count) !== 0) {
     throw new EffectRuntimeRequestError("watch restart requires independent proof before any native observation");
@@ -524,7 +547,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   if (monitor && !observationOnly) {
     throw new EffectRuntimeRequestError("a native watch must retain its no-model observation transport");
   }
-  if (observationOnly && (!monitor || !isStewardMonitorTodo(monitor)
+  if (observationOnly && (!monitor || !isStewardNativeMonitorTodo(monitor)
       || monitor.todo_id !== request.todo_id || monitor.status !== "open"
       || typeof request.monitor_deadline !== "string" || request.monitor_deadline !== monitor.next_due_at
       || !Number.isSafeInteger(request.monitor_lease_version) || Number(request.monitor_lease_version) < 0)) {
@@ -645,6 +668,15 @@ function isStewardMonitorTodo(row: JsonObject): boolean {
     && row.claimed_by === AGENT_ID && (row.watch_only === true || row.watch_only === "true");
 }
 
+function isStewardNativeMonitorTodo(row: JsonObject): boolean {
+  if (row.target_key === STEWARD_MONITOR_TARGET) return isStewardMonitorTodo(row);
+  return row.task_class === "continuous_monitor" && row.claimed_by === AGENT_ID
+    && typeof row.target_key === "string"
+    && !row.target_key.startsWith("managed-session-watch.")
+    && !row.target_key.startsWith("steward-monitor-followup:")
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(row.target_key);
+}
+
 /** The monitor Todo is the configuration authority; the binding stores no toggle. */
 export function planStewardMonitor(params: JsonObject): JsonObject {
   const current = stewardManagedBasis(params, true);
@@ -704,6 +736,48 @@ function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
   }
   const resultHash = "sha256:" + createHash("sha256").update(JSON.stringify(canonical(facts))).digest("hex");
   return {result_hash: resultHash, material_change: previousHash != null && previousHash !== resultHash};
+}
+
+/** Combine authorized local portfolio, inbox and optional repository signal
+ * snapshots into one deterministic change gate for custom Steward monitors.
+ * Unavailable external signal reads fail closed so transient provider errors
+ * never overwrite the last verified hash or trigger spurious model wakeups. */
+export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
+  const previousHash = typeof params.previous_hash === "string" && params.previous_hash
+    ? params.previous_hash : null;
+  const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
+  if (repo !== null && repo.status === "unavailable") {
+    return {
+      result_hash: previousHash,
+      material_change: false,
+      observation_incomplete: true,
+      own_monitor_bookkeeping_excluded: true,
+    };
+  }
+  const portfolio = params.portfolio_observation == null ? null
+    : requireJsonObject(params.portfolio_observation, "portfolio observation");
+  const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
+  const facts = {
+    portfolio_hash: portfolio?.result_hash ?? null,
+    inbox_items: inboxItems,
+    repository_items: repo === null ? null : (Array.isArray(repo.items) ? repo.items : []),
+  };
+  const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
+    "collection_completed_at", "generated_at", "evaluated_at", "age_seconds", "observed_at"]);
+  function canonical(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => !clocks.has(key)).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, canonical(item)]));
+    return value;
+  }
+  const resultHash = "sha256:" + createHash("sha256").update(JSON.stringify(canonical(facts))).digest("hex");
+  return {
+    result_hash: resultHash,
+    material_change: previousHash !== resultHash,
+    observation_incomplete: false,
+    own_monitor_bookkeeping_excluded: true,
+  };
 }
 
 /** The local Agent watches its native work, never the private steward portfolio.

@@ -272,7 +272,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "reason": "samples project-local uninstall safety with isolated fixture registries",
             },
             {
-                "command": "python3 examples/worker-bridge-install-contract-smoke.py",
+                "command": "python3 examples/cli-worker-bridge-command-modularization-smoke.py",
                 "tier": "deep",
                 "reason": "checks generic worker bridge install contracts without exposing private runtime material",
             },
@@ -302,6 +302,9 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             "loopx/control_plane/scheduler/monitor_wait.py",
             "loopx/control_plane/scheduler/monitor_poll_writeback.py",
             "loopx/control_plane/quota/monitor_poll_commit.ts",
+            "loopx/control_plane/quota/monitor_poll_codec.ts",
+            "loopx/control_plane/quota/monitor_poll_admission.ts",
+            "loopx/control_plane/quota/monitor_poll_provider.ts",
             "loopx/control_plane/scheduler/scheduler_hint.py",
             "loopx/control_plane/quota/stall_repair.py",
             "loopx/control_plane/scheduler/arbitration.py",
@@ -545,7 +548,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             {
                 "command": "python3 examples/cli-version-command-modularization-smoke.py",
                 "tier": "default",
-                "reason": "guards a low-risk command migration plus old version invocations",
+                "reason": "guards version output parity and both JSON format option placements",
             },
             {
                 "command": "python3 examples/cli-control-plane-command-modularization-smoke.py",
@@ -597,11 +600,6 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "command": "python3 examples/control_plane/todo-concurrent-write-lock-smoke.py",
                 "tier": "deep",
                 "reason": "samples lock behavior for concurrent todo writes",
-            },
-            {
-                "command": "python3 examples/control_plane/todo-detail-cold-path-contract-smoke.py",
-                "tier": "deep",
-                "reason": "checks the cold-path todo detail contract when detail surfaces are promoted",
             },
         ],
     },
@@ -771,6 +769,8 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             "examples/issue-fix-capability-guide-smoke.py",
             "examples/issue-fix-reviewer-recommendation-smoke.py",
             "examples/issue-fix-reviewer-request-smoke.py",
+            "examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+            "loopx/capabilities/issue_fix/reviewer_notification_drain.py",
             "examples/issue-fix-json-input-boundary-smoke.py",
             "examples/issue-fix-reviewer-notification-sink-smoke.py",
             "loopx/capabilities/issue_fix/cli.py",
@@ -798,6 +798,11 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "command": "python3 examples/issue-fix-reviewer-request-smoke.py",
                 "tier": "default",
                 "reason": "guards author exclusion, formal-request-first notification, permission-only comment fallback, idempotency, blockers, and post-write verification",
+            },
+            {
+                "command": "python3 examples/issue-fix-reviewer-notification-drain-postwrite-smoke.py",
+                "tier": "default",
+                "reason": "guards restart-safe drain writeback, unverified-send suppression, and semantic notification deduplication",
             },
             {
                 "command": "python3 examples/issue-fix-reviewer-notification-sink-smoke.py",
@@ -1000,9 +1005,9 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "reason": "guards Codex App heartbeat identity, scheduler hints, and no-spend cadence behavior",
             },
             {
-                "command": "python3 examples/codex-cli-tui-bootstrap-smoke-bundle-smoke.py",
+                "command": "python3 examples/codex-cli-bootstrap-message-smoke.py",
                 "tier": "default",
-                "reason": "checks Codex CLI TUI bootstrap bundle and scoped LoopX command contract",
+                "reason": "checks Codex CLI TUI bootstrap message and scoped LoopX command contract",
             },
             {
                 "command": "python3 examples/claude-goalmode-lifecycle-smoke.py",
@@ -1010,9 +1015,9 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "reason": "checks the Claude Code goal-mode loop lifecycle without production actions",
             },
             {
-                "command": "python3 examples/worker-bridge-install-contract-smoke.py",
+                "command": "python3 examples/cli-worker-bridge-command-modularization-smoke.py",
                 "tier": "default",
-                "reason": "checks generic worker bridge install/status contracts without private runtime material",
+                "reason": "checks the worker bridge install and active-user observation contracts without private runtime material",
             },
             {
                 "command": "python3 examples/computer-use-runtime-contract-smoke.py",

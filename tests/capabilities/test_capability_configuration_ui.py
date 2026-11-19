@@ -37,7 +37,7 @@ def isolated_native_profile_discovery(tmp_path, monkeypatch):
 @pytest.mark.parametrize("capability_id", [
     "context_delivery", "goal_capability_organization", "goal_storage",
     "todo_replan_cadence", "periodic_report", "manager_runtime",
-    "steward_executor", "multi_subagent", "peer_task_coordination",
+    "steward_executor", "steward_memory", "multi_subagent", "peer_task_coordination",
     "explore_graph", "explore_harness", "change_quality_qualification",
     "progress_review", "pull_request_review", "local_authority_shadow",
     "coordination_runtime_shadow", "lark_kanban_heartbeat_sync", "reward_memory",
@@ -492,6 +492,7 @@ def test_resolution_rejects_values_for_unsupported_scopes() -> None:
     [
         ("manager_runtime", ["machine"]),
         ("steward_executor", ["machine"]),
+        ("steward_memory", ["machine"]),
         ("periodic_report", ["machine", "goal"]),
         ("change_quality_qualification", ["machine", "goal"]),
         ("pull_request_review", ["machine", "goal"]),

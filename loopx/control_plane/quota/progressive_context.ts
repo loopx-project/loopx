@@ -652,7 +652,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Repeat --select to batch needed fields without replaying the outcome's requirements. "
         + "unread_context_index lists supporting fields not observed read in this epoch, or changed since that read. "
         + "source_blocks conservatively includes partially read current sources; this index is not a full-read gate. "
-        + "Use its source path and sha256 with quota context-read --select for each exact pointer. "
+        + "Substitute the exact pointer in context_details.command_template, or use the source path and sha256 "
+        + "with quota context-read --select. "
         + "A prior selected read, EOF or saved file does not confirm model-visible coverage or retention. "
         + "Detail reads never establish a full baseline. "
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
@@ -732,7 +733,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const required = requiredNativeContext(request, sourceValues, plan);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
-  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
+  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context), request);
   // The Python edit adapter already reconstructs this exact required view.
   // Full native delivery can use that copy; delta still carries its own edits.
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
@@ -991,9 +992,13 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const deferredReentry = hasBoundDatedTodoReentry(context, interaction, plan);
   const turnBindingRequired = cli?.turn_binding_required === true;
   const admissionFields = ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"];
-  if (turnBindingRequired)
+  if (turnBindingRequired) {
     for (const field of ["turn_binding_required", ...admissionFields])
       include("interaction_contract", "cli_channel", field);
+  } else if (context.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    for (const field of admissionFields)
+      include("interaction_contract", "cli_channel", field);
+  }
   const channel = object(interaction.agent_channel);
   // The matching inbox read is already required during explicit Todo selection.
   const selectingBeforeWork = context.ok === true && context.should_run === true &&

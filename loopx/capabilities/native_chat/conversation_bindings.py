@@ -289,14 +289,18 @@ class ChatConversationBindings:
         if not sessions:
             raise ValueError("the original steward Session is unavailable")
         session = max(sessions, key=lambda item: (item.get("last_activity_at") or "", item["session_id"]))
-        fresh = self.controller.store.load_session(session["session_id"])
-        if fresh is None or fresh.get("status") == "closed":
-            raise ValueError("the original steward Session is unavailable")
-        expected = {**self._session_observation(session), "status": fresh.get("status")}
-        if self._session_observation(fresh) != expected:
-            raise ValueError("the original steward Session is unavailable")
-        self._recheck_local_bindings(current)
-        return fresh
+        # Close uses the same Session fences. Keep it from committing between
+        # this read and the final grant decision; grant revocation still races
+        # freely and is detected by the version check. All provider/Core IO has
+        # already completed, and background grant inspection remains nonblocking.
+        with self.controller.store.read_session_fenced(session["session_id"]) as fresh:
+            if fresh is None or fresh.get("status") == "closed":
+                raise ValueError("the original steward Session is unavailable")
+            expected = {**self._session_observation(session), "status": fresh.get("status")}
+            if self._session_observation(fresh) != expected:
+                raise ValueError("the original steward Session is unavailable")
+            self._recheck_local_bindings(current)
+            return fresh
 
     def _revoke_delivery_sources(self, binding_id: str) -> None:
         if self.controller is not None:
@@ -438,7 +442,7 @@ class ChatConversationBindings:
 
         This read-only snapshot does not wait for a mutation fence. Core checks
         the observed grant, and a final canonical read rejects concurrent grant
-        changes. Discovery neither restores a thread nor creates work; actual
+        changes. actual
         submissions retain their fresh identity and effect-time grant fences.
         """
         if self.controller is None:
@@ -839,7 +843,7 @@ class OriginalConversationRequests:
             with self._fenced(session_id, body["requester"], body["parent_request_id"]) as (facts, _):
                 return apply(facts)
         # An owner may revoke a retained grant even while its provider or source
-        # is unavailable. This does not authorize reading or starting its work.
+        # is unavailable.
         with source_policy_fence(_root(self.root) / "policy.json"):
             recipient = body["recipient"]
             if recipient.get("session_id") != session_id:

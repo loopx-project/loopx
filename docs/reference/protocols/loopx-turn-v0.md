@@ -110,6 +110,11 @@ settlement or completion authority. Generic adapter stdin and private journal
 recovery retain the complete v1 source; historical envelope-only v0 inputs keep
 their renderer.
 
+For admitted ordinary work, an omitted known Todo summary lane is empty.
+Nonempty lanes, counts, references, upstream truncation and unknown fields
+remain visible. Complete summaries are available through the original source
+reader when needed.
+
 内置模型 renderer 在校验 adapter 请求中的完整来源后派生
 `loopx_turn_model_context_v0`。`task_context` 保留任务事实、backlog、必需读取、
 范围、执行要求和未知新增信息。来源绑定、effect projection、scheduler/automation
@@ -120,6 +125,9 @@ their renderer.
 来源，不绑定任务视图。已内联的任务上下文不要求 sandbox 读取不可访问的私有 capture，
 缺少必需证据仍暂停依赖该证据的工作。此呈现不是 adapter 请求，也不授予权限、结算或
 完成权。通用 adapter stdin 和私有 journal 恢复仍保留完整 v1 来源；仅携带 envelope 的历史 v0 输入保留原 renderer。
+
+对于获准执行的普通任务，视图可以省去已知为空的 Todo 摘要列表。非空列表、计数、
+引用、来源截断信息和未知字段继续可见。需要完整摘要时，使用原有来源读取入口。
 
 Use `loopx turn plan --include-transaction-detail --format markdown` to inspect
 `should_run`, the effective action, reason and selected work summary. Its **Full

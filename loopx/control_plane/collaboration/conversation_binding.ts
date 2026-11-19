@@ -9,7 +9,7 @@ import {boundConversationExecutorMatches, normalizeProjectContext, normalizeStew
 import {bindStewardManagedActor, normalizeStewardManagedActor} from "./steward_managed_mode.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
- * opaque identity observations; neither a message nor a model selects them.
+ * opaque identity observations;
  * Ordinary project bindings carry no Goal. A verified personal steward can
  * read the registered owner portfolio; legacy selected scopes stay bounded.
  */
@@ -1911,7 +1911,8 @@ export function authorizeStewardCreation(params: JsonObject): JsonObject {
   const proposal = requireJsonObject(params.proposal, "creation proposal");
   const audience = requireJsonObject(proposal.context, "creation audience");
   const todoCreation = proposal.action_kind === "todo.create";
-  if ((!todoCreation && proposal.action_kind !== "goal.create") || audience.kind !== "manager"
+  const prMerge = proposal.action_kind === "pr.merge";
+  if ((!todoCreation && !prMerge && proposal.action_kind !== "goal.create") || audience.kind !== "manager"
       || audience.goal_id !== "loopx-manager") throw new EffectRuntimeRequestError("not a steward creation preview");
   for (const field of ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"]) {
     if (audience[field] !== selected[field]) throw new EffectRuntimeRequestError("confirmation audience changed");
@@ -1922,6 +1923,15 @@ export function authorizeStewardCreation(params: JsonObject): JsonObject {
         || parameters.start_execution === true || parameters.agent_id != null
         || ["stop", "resume"].includes(String(params.operation))) {
       throw new EffectRuntimeRequestError("Todo confirmation requires its currently granted Goal and cannot start execution");
+    }
+  }
+  if (prMerge) {
+    const parameters = requireJsonObject(proposal.normalized_parameters, "PR merge parameters");
+    if (["stop", "resume"].includes(String(params.operation))
+        || params.repository_authorized !== true
+        || typeof parameters.repository !== "string" || !parameters.repository.trim()
+        || !Number.isSafeInteger(parameters.pr_number) || Number(parameters.pr_number) < 1) {
+      throw new EffectRuntimeRequestError("PR merge confirmation requires an authorized repository and exact PR target");
     }
   }
   if (["stop", "resume"].includes(String(params.operation))) {

@@ -116,6 +116,7 @@ from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
 from .control_plane.projects.registry_codec import load_registry
 from .registry import registry_goals, resolve_state_file
+from .thread_agent_binding import list_attached_session_bindings
 from .state_projection import build_active_state_structured_projection
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
@@ -926,6 +927,9 @@ class ChatRequestHandler(
             }
         )
 
+    def _project_queue_reply_history(self, store: object, session: dict[str, object], rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        return project_private_reply_history(store, session, rows)
+
     @effect_runtime_request_scope()
     def _session_snapshot(self, session_id: str) -> None:
         try:
@@ -936,7 +940,8 @@ class ChatRequestHandler(
             media = self.server.private_media_history
             contexts = getattr(self.server.runtime_controller, "project_contexts", None)
             bindings = getattr(contexts, "conversation_bindings", None)
-            markers = [] if selection["turn_id"] is not None else media.read(store, bindings, session)
+            scoped = selection["turn_id"] is not None or selection["report_message_id"] is not None
+            markers = [] if scoped else media.read(store, bindings, session)
             payload = read_chat_history_selection(
                 self.server.runtime_controller.coordination_runtime_root, store, session_id,
                 registry=self.server.registry_path, selection=selection,
@@ -1638,6 +1643,15 @@ class ChatRequestHandler(
         if path == "/healthz":
             self._send_json({"ok": True})
             return
+        if path == "/api/attached-sessions":
+            # Read-only list of the external-session bindings the registry
+            # accepts (host, session id, Goal, Agent); it opens nothing.
+            try:
+                goals = registry_goals(load_registry(self.server.registry_path))
+            except (OSError, ValueError):
+                goals = []
+            self._send_json({"ok": True, "bindings": list_attached_session_bindings(goals)})
+            return
         if path == CHAT_READINESS_PATH:
             # Readiness pairs the frontend with this loaded service artifact.
             # Model/provider availability and original-conversation grants are
@@ -1867,8 +1881,11 @@ def serve_chat(
         raise ValueError("loopx chat requires a loopback --host such as 127.0.0.1")
     resolved_assets = (assets_dir or default_chat_assets_dir()).expanduser().resolve()
     if assets_dir is None:
-        from .presentation.chat_bundle import validate_bundle
-        validate_bundle(resolved_assets, source_root=Path(__file__).resolve().parents[1])
+        from .presentation.chat_bundle import runtime_source_root, validate_bundle
+        validate_bundle(
+            resolved_assets,
+            source_root=runtime_source_root(Path(__file__).resolve().parents[1]),
+        )
     if not (resolved_assets / "index.html").is_file():
         raise FileNotFoundError("LoopX Chat web assets are unavailable; reinstall LoopX or rebuild the chat bundle")
     resolved_registry_path = registry_path or (Path.home() / ".loopx" / "registry.json")

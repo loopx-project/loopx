@@ -286,6 +286,7 @@ async function runM2Pass({browser, collectCoverage, url}) {
       const renderBudget = {coverageEnabled:collectCoverage,initialMs,expandMs,switchMs,switchSamplesMs,...lensBudget,
         longTaskSupported,switchLongTasks,nodeCount:200};
       console.log(JSON.stringify({m2RenderBudget:renderBudget}));
+      await verifyFocusAfterReprioritization(page, now, many[4]);
       assert.equal(writes.length,0,`Rendering created effects: ${writes}`);
       assert.equal(session.errors.length,0,session.errors.join('\n'));
       if (!collectCoverage) assert.ok(lensBudget.withinBudget, `Loaded lens switches exceeded repeated 1s target or 2s ceiling: ${JSON.stringify({switchSamplesMs,...lensBudget})}`);
@@ -293,6 +294,40 @@ async function runM2Pass({browser, collectCoverage, url}) {
       return {coverageEntries:session.coverageEntries,renderBudget,note:'Responsibility groups, shared task selection/reload, Board/Map switching, no effect requests, desktop/mobile composition. Synthetic status/map; creation is separately qualified against real backend.'};
     } catch(error) {await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-failed.png')});throw error;}
     finally {await session.close();}
+}
+
+async function verifyFocusAfterReprioritization(page, now, todo) {
+  const byOwner = now.getByRole("button", {name:"按负责人", exact:true});
+  await byOwner.click();
+  const owner = now.locator('.goal-owner-group[data-owner-id="worker-0"]');
+  const remaining = owner.locator(".goal-work-more");
+  await remaining.locator(":scope > summary").press("Enter");
+  assert.equal(await remaining.evaluate(node => node.open), false);
+
+  const row = `[data-todo-id="${todo.todo_id}"]`;
+  const leading = owner.locator(`:scope > ${row}`);
+  const moved = remaining.locator(`${row}[data-work-class="blocked"]`);
+  const refresh = page.getByRole("button", {name:"刷新状态", exact:true});
+  // Simulate a status refresh while the keyboard user remains on the page.
+  const refreshWithoutMovingFocus = () => refresh.evaluate(button => button.click());
+
+  await byOwner.focus();
+  todo.status = "blocked";
+  await refreshWithoutMovingFocus();
+  await moved.waitFor({state:"attached"});
+  assert.equal(await moved.isVisible(), false, "An unfocused task does not open its disclosure on refresh");
+  assert.equal(await byOwner.evaluate(node => document.activeElement === node), true, "Refresh leaves focus outside the task list alone");
+
+  todo.status = "open";
+  await refreshWithoutMovingFocus();
+  await leading.focus();
+  todo.status = "blocked";
+  await refreshWithoutMovingFocus();
+  await moved.waitFor({state:"attached"});
+  assert.equal(await moved.evaluate(node => document.activeElement === node), true, "The same task keeps keyboard focus after it moves");
+  await page.keyboard.press("Enter");
+  await page.waitForURL(value => value.searchParams.get("todo") === todo.todo_id);
+  await page.locator(".personal-context-drawer").waitFor();
 }
 
 

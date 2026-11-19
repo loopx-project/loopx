@@ -126,7 +126,56 @@ diff --git a/frontier_submit.py b/frontier_submit.py
  import time
  from urllib.parse import urlsplit
 
-@@ -236,11 +237,27 @@
+@@ -33,12 +34,14 @@
+     pass
+
+
+-def validate_tar(path: Path) -> tuple[int, str]:
++def validate_tar(path: Path, *, max_bytes: int | None = None) -> tuple[int, str]:
+     if not path.is_absolute():
+         raise SubmitError("archive path must be absolute")
+     metadata = path.lstat()
+     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0:
+         raise SubmitError("archive must be a nonempty regular file")
++    if max_bytes is not None and metadata.st_size > max_bytes:
++        raise SubmitError(f"archive exceeds the task's {max_bytes}-byte submission limit")
+     digest = hashlib.sha256()
+     with path.open("rb") as source:
+         for chunk in iter(lambda: source.read(1024 * 1024), b""):
+@@ -98,6 +101,13 @@
+         self.host = parsed.hostname
+         self.port = parsed.port or 80
+         self.auth = token()
++        configured = os.environ.get("FRONTIER_MAX_PAYLOAD_BYTES")
++        try:
++            self.max_payload_bytes = int(configured) if configured is not None else None
++            if self.max_payload_bytes is not None and self.max_payload_bytes < 1:
++                raise ValueError
++        except ValueError:
++            raise SubmitError("FRONTIER_MAX_PAYLOAD_BYTES must be a positive integer") from None
+
+     def request(self, method: str, path: str, *, body: bytes = b"", headers: dict[str, str] | None = None) -> dict[str, object]:
+         request_headers = {"Authorization": f"Bearer {self.auth}"}
+@@ -137,7 +147,7 @@
+
+
+ def upload(client: Client, operation: str, path: Path) -> tuple[str, str]:
+-    size, digest = validate_tar(path)
++    size, digest = validate_tar(path, max_bytes=client.max_payload_bytes)
+     value = client.request("POST", "/v1/payloads", body=path.read_bytes(), headers={
+         "Content-Type": "application/x-tar", "Content-Length": str(size),
+         "X-Content-SHA256": digest, "X-Frontier-Purpose": operation,
+@@ -217,7 +227,8 @@
+     })
+     runtime = view.get("remaining_runtime_s")
+     remaining = view.get("remaining_checkpoint_submissions")
+-    if (type(runtime) is not int or runtime < 0 or "remaining_checkpoint_submissions" not in view
++    if ("remaining_runtime_s" not in view or (runtime is not None and (type(runtime) is not int or runtime < 0))
++            or "remaining_checkpoint_submissions" not in view
+             or (remaining is not None and (type(remaining) is not int or remaining < 0))):
+         raise SubmitError("Driver store-final response has invalid remaining runtime or submission count")
+     return {"schema_version": SCHEMA, "operation": "store-final", "state": "stored",
+@@ -236,11 +247,27 @@
          raise SubmitError("Driver submission response is invalid")
      result = {"schema_version": SCHEMA, "operation": "final", "state": "accepted",
                "payload_id": payload_id, "verification_id": verification_id}
@@ -162,11 +211,14 @@ diff --git a/frontier_submit.py b/frontier_submit.py
 diff --git a/submission_bridge.py b/submission_bridge.py
 --- a/submission_bridge.py
 +++ b/submission_bridge.py
-@@ -3,12 +3,17 @@
+@@ -3,15 +3,33 @@
  This is a single-host experiment adapter, not the upstream Management/Driver
  implementation. Every accepted train request uses its real verifier output.
  """
++from __future__ import annotations
++
 +import copy
++from dataclasses import asdict
  import hashlib
  from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
  import json
@@ -178,9 +230,33 @@ diff --git a/submission_bridge.py b/submission_bridge.py
  import threading
 +import tempfile
  import time
++from typing import TYPE_CHECKING
  import uuid
 
-@@ -34,21 +39,102 @@
++if TYPE_CHECKING:
++    from trial_limits import TrialLimits
++
++
++_RECOVERY_METADATA = ('version', 'arm', 'trial_limits')
++TRAIN_CANCELLED = {
++    'code': 'verification_cancelled', 'message': 'The answering phase has closed.', 'retryable': False,
++}
++
+
+ class Rejected(Exception):
+     def __init__(self, status, reason):
+@@ -19,8 +37,9 @@
+
+
+ class Trial:
+-    def __init__(self, root, arm, queue):
++    def __init__(self, root, arm, queue, *, limits: TrialLimits | None = None):
+         self.root, self.arm, self.queue = Path(root), arm, queue
++        self.limits = limits
+         self.token = secrets.token_hex(32)
+         self.lock = threading.RLock()
+         self.deadline = None
+@@ -34,35 +53,199 @@
          self.final = None
          self.final_at = None
          self.rejected_requests = 0
@@ -205,10 +281,18 @@ diff --git a/submission_bridge.py b/submission_bridge.py
                  'rejected_requests': self.rejected_requests}
 
 +    def _recovery(self):
-+        return {'version': 2, 'arm': self.arm, **{key: copy.deepcopy(getattr(self, key))
++        record = {'version': 2, 'arm': self.arm, **{key: copy.deepcopy(getattr(self, key))
 +                for key in ('token', 'deadline', 'phase', 'payloads', 'jobs', 'idempotency',
 +                            'train_calls', 'train_wall_seconds', 'saved', 'final',
 +                            'final_at', 'rejected_requests')}}
++        if self.limits is not None:
++            record['trial_limits'] = asdict(self.limits)
++        return record
++
++    def _restore_state(self, record):
++        for key, value in record.items():
++            if key not in _RECOVERY_METADATA:
++                setattr(self, key, value)
 +
 +    def _restore(self):
 +        path = self.recovery_path
@@ -217,8 +301,13 @@ diff --git a/submission_bridge.py b/submission_bridge.py
 +        record = json.loads(path.read_text())
 +        if record.get('version') != 2 or record.get('arm') != self.arm:
 +            raise ValueError('recovery identity mismatch')
-+        if set(record) != set(self._recovery()):
++        expected = self._recovery()
++        if record.get('trial_limits') != expected.get('trial_limits'):
++            raise ValueError('recovery trial limits mismatch')
++        if set(record) != set(expected):
 +            raise ValueError('incomplete recovery record')
++        if self.limits is not None and record['phase'] != 'prepared':
++            self.limits.answering_remaining(record['deadline'], time.time())
 +        for identifier, payload in record['payloads'].items():
 +            digest = payload['sha256']
 +            if (not re.fullmatch(r'sha256:[0-9a-f]{64}', digest)
@@ -229,9 +318,7 @@ diff --git a/submission_bridge.py b/submission_bridge.py
 +            if source.is_symlink() or 'sha256:'+hashlib.sha256(source.read_bytes()).hexdigest() != digest:
 +                raise ValueError('recovery payload bytes mismatch')
 +            payload['path'] = str(source)
-+        for key, value in record.items():
-+            if key not in ('version', 'arm'):
-+                setattr(self, key, value)
++        self._restore_state(record)
 +        # Never replay an uncertain native evaluation or refund its opportunity.
 +        # The controller must reconcile its original worker/result separately.
 +        for job in self.jobs.values():
@@ -285,9 +372,100 @@ diff --git a/submission_bridge.py b/submission_bridge.py
 +        return any(job.get('failure', {}).get('code') == 'controller_recovery_required'
 +                   for job in self.jobs.values())
 
-     def start(self, seconds):
+-    def start(self, seconds):
++    def start(self, seconds=None, *, started_at=None):
          with self.lock:
-@@ -73,10 +159,20 @@
+             assert self.phase == 'prepared'
+-            self.deadline = time.time()+seconds
++            now = time.time() if started_at is None else started_at
++            if self.limits is None:
++                if seconds is None:
++                    raise ValueError('legacy trial requires an answering duration')
++                deadline = now + seconds
++            else:
++                if seconds is not None:
++                    raise ValueError('answering duration is already set by the trial limits')
++                deadline = self.limits.answering_deadline(now)
++            before = self._recovery()
++            self.deadline = deadline
+             self.phase = 'solving'
+-            self.persist()
++            try:
++                self.persist()
++            except OSError:
++                self._restore_state(before)
++                raise
++
++    @property
++    def payload_limit(self):
++        return 524288 if self.limits is None else self.limits.max_payload_bytes
++
++    @property
++    def train_call_limit(self):
++        return 100 if self.limits is None else self.limits.max_train_calls
++
++    def answering_remaining(self):
++        now = time.time()
++        if self.limits is not None:
++            return self.limits.answering_remaining(self.deadline, now)
++        return 0 if self.deadline is None else max(0, self.deadline - now)
++
++    def is_finished(self):
++        with self.lock:
++            return self.phase != 'solving' or self.answering_remaining() == 0
+
+     def admit(self):
+-        if self.phase != 'solving' or self.deadline is None or time.time() >= self.deadline:
++        if self.is_finished():
+             raise Rejected(409, 'answering phase is closed')
+
++    def train_timeout(self):
++        if self.limits is None:
++            raise RuntimeError('Train timeout requires configured trial limits')
++        return self.limits.train_timeout(spent=self.train_wall_seconds,
++                                         deadline=self.deadline, now=time.time())
++
++    def close_answering(self, *, cancelled):
++        """Close submissions after the controller has quiesced the Train worker."""
++        with self.lock:
++            if self.limits is None:
++                raise RuntimeError('answering closeout requires configured trial limits')
++            if self.phase not in ('solving', 'final_selected'):
++                raise RuntimeError('answering already closed')
++            final_jobs = [job for job in self.jobs.values() if job['mode'] == 'eval']
++            if len(final_jobs) > 1 or (self.final is None) != (not final_jobs):
++                raise RuntimeError('answering closeout requires a unique final selection')
++            if self._needs_reconciliation() or any(
++                job['mode'] == 'train' and job['state'] == 'running' for job in self.jobs.values()
++            ):
++                raise RuntimeError('original Train work must be reconciled before closeout')
++            before = self._recovery()
++            for job in self.jobs.values():
++                if job['mode'] == 'train' and job['state'] == 'queued':
++                    job.update(state='failed', failure=TRAIN_CANCELLED)
++            selected = self.limits.final_payload(explicit=self.final, saved=self.saved, cancelled=cancelled)
++            final = final_jobs[0] if final_jobs else None
++            if selected is not None and final is None:
++                verification = 'verification_'+uuid.uuid4().hex
++                self.final, self.final_at = selected, time.time()
++                final = {'verification_id': verification, 'payload_id': selected,
++                         'mode': 'eval', 'state': 'queued', 'metrics': {}}
++                self.jobs[verification] = final
++            self.phase = 'cancelled' if cancelled else 'closed'
++            try:
++                self.persist()
++            except OSError:
++                self._restore_state(before)
++                raise
++            return final if selected is not None else None
++
+     def view(self, job):
+-        return {**job, 'remaining_train_calls': max(0, 100-self.train_calls)}
++        return {**job, 'remaining_train_calls': max(0, self.train_call_limit-self.train_calls)}
+
+     def request(self, method, path, body, headers):
+         with self.lock:
+@@ -73,10 +256,18 @@
                  if old != fingerprint:
                      raise Rejected(409, 'idempotency key is bound to different bytes')
                  return status, response
@@ -302,9 +480,7 @@ diff --git a/submission_bridge.py b/submission_bridge.py
 +                    self.idempotency[key] = (fingerprint, status, copy.deepcopy(result))
 +                self.persist()
 +            except BaseException:
-+                for name, value in before.items():
-+                    if name not in ('version', 'arm'):
-+                        setattr(self, name, value)
++                self._restore_state(before)
 +                raise
 +            # Admission and the replay response are durable before worker handoff.
 +            if method == 'POST' and path == '/v1/verifier-train':
@@ -312,7 +488,16 @@ diff --git a/submission_bridge.py b/submission_bridge.py
              return status, result
 
      def _request(self, method, path, body, headers):
-@@ -99,7 +195,20 @@
+@@ -88,7 +279,7 @@
+             return 200, self.view(job)
+         self.admit()
+         if method == 'POST' and path == '/v1/payloads':
+-            if not 0 < len(body) <= 524288:
++            if not 0 < len(body) <= self.payload_limit:
+                 raise Rejected(413, 'task submission size limit exceeded')
+             digest = 'sha256:'+hashlib.sha256(body).hexdigest()
+             if headers.get('X-Content-SHA256') != digest:
+@@ -99,7 +290,20 @@
              identifier = 'payload_'+digest.split(':')[1]+'_'+purpose
              if identifier not in self.payloads:
                  target = self.root/'payloads'/(identifier+'.tar')
@@ -334,7 +519,7 @@ diff --git a/submission_bridge.py b/submission_bridge.py
                  # The enclosing host directory remains private; the native
                  # unprivileged verifier receives this one file read-only.
                  target.chmod(0o444)
-@@ -112,6 +221,8 @@
+@@ -112,24 +316,31 @@
          except (ValueError, KeyError, TypeError):
              raise Rejected(400, 'unknown trial payload') from None
          if method == 'POST' and path == '/v1/verifier-train':
@@ -342,8 +527,16 @@ diff --git a/submission_bridge.py b/submission_bridge.py
 +                raise Rejected(409, 'original native work requires reconciliation')
              if payload['purpose'] != 'train':
                  raise Rejected(400, 'payload purpose mismatch')
-             if self.train_calls >= 100 or self.train_wall_seconds >= 180000:
-@@ -121,7 +232,6 @@
+-            if self.train_calls >= 100 or self.train_wall_seconds >= 180000:
++            out_of_time = self.train_wall_seconds >= 180000 if self.limits is None else self.train_timeout() < 1
++            if self.train_calls >= self.train_call_limit or out_of_time:
+                 raise Rejected(429, 'authored train budget exhausted')
++            if self.limits is not None and any(
++                job['mode'] == 'train' and job['state'] in ('queued', 'running') for job in self.jobs.values()
++            ):
++                raise Rejected(429, 'a Train verification is already active')
+             verification = 'verification_'+uuid.uuid4().hex
+             job = {'verification_id': verification, 'payload_id': identifier,
                     'mode': 'train', 'state': 'queued', 'metrics': {}}
              self.jobs[verification] = job
              self.train_calls += 1
@@ -351,7 +544,17 @@ diff --git a/submission_bridge.py b/submission_bridge.py
              return 202, self.view(job)
          if method == 'POST' and path == '/v1/submissions/checkpoint':
              if payload['purpose'] != 'final':
-@@ -139,7 +249,7 @@
+                 raise Rejected(400, 'payload purpose mismatch')
+             # The latest explicitly chosen immutable snapshot wins. A rejected
+             # replacement never reaches this mutation.
++            remaining = self.answering_remaining()
+             self.saved = identifier
+-            return 200, {'remaining_runtime_s': max(0, int(self.deadline-time.time())),
++            return 200, {'remaining_runtime_s': None if remaining is None else int(remaining),
+                          'remaining_checkpoint_submissions': None}
+         if method == 'POST' and path == '/v1/submissions':
+             if payload['purpose'] != 'final':
+@@ -139,7 +350,7 @@
              self.phase = 'final_selected'
              self.jobs[verification] = {'verification_id': verification,
                  'payload_id': identifier, 'mode': 'eval', 'state': 'queued', 'metrics': {}}
@@ -360,7 +563,17 @@ diff --git a/submission_bridge.py b/submission_bridge.py
          raise Rejected(404, 'unsupported operation')
 
 
-@@ -178,7 +288,9 @@
+@@ -168,7 +379,8 @@
+             if trial is None:
+                 raise Rejected(401, 'trial capability required')
+             length = int(self.headers.get('Content-Length', 0))
+-            if length < 0 or length > 524288:
++            limit = trial.payload_limit if self.path == '/v1/payloads' else 524288
++            if length < 0 or length > limit:
+                 raise Rejected(413, 'task submission size limit exceeded')
+             body = self.rfile.read(length)
+             if len(body) != length:
+@@ -178,7 +390,9 @@
              status, result = error.status, {'error': error.reason}
              if trial:
                  trial.rejected_requests += 1

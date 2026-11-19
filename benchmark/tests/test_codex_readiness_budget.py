@@ -1,7 +1,6 @@
 """Explicit receiver setup recovery cannot retry inference or renew an allowance."""
 import json
 import subprocess
-import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,7 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from benchmark.runtime import codex_readiness
-from benchmark.tests.test_codex_readiness import native_fixture
+from benchmark.tests.test_codex_readiness import (
+    native_fixture, native_python_cli_command, native_python_receiver,
+)
 
 
 @pytest.mark.parametrize("mode,ok,count", [
@@ -23,8 +24,8 @@ def test_real_stdio_explicit_account_timeout_recovery(tmp_path, mode, ok, count)
     env, trace, home, pending = native_fixture(tmp_path, mode)
     env.update(SFORGE_AGENT_REMAINING_SECONDS="30", SFORGE_AGENT_SEGMENT_STARTED_AT=str(time.time()))
     original = home.joinpath("auth.json").read_bytes(), pending.read_bytes()
-    result = subprocess.run([sys.executable, "-m", "benchmark.runtime.codex_readiness",
-                             "--total-seconds", "4.5", "--attempt-seconds", "1"],
+    result = subprocess.run(native_python_cli_command(
+                                 "--total-seconds", "4.5", "--attempt-seconds", "1"),
                             env=env, text=True, capture_output=True, timeout=10)
     receipt = json.loads(result.stdout)
     assert result.returncode == (0 if ok else 1)
@@ -43,17 +44,62 @@ def test_real_stdio_explicit_account_timeout_recovery(tmp_path, mode, ok, count)
         assert receipt["elapsed_seconds"] >= 1  # Includes actual process cleanup.
 
 
+def test_stdlib_receiver_ignores_ambient_site_customization(tmp_path):
+    receiver_root = tmp_path / "receiver with spaces and 'quotes'"
+    receiver_root.mkdir()
+    env, trace, _, _ = native_fixture(receiver_root, "success")
+    site = tmp_path / "ambient-site"
+    site.mkdir()
+    entered = tmp_path / "site-entered"
+    (site / "sitecustomize.py").write_text(
+        "import time\nfrom pathlib import Path\n"
+        f"Path({str(entered)!r}).write_text('entered')\n"
+        "time.sleep(2)\n"
+    )
+    env.update(PYTHONPATH=str(site), SFORGE_AGENT_REMAINING_SECONDS="30",
+               SFORGE_AGENT_SEGMENT_STARTED_AT=str(time.time()))
+
+    with native_python_receiver(env):
+        receipt = codex_readiness.check_native_receiver(
+            env, total_seconds=4.5, attempt_seconds=1,
+        )
+
+    assert receipt["ok"] is True and receipt["inference_invoked"] is False
+    assert not entered.exists()
+    assert Path(env["PROBE_ATTEMPTS"]).read_text() == "1"
+    assert [json.loads(line)["method"] for line in trace.read_text().splitlines()] == [
+        "initialize", "initialized", "account/read", "account/rateLimits/read",
+    ]
+
+
 def test_real_stdio_total_clipped_to_existing_outer_allowance(tmp_path):
     env, trace, _, _ = native_fixture(tmp_path, "account_timeout_once")
     # Two seconds have already been spent out of the original 3.5s allowance.
     env.update(SFORGE_AGENT_REMAINING_SECONDS="3.5",
                SFORGE_AGENT_SEGMENT_STARTED_AT=str(time.time() - 2))
-    result = codex_readiness.check_native_receiver(env, total_seconds=75, attempt_seconds=25)
+    with native_python_receiver(env):
+        result = codex_readiness.check_native_receiver(env, total_seconds=75, attempt_seconds=25)
     assert result["ok"] is False and result["inference_invoked"] is False
     assert len(result["attempts"]) == 1
     assert 1 <= result["elapsed_seconds"] < 3.5
     assert [json.loads(line)["method"] for line in trace.read_text().splitlines()] == [
         "initialize", "initialized", "account/read"]
+
+
+def test_fixture_cold_start_consumes_the_existing_attempt_budget(tmp_path):
+    env, trace, _, _ = native_fixture(tmp_path, "startup_timeout")
+    env.update(SFORGE_AGENT_REMAINING_SECONDS="30",
+               SFORGE_AGENT_SEGMENT_STARTED_AT=str(time.time()))
+
+    with native_python_receiver(env):
+        receipt = codex_readiness.check_native_receiver(env, total_seconds=4.5, attempt_seconds=1)
+
+    assert receipt["ok"] is False and receipt["inference_invoked"] is False
+    assert len(receipt["attempts"]) == 1
+    assert receipt["attempts"][0]["stage"] == "initialize"
+    assert receipt["attempts"][0]["error_kind"] == "timeout"
+    assert 1 <= receipt["elapsed_seconds"] < 4.5
+    assert not Path(env["PROBE_ATTEMPTS"]).exists() and not trace.exists()
 
 
 @pytest.mark.parametrize("remaining,age", [(None, 0), ("nan", 0), ("30", -10), ("1", 2)])

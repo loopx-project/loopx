@@ -14,7 +14,7 @@ export interface NativeChildReportAdmission extends JsonObject {
 
 /** Consume committed admission facts, not a whitelist of current status labels.
  * Identity, phase and any semantic replan obligation must first be verified by
- * the settlement readback owner. Reporting does not grant ordinary delivery. */
+ * the settlement readback owner. */
 export function nativeChildReportAdmission(
   guardDetails: JsonObject,
   guardStatus: unknown,

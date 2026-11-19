@@ -78,6 +78,8 @@
 | --- | --- | --- | --- |
 | [RFC：个人事项持续跟进（v0）](personal-follow-through-v0.zh-CN.md) | 已被替代 | 无; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 条](ledger/personal-follow-through-v0/) |
 
-## 已退役（Retired 或 Rejected） (0)
+## 已退役（Retired 或 Rejected） (1)
 
-_无_
+| RFC | 头部状态 | 替代 / 关闭 | Ledger |
+| --- | --- | --- | --- |
+| [RFC：上下文压缩时的稀疏工作记忆（v0）](sparse-compaction-working-memory-v0.zh-CN.md) | 已退役 | 无 | [2 条](ledger/sparse-compaction-working-memory-v0/) |

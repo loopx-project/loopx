@@ -11,6 +11,8 @@ import pytest
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
+from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+from loopx.control_plane.todos import provider_terminal_lifecycle
 from loopx.control_plane.work_items.task_lease import acquire_task_lease, inspect_task_lease, release_task_lease
 from loopx.todos import add_goal_todo, list_goal_todos
 
@@ -134,18 +136,36 @@ def test_expired_explicit_proof_does_not_acquire_a_new_execution(tmp_path, monke
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_real_chat_http_transports_original_proof(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("lose_response", [False, True])
+def test_real_chat_http_transports_original_proof(tmp_path, monkeypatch, provider, lose_response):
     from http.client import HTTPConnection
     from threading import Thread
-    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
 
-    registry, _runtime, _state, _todo_id, service, request = fixture(tmp_path, monkeypatch, provider)
+    registry, _runtime, _state, _todo_id, service, request = fixture(
+        tmp_path, monkeypatch, provider, validation=True,
+    )
+    dispatch = provider_terminal_lifecycle.effect_runtime_result
+
+    def drop_final_response(method, body, **kwargs):
+        result = dispatch(method, body, **kwargs)
+        if body.get("validation_receipt") and result["status"] == "applied":
+            raise EffectRuntimeResponseAmbiguous(method, timeout=kwargs["timeout"])
+        return result
+
+    if lose_response:
+        monkeypatch.setattr(provider_terminal_lifecycle, "effect_runtime_result", drop_final_response)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.verbose, server.action_service, server.action_store = False, service, service.store
+    server.assets_dir = default_chat_assets_dir()
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     connection = HTTPConnection("127.0.0.1", server.server_port, timeout=45)
     try:
+        connection.request("GET", "/chat")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert b"<script" in response.read()
         connection.request("POST", "/api/actions/preview", body=json.dumps(request),
             headers={"Content-Type": "application/json"})
         response = connection.getresponse()
@@ -154,14 +174,23 @@ def test_real_chat_http_transports_original_proof(tmp_path, monkeypatch, provide
         proposal = preview["proposal"]
         assert proposal["normalized_parameters"] == request["normalized_parameters"]
         assert rows(registry)[0]["status"] == "open"
-        for _ in range(2):
+        for attempt in range(2):
             connection.request("POST", f"/api/actions/{proposal['proposal_id']}/apply", body="{}",
                 headers={"Content-Type": "application/json"})
             response = connection.getresponse()
             result = json.loads(response.read())
             assert response.status == 200, result
-            assert result["proposal"]["status"] == "applied"
+            applied = result["proposal"]
+            if lose_response and attempt == 0:
+                assert applied["status"] == "failed"
+                assert applied["failure"]["error_code"] == "canonical_update_retry_required"
+                assert applied["failure"]["details"]["reason_code"] == "runtime_response_ambiguous"
+                assert applied["receipt"] is None
+            else:
+                assert applied["status"] == "applied"
+                assert applied["receipt"]["outcome"] == "todo_completed"
         assert rows(registry)[0]["status"] == "done"
+        assert (tmp_path / "validation-count").read_text() == "x"
     finally:
         connection.close()
         server.shutdown()

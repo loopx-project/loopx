@@ -11,13 +11,13 @@ import {isDeepStrictEqual} from "node:util";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { inflateSync } from "node:zlib";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
-import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
+import {omitUnboundExploreResultWriteback, referenceExploreResultDelivery,
+  referenceExploreResultWriteback} from "../capabilities/explore_context_delivery.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
-  contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
+  contextSourceIdentity, omitEmptyTaskTodoLanes, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
-import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
 import {completeCliSettlementChannel} from "./settlement_plan.ts";
 import {REPLAN_SETTLEMENT_CONTRACT_SCHEMA} from "../work_items/replan_settlement.ts";
 
@@ -1889,9 +1889,10 @@ function hostModelContextChanges(decision: JsonObject): JsonObject {
     context.replan_action_packet = {...packet, writeback_contract: replanAuthoringContract(decision)};
   delete interaction.cli_channel;
   context.interaction_contract = interaction;
-  // Preserve backlog and all unknown facts: task requirements and references
-  // can depend on them even when a Todo is already selected.
-  return contextProjectionChanges(decision, context);
+  // The work is already selected. Keep every candidate and unknown fact,
+  // while omitting the empty diagnostic lanes of known Todo summaries.
+  const ordinary = decision.effective_action === EffectiveAction.NORMAL_RUN && decision.normal_delivery_allowed === true;
+  return contextProjectionChanges(decision, ordinary ? omitEmptyTaskTodoLanes(context) : context);
 }
 
 /** A current private plan stores its one admitted source and transport header.
@@ -2343,12 +2344,14 @@ function admittedTurnRoute(
 const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
   "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
   "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
-  "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+  "execution_obligation", "workspace_guard", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
 
 /** The read-only plan needs the current decision and executable authoring
  * guidance. Evidence and diagnostics remain in its exact source capture. */
 function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" | "replan_required"): string[][] {
-  const paths = INITIAL_CONTEXT_DECISION_FIELDS.filter(field => field !== "schema_version").map(field => [field]);
+  const paths = INITIAL_CONTEXT_DECISION_FIELDS
+    .filter(field => field !== "schema_version" && (field !== "workspace_guard" || Object.hasOwn(decision, "workspace_guard")))
+    .map(field => [field]);
   for (const field of ["agent_identity", "decision", "recommended_action", "execution_preparation", "requires_user_action",
     "action_portfolio", "delivery_workspace_isolation", "replan_action_packet"])
     paths.push([field]);
@@ -2497,8 +2500,9 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
 
 function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   const projection = object(request.native_projection);
-  const stateless = projection.captured_decision_path === undefined && projection.replan_reader_argv !== undefined;
-  const path = stateless ? projection.source_path : projection.captured_decision_path;
+  const captured = object(projection.captured_decision);
+  const stateless = captured.path === undefined && projection.replan_reader_argv !== undefined;
+  const path = stateless ? projection.source_path : captured.path;
   if (typeof path !== "string") return undefined;
   const source = requireJsonObject(request.context, "captured replan source");
   if (stateless) {
@@ -2520,7 +2524,7 @@ function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   const identity = precision?.identity ?? contextSourceIdentity(request);
   const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
     replanReadCommands(source, path, stateless ? projection.replan_reader_argv : undefined,
-      undefined, stateless ? projection.sha256 : undefined), precision);
+      undefined, stateless ? projection.sha256 : captured.sha256), precision);
   return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
 }
 

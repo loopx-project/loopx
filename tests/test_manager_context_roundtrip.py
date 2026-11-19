@@ -136,6 +136,34 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
 
 
+def test_saved_answer_reads_only_its_original_question_and_exact_answer(frozen_private_reply, private_snapshot):
+    store, session, turn, _, _, _, source_text, _ = frozen_private_reply
+    sid, tid = session["session_id"], turn["turn_id"]
+    answer = store.append_message(sid, role="agent", text="The saved answer", turn_id=tid)
+    store.append_message(sid, role="agent", text="Later answer from the same Turn", turn_id=tid)
+    no_turn = store.append_message(sid, role="agent", text="An older saved answer without a Turn")
+    other_session = store.create_session(goal_id="notes", agent_id="codex", adapter_kind="codex_app_server",
+                                         upstream_thread_id="another-conversation")
+    foreign = store.append_message(other_session["session_id"], role="agent", text="An answer from another Session")
+    journal = store.sessions_root / sid / "messages.jsonl"
+    before = journal.read_bytes()
+
+    response = private_snapshot(report_message_id=answer["message_id"])
+    assert response["session"]["session_id"] == sid
+    assert response["report_message_id"] == answer["message_id"]
+    assert response["active_turn"] is None
+    question, saved = response["messages"]
+    assert question["reply_context"]["source_text"] == source_text
+    assert saved == answer
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id=tid) == response
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id="unrelated-turn")["messages"] == []
+    assert private_snapshot(report_message_id=no_turn["message_id"])["messages"] == [no_turn]
+    for unavailable in (foreign["message_id"], question["message_id"]):
+        assert private_snapshot(report_message_id=unavailable)["messages"] == []
+    private_snapshot(report_message_id=answer["message_id"], message_limit=200, expected_status=400)
+    assert journal.read_bytes() == before
+
+
 def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
         frozen_private_reply, private_snapshot, monkeypatch):
     store, session, turn, request, *_ = frozen_private_reply
@@ -675,6 +703,50 @@ def test_other_chat_host_cannot_delay_original_host_return(flow, explicit_source
     assert len(sent) == len(returned) == 1
     assert returned[0]["turn_id"] == turn["turn_id"]
     assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_original_return_survives_transient_goal_marker_release_failure(flow, monkeypatch):
+    import errno
+
+    from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+    from loopx.control_plane.goals.source_session_registry_state import guard_path
+    from loopx.file_lock import _effect_mutation_lock_path
+
+    root, registry, _, create = flow
+    store = ChatSessionStore(root / "source-chat")
+    session, turn, receipt = create(external=True, source_store=store)
+    request_id = receipt["request_id"]
+    acknowledge(root, "research", "worker", request_id, "adopt", "Accepted the original request")
+    report(root, "research", "worker", request_id, "conclusion", "The original request is complete.")
+    marker = _effect_mutation_lock_path(guard_path(registry, "research"))
+    retire = Path.replace
+    failed = False
+
+    def fail_once(path, target):
+        nonlocal failed
+        if path == marker and not failed:
+            failed = True
+            raise OSError(errno.ENOSPC, "simulated transient failure retiring the goal marker")
+        return retire(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_once)
+    with collaboration_goal_scope(registry, goal_id="research", agents=("worker",)):
+        assert marker.exists()
+    assert failed
+
+    calls = []
+
+    def sender(route, original_session, original_turn, text):
+        calls.append((route["return_message_id"], original_session["session_id"], original_turn["turn_id"]))
+        return {"reply_verified": True, "idempotency_key": "fixture-confirmation"}
+
+    assert drain(root, registry, store, sender) == 1
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert drain(root, registry, store, sender) == 0
+    messages = [item for item in store.messages(session["session_id"]) if item.get("origin") == "manager_followup"]
+    assert len(messages) == 1
+    assert calls == [(messages[0]["message_id"], session["session_id"], turn["turn_id"])]
+    assert not marker.exists()
 
 
 def test_exact_return_skips_other_host_before_admission(flow):

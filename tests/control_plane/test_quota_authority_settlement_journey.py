@@ -4,6 +4,7 @@ from __future__ import annotations
 from canonical_authority_fixture import assert_todo_read_unchanged
 
 import json
+import os
 import shlex
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -247,18 +248,19 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
     assert not recovery["normal_delivery_allowed"]
     assert not recovery.get("selected_todo")
     assert channel["spend_allowed_now"] is False
-    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-    envelope = build_turn_envelope(recovery)
-    assert envelope["writeback"]["settlement_plan"] == plan
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    steps = {step["kind"]: step for step in plan["ordered_steps"]}
+    assert steps["quota_spend"]["owner"] == "runtime"
+    assert "command_template" not in steps["quota_spend"]
+    writeback = steps["durable_writeback"]["command_template"]
+    assert channel["next_cli_actions"] == [writeback]
     code, refused = cli._run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
         "--todo-id", "todo_ready_0", "--turn-instance-id", cli.TURN_ID, cwd=project,
     )
     assert code == 1 and refused["error_code"] == "heartbeat_receipt_identity_conflict", refused
-    refresh = commands["durable_writeback"].replace(
+    refresh = writeback.replace(
         "<validated_progress>", "validated_progress",
     ).replace("<scale>", "implementation").replace("<outcome>", "outcome_progress")
     refresh += (
@@ -270,20 +272,15 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
     assert code == 0, refreshed
     assert refreshed["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
     assert refreshed["vision_checkpoint"]["satisfied"] is True
-    code, owed = cli._run_cli(
-        registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
-        "--turn-instance-id", cli.TURN_ID, cwd=project,
-    )
-    assert code == 0 and owed["unsettled_host_turn_recovery"]["repair"] == "quota_spend", owed
-    assert owed["settlement_owed"]["command"] == refreshed["settlement_owed"]["command"]
-    for replayed in (False, True):
-        code, spent = _execute(owed["settlement_owed"]["command"], project, runtime, registry)
-        assert code == 0, spent
-        if replayed:
-            assert spent["idempotent_replay"] and not spent["appended"], spent
-        else:
-            assert spent["settlement_progress"]["state"] == "settled", spent
+    assert refreshed["settlement_identity"] == original
+    assert refreshed["settlement_progress"]["state"] == "settled"
+    assert [row["step_kind"] for row in refreshed["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    assert "settlement_owed" not in refreshed
+    code, retried = _execute(refresh, project, runtime, registry)
+    assert code == 0 and retried["idempotent_replay"] and not retried["appended"], retried
+    assert retried["settlement_result"] == refreshed["settlement_result"]
     assert cli._classification_count(runtime, "validated_progress") == 1
 
     readback = read_heartbeat_settlement(
@@ -359,7 +356,13 @@ def _workspace_repair_source(tmp_path, provider, goal_scopes=None, todo_scopes=N
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, provider):
+@pytest.mark.parametrize("native", [
+    pytest.param(False, id="stateless"),
+    pytest.param(True, id="native", marks=pytest.mark.skipif(
+        os.name != "posix", reason="Native session continuity uses a private POSIX journal",
+    )),
+])
+def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, monkeypatch, provider, native):
     goal_path = "/goal_boundary/write_scope"
     todo_path = "/selected_todo/required_write_scopes"
     goal_scopes = ["src/**"] + [f"docs/area-{i:03d}/reference/specifications/**" for i in range(300)]
@@ -375,13 +378,26 @@ def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, pro
     repair_action = plain["interaction_contract"]["agent_channel"]["primary_action"]
     captures = tmp_path / "captures"
     captures.mkdir(mode=0o700)
+    context_args = ["--codex-context-root", str(captures)]
+    if native:
+        from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+        journal = tmp_path / "native"
+        journal.mkdir(mode=0o700)
+        session_id = "workspace-repair-native"
+        monkeypatch.setenv("CODEX_THREAD_ID", session_id)
+        assert codex_context_hook(str(journal), {"session_id": session_id, "cwd": str(project),
+            "hook_event_name": "SessionStart", "source": "startup"}) == {}
+        context_args = ["--codex-context-dir", str(journal)]
     code, view = cli._run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
-        "--turn-instance-id", turn, "--context-delivery", "on", "--delta-delivery", "off",
-        "--decision-output-root", str(captures), "--codex-context-root", str(captures), cwd=project,
+        "--turn-instance-id", turn, "--context-delivery", "on", "--delta-delivery", "auto" if native else "off",
+        "--decision-output-root", str(captures), *context_args, cwd=project,
     )
     assert code == 0 and view["ok"], view
+    if native:
+        assert json.loads((journal / "session.json").read_bytes())["recovery"]
 
     def selection(command):
         parts = bytearray()
@@ -413,11 +429,16 @@ def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, pro
     assert goal_path not in initial and todo_path not in initial
     assert initial["/goal_boundary/write_scope_pointer"] == goal_path
     detail = initial["/context_details/unread_context_index/source"]
-    _, exact = selection(
-        "quota context-read "
-        f"--capture-file {shlex.quote(detail['path'])} --capture-sha256 {detail['sha256']} "
-        f"--select {goal_path} --select {todo_path}"
-    )
+    template = shlex.split(initial["/context_details/command_template"])
+    delivered_reader = shlex.split(view["recovery"]["command"])
+    assert template[-2:] == ["--select", "<pointer>"]
+    assert template[:template.index("--format")] == delivered_reader[:delivered_reader.index("--format")]
+    assert template[template.index("--capture-file") + 1] == detail["path"]
+    assert template[template.index("--capture-sha256") + 1] == detail["sha256"]
+    code, rejected = cli._run_cli(registry, runtime, *delivered_reader[delivered_reader.index("quota"):],
+        "--select", goal_path, cwd=project)
+    assert code != 0 and rejected["diagnostic_code"] == "context_selection_missing_pointer"
+    _, exact = selection(shlex.join([*template[:-1], goal_path, "--select", todo_path]))
     assert exact[goal_path] == goal_scopes and exact[todo_path] == todo_scopes
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
 

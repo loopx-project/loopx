@@ -505,11 +505,15 @@ def stopped_watch(steward, tmp_path, monkeypatch, provider, audience):
     with monkeypatch.context() as stopped_worker:
         stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
         original_turn = pump_steward_monitors(runtime)[0]
-    store.update_turn(sid, original_turn["turn_id"], status="failed", error_code="server_restarted",
-        error="The original host stopped before observation.", response=None, upstream_turn_id=None)
-    store.append_event(sid, original_turn["turn_id"], kind="turn.failed", payload={"error_code": "server_restarted"})
-    store.update_session(sid, active_turn_id=None, status="ready")
+    interrupt_unstarted_watch(store, sid, original_turn)
     return sid, actor, todo_id, original_turn
+
+
+def interrupt_unstarted_watch(store, sid, turn):
+    store.update_turn(sid, turn["turn_id"], status="failed", error_code="server_restarted",
+        error="The original host stopped before observation.", response=None, upstream_turn_id=None)
+    store.append_event(sid, turn["turn_id"], kind="turn.failed", payload={"error_code": "server_restarted"})
+    store.update_session(sid, active_turn_id=None, status="ready")
 
 
 def scope_refused_watch(steward, tmp_path, monkeypatch, provider):
@@ -719,7 +723,10 @@ def test_scope_refusal_retains_unknown_effects_and_current_authority(steward, tm
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("audience", ["steward", "managed"])
 @pytest.mark.parametrize("released_original_lease", [False, True])
-def test_restart_before_observation_recovers_the_original_due_watch_once(steward, tmp_path, monkeypatch, provider, audience, released_original_lease):
+@pytest.mark.parametrize("stop_recovery", [False, True], ids=["single-restart", "repeated-restart"])
+def test_restart_before_observation_recovers_the_original_due_watch_once(
+    steward, tmp_path, monkeypatch, provider, audience, released_original_lease, stop_recovery,
+):
     import json
     store, runtime, _, transport, _, capture, _ = steward
     sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
@@ -732,10 +739,21 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(steward
         monitor._release(actor, watch, old_lease)
     retained = store.load_turn(sid, original_turn["turn_id"])
     watch = local_watch_row(runtime, actor, todo_id)
+    stopped_recovery = None
+    if stop_recovery:
+        runtime._steward_monitor_next_check.clear()
+        with monkeypatch.context() as stopped_worker:
+            stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
+            first_recovery, = pump_steward_monitors(runtime)
+        interrupt_unstarted_watch(store, sid, first_recovery)
+        stopped_recovery = store.load_turn(sid, first_recovery["turn_id"])
+        assert local_watch_row(runtime, actor, todo_id) == watch
     runtime._steward_monitor_next_check.clear()
     recovered = pump_steward_monitors(runtime)
     assert len(recovered) == 1, "a proven pre-observation restart must not strand a due watch"
     assert recovered[0]["turn_id"] != retained["turn_id"]
+    if stopped_recovery is not None:
+        assert recovered[0]["turn_id"] != stopped_recovery["turn_id"]
     assert recovered[0]["loopx_request"]["turn_instance_id"] == retained["loopx_request"]["turn_instance_id"]
     completed = finish(runtime, recovered[0])
     assert completed["status"] == "completed", completed
@@ -743,6 +761,8 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(steward
     after = local_watch_row(runtime, actor, todo_id)
     assert after["next_due_at"] != watch["next_due_at"] and after.get("result_hash")
     assert store.load_turn(sid, retained["turn_id"]) == retained
+    if stopped_recovery is not None:
+        assert store.load_turn(sid, stopped_recovery["turn_id"]) == stopped_recovery
     runtime._steward_monitor_next_check.clear()
     assert not pump_steward_monitors(runtime)
     transport.reconcile()
@@ -766,7 +786,7 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(steward
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("audience", ["steward", "managed"])
 @pytest.mark.parametrize("fault", ["unknown_error", "native_started", "delta", "unknown_event", "broken_history",
-    "pending_poll", "legacy_poll", "queued", "worker_busy", "active_lease", "retry_fails"])
+    "pending_poll", "legacy_poll", "queued", "worker_busy", "active_lease", "retry_fails", "recovery_native_started"])
 def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_attempt(steward, tmp_path, monkeypatch, provider, audience, fault):
     from contextlib import nullcontext
     from loopx.control_plane.quota.monitor_poll import _monitor_poll_effect_id, _monitor_poll_receipt_path
@@ -775,6 +795,14 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
     sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
     request = original_turn["loopx_request"]
     root = runtime.coordination_runtime_root
+    stopped_recovery = None
+    if fault == "recovery_native_started":
+        runtime._steward_monitor_next_check.clear()
+        with monkeypatch.context() as stopped_worker:
+            stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
+            first_recovery, = pump_steward_monitors(runtime)
+        interrupt_unstarted_watch(store, sid, first_recovery)
+        stopped_recovery = store.update_turn(sid, first_recovery["turn_id"], upstream_turn_id="unknown-native-turn")
     if fault in {"unknown_error", "native_started", "delta"}:
         changes = {"unknown_error": {"error_code": "runtime_error"},
             "native_started": {"upstream_turn_id": "unknown-native-turn"}, "delta": {"delta_count": 1}}[fault]
@@ -817,6 +845,8 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
         assert recovered == []
     assert store.load_turn(sid, original_turn["turn_id"]) == original
     assert local_watch_row(runtime, actor, todo_id) == watch
+    if stopped_recovery is not None:
+        assert store.load_turn(sid, stopped_recovery["turn_id"]) == stopped_recovery
     transport.reconcile()
     assert capture.read_bytes() == calls and steward[2].writes == writes
 
@@ -1217,3 +1247,128 @@ def test_fresh_scope_includes_a_new_stopped_goal_without_reusing_or_rewriting_mo
     assert not result["response"]["native_loopx"]["monitor"]["material_change"]
     assert capture.read_bytes() == calls and store.load_session(sid)["manager_authorization_scope_id"] == original_scope
     assert monitor.current(actor)["result_hash"] == first_hash
+
+
+def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_monitors(
+    steward, tmp_path, monkeypatch,
+):
+    from test_steward_generic_monitor_todo import _set_signal_source_policy
+
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    session = store.load_session(sid)
+    _set_signal_source_policy(runtime, session, binding, goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+
+    # Push the default portfolio watch into the future so our two custom monitors control due ordering.
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+
+    from loopx.capabilities.native_chat.steward_commands import native_command
+
+    first_due = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    second_due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    added_first = native_command(
+        runtime,
+        [
+            "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+            "--text", "Monitor open PR signals",
+            "--claimed-by", actor["agent_id"],
+            "--task-class", "continuous_monitor",
+            "--action-kind", "local_runtime_observe",
+            "--continuation-policy", "same_agent_non_delivery",
+            "--required-capability", "filesystem",
+            "--target-key", "steward-stalled-pr-monitor",
+            "--task-repository", "git:github.com/org/repo",
+            "--watch-only",
+            "--cadence", "30m",
+            "--next-due-at", first_due,
+            "--execute",
+        ],
+    )
+    added_second = native_command(
+        runtime,
+        [
+            "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+            "--text", "Monitor secondary inbox state",
+            "--claimed-by", actor["agent_id"],
+            "--task-class", "continuous_monitor",
+            "--action-kind", "local_runtime_observe",
+            "--continuation-policy", "same_agent_non_delivery",
+            "--required-capability", "filesystem",
+            "--target-key", "steward-secondary-watch",
+            "--watch-only",
+            "--cadence", "30m",
+            "--next-due-at", second_due,
+            "--execute",
+        ],
+    )
+    pr_todo_id = added_first["todo_id"]
+    secondary_todo_id = added_second["todo_id"]
+    transport.reconcile()
+
+    # 1. Fail due[0] inside _observe_github_repository_prs before any poll receipt.
+    calls = {"count": 0}
+
+    def flaky_repo_observe(repo_slug, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"status": "unavailable", "repository": repo_slug}
+        return {"status": "ok", "repository": repo_slug, "items": []}
+
+    monkeypatch.setattr(
+        "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+        flaky_repo_observe,
+    )
+    runtime._steward_monitor_next_check.clear()
+    initial = pump_steward_monitors(runtime)
+    assert len(initial) == 1 and initial[0]["loopx_request"]["todo_id"] == pr_todo_id
+    failed = finish(runtime, initial[0])
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "runtime_error"
+    assert failed["error"] == "steward monitor external signal source temporarily unavailable"
+
+    # 2. If due[0] stays unavailable on recovery, it executes its ONE bounded retry and stops failing over itself.
+    # Replace flaky mock to fail a second time so we prove 1-retry cap AND non-starvation of due[1]!
+    monkeypatch.setattr(
+        "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+        lambda repo_slug, **_kw: {"status": "unavailable", "repository": repo_slug},
+    )
+    runtime._steward_monitor_next_check.clear()
+    recovery = pump_steward_monitors(runtime)
+    assert len(recovery) == 1
+    assert recovery[0]["loopx_request"]["todo_id"] == pr_todo_id
+    assert recovery[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == failed["turn_id"]
+    failed_again = finish(runtime, recovery[0])
+    assert failed_again["status"] == "failed"
+
+    # 3. Next pump skips the unrecoverable due[0] and dispatches due[1] instead of starving it!
+    runtime._steward_monitor_next_check.clear()
+    next_due = pump_steward_monitors(runtime)
+    assert len(next_due) == 1 and next_due[0]["loopx_request"]["todo_id"] == secondary_todo_id
+    done_secondary = finish(runtime, next_due[0])
+    assert done_secondary["status"] == "completed", done_secondary
+    assert local_watch_row(runtime, actor, secondary_todo_id)["next_due_at"] != second_due
+
+    # 4. Also verify recovery succeeds when GitHub recovers after the first failure.
+    third_due = (datetime.now(timezone.utc) - timedelta(seconds=3)).isoformat()
+    edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", third_due)
+    monkeypatch.setattr(
+        "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+        flaky_repo_observe,
+    )
+    calls["count"] = 0
+    runtime._steward_monitor_next_check.clear()
+    first_try = pump_steward_monitors(runtime)
+    assert len(first_try) == 1 and finish(runtime, first_try[0])["status"] == "failed"
+    runtime._steward_monitor_next_check.clear()
+    recovered_try = pump_steward_monitors(runtime)
+    assert len(recovered_try) == 1
+    recovered_done = finish(runtime, recovered_try[0])
+    assert recovered_done["status"] == "completed", recovered_done
+    assert local_watch_row(runtime, actor, pr_todo_id)["next_due_at"] != third_due

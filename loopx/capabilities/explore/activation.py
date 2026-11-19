@@ -136,8 +136,8 @@ def sync_explore_graph_after_material_refresh(
         }
 
     # Disabled activation preserves the caller's authorization observation without
-    # reading or publishing anything. An enabled legacy Harness does not grant a
-    # sink permission merely by supplying its local evidence graph.
+    # reading or publishing anything.
+
     external_sink_delivery_authorized = external_sink_delivery_authorized and (
         explicit_graph_enabled
     )

@@ -48,6 +48,7 @@ a separate disposable directory:
 ```sh
 git fetch origin f3aee4586d87b678581a22d23b61fba7e49d4672
 FRONTIER_V2_ROOT=$(mktemp -d)
+git init -q "$FRONTIER_V2_ROOT"
 git archive f3aee4586d87b678581a22d23b61fba7e49d4672 benchmark/frontiercs2-single-host-v1 |
   tar -x -C "$FRONTIER_V2_ROOT" --strip-components=2
 git -C "$FRONTIER_V2_ROOT" apply --check "$PWD/benchmark/frontiercs2/compatibility/v2.patch"
@@ -73,6 +74,36 @@ container namespace or UID behavior. Omitting the image explicitly skips real Do
 coverage. This is transport validation, not campaign sandbox qualification.
 No model, task, native evaluator, reference solution or historical candidate
 is executed by these checks. Experiment-specific tests remain opt-in here.
+
+## Task-configured timing
+
+For a new local trial, use [TrialLimits](trial_limits.py) to read the pinned
+task's `task.toml` and shared `task-defaults.toml`. By default it uses the native
+answering duration. Pass `answering_seconds` to set a calibrated duration, or
+`natural=True` to observe when the solver submits its final.
+
+Bind the same object to `Trial(..., limits=limits)` and call `start()` at the
+beginning of the answering phase. A controller can pass `started_at` to publish
+the same timestamp in the launch receipt. Use `render_task_instructions` for the
+read-only task README and derive the worker and planner inputs from that file.
+Use `render_submission_skill` for the submission guide and project
+`limits.max_payload_bytes` to the client's `FRONTIER_MAX_PAYLOAD_BYTES`.
+The renderers support the native instruction blocks and explicit
+`<!-- frontiercs2:trial-limits -->` and `<!-- frontiercs2:submission-policy -->`
+slots in custom templates.
+
+- Give native Train jobs `trial.train_timeout()`. It uses the remaining Train
+  allowance and any answering deadline. The bridge enforces one in-flight
+  Train, the call count, and the payload size.
+- After the solver and Train worker stop, call `close_answering(cancelled=...)`.
+  A timed trial can evaluate the last saved candidate when no explicit final
+  was accepted. Natural trials require an explicit final and return
+  `remaining_runtime_s: null` when saving a candidate. Explicit cancellation
+  stops automatic evaluation in both modes.
+- Give the selected final `limits.eval_timeout_seconds` after the answering
+  phase. Recovery requires the original `TrialLimits` and preserves the
+  recorded clock and selection. The legacy `Trial(...)` and `start(seconds)`
+  form remains available for existing controllers.
 
 ## Controller integration and remaining limits
 
@@ -125,3 +156,7 @@ v1 or reinterpret the original study as a repaired run.
 原进程和原生结果，不能重复评分、补发预算或虚构成本。恢复文件含凭据，只能私有保存。
 原始 controller、工作区完整留存和沙箱资格仍未交付；本修复不能补回历史缺失文件和
 时间，也不证明 LoopX 的分数或长程效率提升。
+
+新试验由 `TrialLimits` 读取题目与共享默认配置，题面、计划、提交工具和计时使用同一份
+配置。可选题目原生时限、校准后的固定时限或自然完成。自然完成需要显式提交 final。
+Train 使用题目定义的累计时长和调用次数，终评在答题结束后使用独立时限。

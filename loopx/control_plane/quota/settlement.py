@@ -180,6 +180,9 @@ class QuotaSettlementReadback:
     native_child_admission: dict[str, Any] | None = None
     heartbeat_reentry_qualification: dict[str, Any] | None = None
     successor_replan_pending: bool = False
+    replan_execution_pending: bool = False
+    admission_recorded_at: str | None = None
+    admission_event_id: str | None = None
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -312,6 +315,14 @@ def _optional_readback_record(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
     return dict(value)
+
+
+def _optional_readback_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
+    return value
 
 
 def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
@@ -481,6 +492,7 @@ def read_heartbeat_settlement(
     borrow_source_admission: bool = False,
     heartbeat_reentry_guard: dict[str, Any] | None = None,
     include_record_bodies: bool = True,
+    tolerate_malformed_history: bool = False,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
 
@@ -497,6 +509,11 @@ def read_heartbeat_settlement(
             **(
                 {"include_record_bodies": include_record_bodies}
                 if include_record_bodies is not True
+                else {}
+            ),
+            **(
+                {"tolerate_malformed_history": True}
+                if tolerate_malformed_history
                 else {}
             ),
             **({"resolve_original_binding": True} if resolve_original_binding else {}),
@@ -547,6 +564,7 @@ def read_heartbeat_settlement(
         native_child_admission=_optional_readback_record(payload.get("native_child_admission")),
         heartbeat_reentry_qualification=_optional_readback_record(payload.get("heartbeat_reentry_qualification")),
         successor_replan_pending=payload.get("successor_replan_pending") is True,
+        replan_execution_pending=payload.get("replan_execution_pending") is True,
         spend_run=_optional_readback_record(payload.get("spend_run")),
         heartbeat_receipt=_optional_readback_record(payload.get("heartbeat_receipt")),
         writeback_event=_optional_readback_record(payload.get("writeback_event")),
@@ -562,4 +580,6 @@ def read_heartbeat_settlement(
             if replay_phase is not None
             else None
         ),
+        admission_recorded_at=_optional_readback_text(payload.get("admission_recorded_at")),
+        admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
     )
