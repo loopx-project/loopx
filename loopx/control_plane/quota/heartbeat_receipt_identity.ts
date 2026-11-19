@@ -227,17 +227,21 @@ export function selectAdmissionHeartbeatReceipt<Value>(
 interface HeartbeatPreparedLease extends JsonObject {
   prepared_lease_key_sha256: string;
   prepared_lease_version: number;
+  prepared_lease_epoch?: number;
 }
 
 export function heartbeatPreparedLease(details: JsonObject): HeartbeatPreparedLease | null {
   const key = details.prepared_lease_key_sha256;
   const version = details.prepared_lease_version;
-  if (key === undefined && version === undefined) return null;
+  const epoch = details.prepared_lease_epoch;
+  if (key === undefined && version === undefined && epoch === undefined) return null;
   if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
-      typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+      typeof version !== "number" || !Number.isSafeInteger(version) || version < 1 ||
+      (epoch !== undefined && (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 1))) {
     throw new EffectRuntimeRequestError("Turn readiness has a malformed lease proof", "malformed_settlement_state");
   }
-  return {prepared_lease_key_sha256: key, prepared_lease_version: version};
+  return {prepared_lease_key_sha256: key, prepared_lease_version: version,
+    ...(epoch === undefined ? {} : {prepared_lease_epoch: epoch})};
 }
 
 export function isHeartbeatLeaseReadiness(event: JsonObject): boolean {
@@ -274,10 +278,17 @@ export function heartbeatWorkRequalification(
   if (nativeChildReportAdmission(currentDetails, null, identity.effect_id, phase, false, currentReplan)
       .report_permission !== "new_operation") return replay;
   const preparedLease = identity.todo_id === null ? null : heartbeatPreparedLease(currentDetails);
+  const previous = identity.todo_id === null ? null : heartbeatPreparedLease(oldDetails);
+  if (previous !== null && (
+      preparedLease === null || preparedLease.prepared_lease_key_sha256 !== previous.prepared_lease_key_sha256 ||
+      (previous.prepared_lease_epoch === undefined
+        ? preparedLease.prepared_lease_version !== previous.prepared_lease_version
+        : preparedLease.prepared_lease_epoch !== previous.prepared_lease_epoch))) {
+    throw receiptIdentityConflict("work requalification must preserve this Turn's original task lease generation");
+  }
   if (nativeChildReportAdmission(oldDetails, original.status, identity.effect_id, phase, false, originalReplan)
       .report_permission === "new_operation") {
     if (preparedLease === null || originalReplan !== currentReplan) return replay;
-    const previous = heartbeatPreparedLease(oldDetails);
     const previousVersion = previous?.prepared_lease_version ?? 0;
     // A delayed readiness evaluation can never replace a newer lease. Only
     // the preparation proof changes; admission, billing and workspace stay bound.

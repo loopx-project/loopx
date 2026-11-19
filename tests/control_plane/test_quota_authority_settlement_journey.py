@@ -712,6 +712,52 @@ def test_first_writeback_refuses_generation_retired_by_later_work(tmp_path, prov
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_turn_refuses_readiness_from_a_replacement_lease(tmp_path, provider):
+    project, runtime, registry, _, _ = _source(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+        extra=f"claimed_by={cli.AGENT_ID}",
+    )
+    scope = ("--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)
+
+    def run(*args):
+        return cli._run_cli(registry, runtime, *args, *scope, cwd=project)
+
+    code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
+    assert code == 0 and claim["ok"], claim
+    code, admitted = _guard(project, runtime, registry)
+    assert code == 0 and admitted["normal_delivery_allowed"], admitted
+    original_proof = admitted["execution_preparation"]["lease_proof"]
+    journal = rollout_event_log_path(runtime, cli.GOAL_ID)
+    code, released = run("task-lease", "release", "--owner", cli.AGENT_ID,
+                         "--idempotency-key", original_proof["idempotency_key"],
+                         "--expected-version", str(original_proof["expected_version"]))
+    assert code == 0 and released["released"], released
+    code, replacement = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
+    assert code == 0 and replacement["ok"], replacement
+    assert replacement["claim_operation_id"] != claim["claim_operation_id"]
+    code, inspection = run("task-lease", "inspect")
+    assert code == 0 and inspection["active"], inspection
+    replacement_lease = inspection["lease"]
+    assert replacement_lease["lease_epoch"] > admitted["execution_preparation"]["lease_epoch"]
+    before_retry = journal.read_bytes()
+
+    code, refused = _guard(project, runtime, registry)
+    assert code != 0 and refused["ok"] is False, refused
+    assert refused["error_code"] == "heartbeat_receipt_identity_conflict", refused
+    assert journal.read_bytes() == before_retry
+    readback = read_heartbeat_settlement(
+        runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID, todo_id=cli.TODO_ID,
+        turn_instance_id=cli.TURN_ID, registry_path=registry,
+    )
+    assert readback is not None and readback.heartbeat_receipt["event_id"] == admitted["heartbeat_receipt"]["event_id"]
+    assert not readback.writeback.receipts and not readback.spend.receipts
+    assert cli._spend_run_count(runtime) == 0
+
+    assert readback.prepared_lease["prepared_lease_epoch"] == admitted["execution_preparation"]["lease_epoch"]
+    assert readback.prepared_lease["prepared_lease_version"] == original_proof["expected_version"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_unprepared_turn_does_not_become_admitted_after_deferral(tmp_path, provider):
     project, runtime, registry, _, _ = _source(
         tmp_path, provider=provider, handoff_mode="hard_lease",

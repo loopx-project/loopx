@@ -113,6 +113,7 @@ def _execution_facts(
             **({"owner": lease["owner"]} if normalize_todo_claimed_by(lease.get("owner")) else {}),
             "lease_proof": {"idempotency_key": lease.get("idempotency_key"),
                             "expected_version": lease.get("version")},
+            "lease_epoch": lease.get("lease_epoch"),
         })
     return {
         "schema_version": "execution_preparation_facts_v0",
@@ -143,11 +144,14 @@ class RefreshTaskLeaseUnavailable(ValueError):
     code = "refresh_task_lease_unavailable"
 
 
-def prepared_lease_receipt_fields(proof: Mapping[str, Any]) -> dict[str, Any]:
-    """Serialize the prepared lease without persisting its operation key."""
+def prepared_lease_receipt_fields(
+    proof: Mapping[str, Any], *, lease_epoch: int | None = None,
+) -> dict[str, Any]:
+    """Serialize the prepared generation without persisting its operation key."""
     return {
         "prepared_lease_key_sha256": hashlib.sha256(proof["idempotency_key"].encode("utf-8")).hexdigest(),
         "prepared_lease_version": proof["expected_version"],
+        **({"prepared_lease_epoch": lease_epoch} if lease_epoch is not None else {}),
     }
 
 
@@ -165,7 +169,9 @@ def quota_prepared_lease_receipt_fields(
         return {}
     fields: dict[str, Any] = {"prepared_lease_required": True}
     if delivery_admitted and preparation.get("state") == "ready" and preparation.get("delivery_allowed") is True:
-        fields.update(prepared_lease_receipt_fields(preparation["lease_proof"]))
+        fields.update(prepared_lease_receipt_fields(
+            preparation["lease_proof"], lease_epoch=preparation.get("lease_epoch"),
+        ))
     return fields
 
 
@@ -204,10 +210,14 @@ def guard_first_writeback_execution(
             current_proof = (current.get("lease_proof") if current.get("state") == "ready"
                              else current.get("retired_lease_proof"))
             if todo_open or prepared_required:
+                # Legacy prepared receipts can prove their exact version, but cannot
+                # advance to a later version without a recorded generation.
+                lease_epoch = (current.get("lease_epoch")
+                               if prepared_lease and "prepared_lease_epoch" in prepared_lease else None)
                 execution_bound = (
                     requested_proof is not None
                     and current_proof == requested_proof
-                    and prepared_lease == prepared_lease_receipt_fields(requested_proof)
+                    and prepared_lease == prepared_lease_receipt_fields(requested_proof, lease_epoch=lease_epoch)
                 )
             else:
                 # Older admitted closeouts may predate persisted lease readiness.

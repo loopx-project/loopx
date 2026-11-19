@@ -1,6 +1,7 @@
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {HANDOFF_MODE_RETIRED_REASON, retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
 import type {JsonObject} from "../effect_program.ts";
+import {leaseEpoch} from "./task_lease_acquire.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {
   optionalNonEmptyString,
@@ -37,7 +38,7 @@ function leaseFact(value: unknown, label: string): JsonObject {
     proof = {idempotency_key: key, expected_version: version};
   }
   return {status, active, ...(owner === null ? {} : {owner}),
-    ...(proof === undefined ? {} : {lease_proof: proof})};
+    ...(proof === undefined ? {} : {lease_proof: proof, lease_epoch: leaseEpoch(lease)})};
 }
 
 function claimAction(goalId: string, todoId: string, agentId: string): JsonObject {
@@ -106,7 +107,7 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
     return {...base, state: "blocked_by_conflict", delivery_allowed: false,
       reason_code: "selected_todo_not_open",
       reason: "The selected Todo is no longer open; select current work before execution.",
-      ...(retiredProof === undefined ? {} : {retired_lease_proof: retiredProof})};
+      ...(retiredProof === undefined ? {} : {retired_lease_proof: retiredProof, lease_epoch: retained?.lease_epoch})};
   }
   if (claimedBy !== null && claimedBy !== agentId) {
     return {...base, state: "blocked_by_conflict", delivery_allowed: false,
@@ -135,7 +136,8 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
       reason_code: "matching_active_task_lease",
       // Capture the admitted generation once. Recovery must not borrow a
       // replacement lease after the original Host result was produced.
-      ...(active[0].lease_proof === undefined ? {} : {lease_proof: active[0].lease_proof})};
+      ...(active[0].lease_proof === undefined ? {} :
+        {lease_proof: active[0].lease_proof, lease_epoch: active[0].lease_epoch})};
   }
 
   const prior = leases[0];
