@@ -45,9 +45,6 @@
     "loopx/capabilities/issue_fix/pr_lifecycle.py": {
       "lines": 2056
     },
-    "loopx/capabilities/native_chat/external_conversations.py": {
-      "lines": 2111
-    },
     "loopx/capabilities/reward_memory/utility_reducer.py": {
       "any_count": 0,
       "dict_any_count": 0,
