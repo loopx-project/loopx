@@ -8,6 +8,7 @@ from pathlib import Path
 from ..capabilities.explore.composition_frontier import (
     project_live_explore_composition_frontier,
 )
+from ..capabilities.progress_review.context import external_progress_review_context
 from ..capabilities.repository_change_window import (
     repository_delivery_interaction_hook,
 )
@@ -69,6 +70,7 @@ def _build_scheduler_followup_decision(
         scheduler_execution_context=scheduler_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
+        progress_review_context_reader=external_progress_review_context,
         receipt_bound_todo_id=receipt_todo_id,
         receipt_bound_replan_obligation_id=receipt_replan_id,
         turn_instance_id=turn_instance_id,
