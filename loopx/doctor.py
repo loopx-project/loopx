@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from datetime import datetime, timezone
 from functools import partial
-from importlib.metadata import PackageNotFoundError, distribution
+from importlib.metadata import Distribution, PackageNotFoundError, distribution
 import json
 import os
 import re
@@ -28,9 +28,11 @@ from .install_contract import (
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
     PythonInstallOwner,
+    distribution_record_path,
     installed_loopx_distribution,
     python_distribution_upgrade_command,
     resolve_python_install_owner,
+    verified_distribution_console,
 )
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
@@ -123,10 +125,10 @@ def command_release_root(command_realpath: Path | None) -> Path | None:
     return None
 
 
-def current_script_invocation_path() -> Path | None:
-    """Return the active console script or installed standalone-core module."""
+def _current_invocation(*, inspect_distribution_launcher: bool) -> tuple[Path | None, bool]:
+    """Return the invocation path and whether a verified module owns the route."""
     if not sys.argv or not sys.argv[0]:
-        return None
+        return None, False
     path = Path(sys.argv[0]).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
@@ -135,38 +137,65 @@ def current_script_invocation_path() -> Path | None:
     except OSError:
         path = path.absolute()
     if path.exists() and path.name.lower() in {"loopx", "loopx.exe"}:
-        return path
-    if path == Path(__file__).with_name("entrypoint.py").resolve():
-        # Module invocation is the core's isolated continuation route. Verify
-        # the imported distribution before replacing ambient PATH discovery.
-        installed = python_distribution_install(Path(__file__).resolve())
-        if installed.get("distribution_name") == "loopx-core":
-            return path
+        return path, False
+    module_path = Path(__file__).resolve()
+    entrypoint = module_path.with_name("entrypoint.py")
+    if path != entrypoint and (not inspect_distribution_launcher or path != module_path.with_name("cli.py")):
+        return None, False
+    installed = _python_distribution_owning_module(module_path)
+    if installed is None:
+        return None, False
+    if installed.name == "loopx-core":
+        return (path, True) if path == entrypoint else (None, False)
+    # Source metadata can list the module without recording an installed script.
+    if not inspect_distribution_launcher or installed.read_text("RECORD") is None:
+        return None, False
+
+    # The package updater invokes Doctor with its interpreter. Resolve that
+    # distribution's console script even if the shell names a different CLI.
+    script_name = "loopx.exe" if os.name == "nt" else "loopx"
+    scripts = {
+        distribution_record_path(item)
+        for item in installed.files or ()
+        if Path(item.as_posix()).name.lower() == script_name
+    }
+    if len(scripts) == 1:
+        script = verified_distribution_console(scripts.pop())
+        if script is not None and os.access(script, os.X_OK):
+            return script, True
+    return None, True
+
+
+def current_script_invocation_path() -> Path | None:
+    """Return the launcher eligible under the existing service activation policy."""
+    return _current_invocation(inspect_distribution_launcher=False)[0]
+
+
+def doctor_invocation_path() -> tuple[Path | None, bool]:
+    """Resolve Doctor's invocation while retaining ownership if its launcher is unavailable."""
+    return _current_invocation(inspect_distribution_launcher=True)
+
+
+def _python_distribution_owning_module(module_path: Path) -> Distribution | None:
+    try:
+        installed = installed_loopx_distribution(distribution)
+    except PackageNotFoundError:
+        return None
+    expected = module_path.resolve()
+    module_suffix = os.path.join("loopx", "doctor.py")
+    for item in installed.files or ():
+        entry = item.as_posix()
+        if os.path.normcase(entry).endswith(module_suffix) and distribution_record_path(item).resolve() == expected:
+            return installed
     return None
 
 
 def python_distribution_install(module_path: Path) -> dict[str, Any]:
     """Identify a wheel/sdist install that owns the imported LoopX module."""
-
-    try:
-        installed = installed_loopx_distribution(distribution)
-    except PackageNotFoundError:
+    installed = _python_distribution_owning_module(module_path)
+    if installed is None:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
-    expected = module_path.resolve()
-    module_suffix = os.path.join("loopx", "doctor.py")
-    for item in installed.files or ():
-        entry = item.as_posix()
-        if not os.path.normcase(entry).endswith(module_suffix):
-            continue
-        # A PackagePath uses POSIX components, so locating a drive-qualified
-        # RECORD entry can lose its Windows root on Python 3.11.
-        record_path = Path(entry)
-        located = record_path if record_path.is_absolute() else Path(item.locate())
-        if located.resolve() == expected:
-            break
-    else:
-        return {"available": False}
     owner = resolve_python_install_owner(default_installer=installer, prefix=Path(sys.prefix))
     return {
         "available": True,
@@ -735,15 +764,18 @@ def collect_doctor(
         else None
     )
     loopx_path = resolve_command_path("loopx")
-    invocation_path = current_script_invocation_path()
+    invocation_path, module_owns_route = doctor_invocation_path()
     loopx_canary_path = resolve_command_path("loopx-canary")
-    command_path_primary = (
-        invocation_path
-        if invocation_path == Path(__file__).with_name("entrypoint.py").resolve()
-        else loopx_path or invocation_path
-    )
+    command_path = invocation_path if module_owns_route else loopx_path or invocation_path
+    if module_owns_route:
+        command_detail = str(invocation_path) if invocation_path else "installed Python console script unavailable"
+    elif loopx_path:
+        command_detail = str(loopx_path)
+    elif invocation_path:
+        command_detail = f"loopx was not found on PATH; using current invocation {invocation_path}"
+    else:
+        command_detail = "loopx was not found on PATH"
     canary_path = loopx_canary_path
-    command_path = command_path_primary
     command_realpath = command_path.resolve() if command_path else None
     canary_realpath = canary_path.resolve() if canary_path else None
     loopx_canary_realpath = loopx_canary_path.resolve() if loopx_canary_path else None
@@ -1018,13 +1050,7 @@ def collect_doctor(
             "id": "command_available",
             "required": True,
             "ok": command_path is not None,
-            "detail": str(loopx_path)
-            if loopx_path
-            else (
-                f"loopx was not found on PATH; using current invocation {invocation_path}"
-                if invocation_path
-                else "loopx was not found on PATH"
-            ),
+            "detail": command_detail,
         },
         {
             "id": "command_on_path",
