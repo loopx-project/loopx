@@ -14,7 +14,12 @@ import pytest
 from argparse import Namespace
 import sys
 
-from loopx.chat_action_store import ActionConflictError, ChatActionStore
+from loopx.chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from loopx.chat_actions import ChatActionService
 from loopx.cli_commands.goal_channel_operation import (
     GoalChannelOperationContext,
@@ -2053,6 +2058,8 @@ def test_restart_recovers_only_claimed_non_effectful_simulation(
             "confirmation_digest": operation["confirmation_digest"],
             "card_digest": operation["delivery"]["card_digest"],
             "confirmed_at": datetime.now(timezone.utc).isoformat(),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
 

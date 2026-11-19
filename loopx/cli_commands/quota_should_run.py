@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..capabilities.progress_review.context import external_progress_review_context
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
@@ -384,6 +385,7 @@ def execute_quota_should_run(
         bounded_research_frontier_projector=export(
             "project_live_explore_composition_frontier"
         ),
+        progress_review_context_reader=external_progress_review_context,
         receipt_bound_todo_id=action_selection.receipt_bound_todo_id,
         requested_action_todo_id=action_selection.requested_todo_id_for_decision,
         receipt_bound_replan_obligation_id=(

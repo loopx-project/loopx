@@ -323,7 +323,6 @@ def _publish_quota_result(
         args,
         scheduler_context=scheduler_context,
         capture_directory=capture_directory,
-        native_context=native_context,
         record_capture=record_capture,
     )
     captured_digest = capture_decision(

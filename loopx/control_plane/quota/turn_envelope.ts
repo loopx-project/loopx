@@ -11,13 +11,13 @@ import {isDeepStrictEqual} from "node:util";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { inflateSync } from "node:zlib";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
-import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
+import {omitUnboundExploreResultWriteback, referenceExploreResultDelivery,
+  referenceExploreResultWriteback} from "../capabilities/explore_context_delivery.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
-  contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
+  contextSourceIdentity, omitEmptyTaskTodoLanes, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
-import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
 import {completeCliSettlementChannel} from "./settlement_plan.ts";
 import {REPLAN_SETTLEMENT_CONTRACT_SCHEMA} from "../work_items/replan_settlement.ts";
 
@@ -1889,9 +1889,10 @@ function hostModelContextChanges(decision: JsonObject): JsonObject {
     context.replan_action_packet = {...packet, writeback_contract: replanAuthoringContract(decision)};
   delete interaction.cli_channel;
   context.interaction_contract = interaction;
-  // Preserve backlog and all unknown facts: task requirements and references
-  // can depend on them even when a Todo is already selected.
-  return contextProjectionChanges(decision, context);
+  // The work is already selected. Keep every candidate and unknown fact,
+  // while omitting the empty diagnostic lanes of known Todo summaries.
+  const ordinary = decision.effective_action === EffectiveAction.NORMAL_RUN && decision.normal_delivery_allowed === true;
+  return contextProjectionChanges(decision, ordinary ? omitEmptyTaskTodoLanes(context) : context);
 }
 
 /** A current private plan stores its one admitted source and transport header.

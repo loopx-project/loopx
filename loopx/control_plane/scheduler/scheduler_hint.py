@@ -162,10 +162,8 @@ def _finish_transport(
 ) -> dict[str, Any]:
     completed = _encode_followup_args(packet, before, goal_ref)
     # Source metadata can also contain cli_args. Only these owned wire slots are executable hints.
-    for view in ("app_automation", "codex_app"):
-        app = completed.get(view)
-        if not isinstance(app, dict):
-            continue
+    app = completed.get("app_automation")
+    if isinstance(app, dict):
         encoded_app = dict(app)
         for followup in ("ack_hint", "failure_hint"):
             command = app.get(followup)
@@ -173,7 +171,7 @@ def _finish_transport(
                 encoded_app[followup] = _encode_followup_args(
                     command, before, goal_ref
                 )
-        completed[view] = encoded_app
+        completed["app_automation"] = encoded_app
     return completed
 
 
@@ -432,7 +430,3 @@ def build_app_automation_scheduler_failure_hint(
     goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _followup("failure", dict(locals()))
-
-
-def build_codex_app_scheduler_ack_hint(**kwargs: Any) -> dict[str, Any]:
-    return _followup("legacy_ack", kwargs)

@@ -27,7 +27,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, source_control_fields
+from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, recovery_journal_fields, source_control_fields
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -107,6 +107,7 @@ class ChatExternalConversations:
         self.root = controller.store.root / "external-requests"
         self._source_control_discovery = FileChatDiscovery()
         self._backlog_request_discovery = FileChatDiscovery()
+        self._recovery_discovery = FileChatDiscovery()
         self.actions: Any | None = None
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -1783,18 +1784,14 @@ class ChatExternalConversations:
         return [_read_json(path) for path in sorted(self.root.glob("*.json"))
                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
 
+    def _recovery_rows(self) -> list[dict[str, Any]]:
+        paths = (p for p in sorted(self.root.glob("*.json")) if _REQUEST_JOURNAL_STEM.fullmatch(p.stem))
+        return [r for _, r in self._recovery_discovery.rows(self.root, paths, read=_read_json, project=recovery_journal_fields)]
+
     def source_controls(self) -> list[dict[str, Any]]:
-        """Observe source controls and private text digests without reparsing unchanged bodies.
-
-        Recovery/stop rules remain with their original typed owner and callers.
-        A new, replaced or modified journal is read again; pending() and exact
-        request reads still expose the complete current canonical records.
-        """
-        paths = (path for path in sorted(self.root.glob("*.json"))
-                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
-
-        return [row for _path, row in self._source_control_discovery.rows(self.root, paths,
-            read=_read_json, project=source_control_fields)]
+        """Observe source controls and private text digests without reparsing unchanged bodies."""
+        paths = (p for p in sorted(self.root.glob("*.json")) if _REQUEST_JOURNAL_STEM.fullmatch(p.stem))
+        return [r for _, r in self._source_control_discovery.rows(self.root, paths, read=_read_json, project=source_control_fields)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
@@ -1823,7 +1820,7 @@ class ChatExternalConversations:
         saved = session["steward_context"]
         allowed = set(self.bindings.steward_scope(session) or [])
         latest: dict[str, dict[str, Any]] = {}
-        for row in sorted(self.pending(), key=lambda row: row.get("created_at", "")):
+        for row in sorted(self._recovery_rows(), key=lambda row: row.get("created_at", "")):
             resources = row.get("commission_resources") or {}
             if (resources.get("goal_id") in allowed
                     and row["binding_id"] == saved["binding_id"]
@@ -2061,7 +2058,7 @@ class ChatExternalConversations:
             _atomic_write_json(path, row)
 
     def recover(self, *, request_ref: str | None = None) -> None:
-        rows = self.pending() if request_ref is None else [self.read_request(request_ref)]
+        rows = self._recovery_rows() if request_ref is None else [self.read_request(request_ref)]
         for row in rows:
             try:
                 if row.get("delivery_verified") and not row.get("commission_adoption_pending"):
@@ -2081,16 +2078,14 @@ class ChatExternalConversations:
                 if row["status"] == "prepared":
                     if row.get("capture_origin") == "provider_history" or row.get("native_mention"):
                         continue  # Only the original provider can reverify this source.
-                    # Admission resolves current authority after both request
-                    # and route fences. A separate pre-fence network probe
-                    # neither authorizes recovery nor needs to precede it.
-                    self.admit(binding_id=row["binding_id"], source=row["source"], request_ref=row["request_ref"],
-                               message=row["message"], command=row["command"],
-                               attachments=row.get("attachments"), origin=row.get("origin", "lark"))
+                    full_row = self.read_request(row["request_ref"]) if request_ref is None else row
+                    self.admit(binding_id=full_row["binding_id"], source=full_row["source"], request_ref=full_row["request_ref"],
+                               message=full_row["message"], command=full_row["command"],
+                               attachments=full_row.get("attachments"), origin=full_row.get("origin", "lark"))
                     continue
                 self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
                 if row["status"] == "command_queued":
-                    self._run_steward_action(row)
+                    self._run_steward_action(self.read_request(row["request_ref"]) if request_ref is None else row)
                 elif row["status"] == "accepted":
                     if row.get("agent_target"):
                         self.bindings.resolve_agent_target(self.bindings.resolve(binding_id=row["binding_id"], **row["source"]), row["agent_target"])

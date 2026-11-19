@@ -4,8 +4,10 @@ import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {projectStrideExploreBasis, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
+import * as yardstick from "../../loopx/control_plane/work_items/yardstick_decision.ts";
 
 test("initial work measurement feedback preserves linked scopes without choosing an outcome profile", () => {
+  const project = (source: JsonObject) => projectExploreTurnContext(source, yardstick);
   const profile = {metric: "quality", unit: "points", higher_is_better: true,
     comparison_scope: "inputs:shared", input_revision: "v1", evaluation_ref: "judge:public"};
   const finding = (id: string, node: string, order: number, candidate: string, value: number | null,
@@ -25,9 +27,9 @@ test("initial work measurement feedback preserves linked scopes without choosing
       finding("other-unit", "local", 7, "candidate:c", 30, {unit: "percent"}),
     ]}};
   const original = structuredClone(request);
-  const graph = projectExploreTurnContext(request).graph as JsonObject;
+  const graph = project(request).graph as JsonObject;
   assert.match(String(graph.result_writeback_guidance), /loopx explore finding --result-json FILE/);
-  assert.equal(projectExploreTurnContext({...request, graph_enabled: false}).graph, null);
+  assert.equal(project({...request, graph_enabled: false}).graph, null);
   const card = graph.work_measurements[0];
   assert.equal(card.todo_id, todo.todo_id);
   assert.equal(card.measurement_feedback.length, 3);
@@ -62,23 +64,23 @@ test("initial work measurement feedback preserves linked scopes without choosing
   assert.ok(card.details_command.includes("--todo-id") && card.details_command.includes(todo.todo_id));
   assert.deepEqual(request, original);
   for (const enabled of [false, undefined]) {
-    const off = projectExploreTurnContext({...request, yardstick_enabled: enabled}).graph as JsonObject;
+    const off = project({...request, yardstick_enabled: enabled}).graph as JsonObject;
     assert.ok(!Object.hasOwn(off, "work_measurements"));
     assert.deepEqual(off.measurement_feedback, graph.measurement_feedback);
   }
   for (const changes of [{claimed_by: "another"}, {done: true}, {status: "blocked"}, {explore_result_node_refs: []}]) {
-    const unavailable = projectExploreTurnContext({...request, work_todos: [{...todo, ...changes}]}).graph as JsonObject;
+    const unavailable = project({...request, work_todos: [{...todo, ...changes}]}).graph as JsonObject;
     assert.ok(!Object.hasOwn(unavailable, "work_measurements"));
   }
-  const scoped = projectExploreTurnContext({...request, result_node: "unlinked"}).graph as JsonObject;
+  const scoped = project({...request, result_node: "unlinked"}).graph as JsonObject;
   assert.ok(!Object.hasOwn(scoped, "work_measurements"));
-  const shared = projectExploreTurnContext({...request,
+  const shared = project({...request,
     work_todos: [todo, {...todo, todo_id: "todo_shared"}]}).graph as JsonObject;
   assert.deepEqual(shared.work_measurements.map(row => row.todo_id), ["todo_current", "todo_shared"]);
   assert.deepEqual(shared.work_measurements[0].measurement_feedback, shared.work_measurements[1].measurement_feedback);
   const tied = structuredClone(request);
   tied.projection.findings[1].measurements[0].value = 10;
-  const tiedGraph = projectExploreTurnContext(tied).graph as JsonObject;
+  const tiedGraph = project(tied).graph as JsonObject;
   const tie = tiedGraph.work_measurements[0].measurement_feedback.find(row => row.node_id === "shared");
   assert.equal(tie.best.candidate_ref, "candidate:a");
   assert.equal(tie.latest.measurement.candidate_ref, "candidate:b");
@@ -92,7 +94,7 @@ test("initial work measurement feedback preserves linked scopes without choosing
         proxy: null, counterevidence_refs: [], prior_finding_id: null,
         next_action: {method_id: "method:retained", reason: "Continue the recorded choice", cost_bound: "Existing budget"},
       }}}]}};
-  const differentQuestion = projectExploreTurnContext(declared).graph as JsonObject;
+  const differentQuestion = project(declared).graph as JsonObject;
   assert.ok(!Object.hasOwn(differentQuestion, "work_measurements"));
   assert.ok(differentQuestion.measurement_feedback.every(row => row.node_id === "local"));
 });

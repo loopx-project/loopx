@@ -33,6 +33,30 @@ def _ordinary_request_text_digest(row: dict[str, Any]) -> str | None:
     return hashlib.sha256(message.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
+_RECOVERY_JOURNAL_FIELDS = (
+    "request_ref",
+    "status",
+    "delivery_verified",
+    "commission_adoption_pending",
+    "agent_target",
+    "session_id",
+    "turn_id",
+    "binding_id",
+    "source",
+    "capture_origin",
+    "native_mention",
+    "created_at",
+    "commission_resources",
+)
+
+
+def recovery_journal_fields(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep only bounded recovery/commission metadata in the long-lived file cache."""
+    if not isinstance(row, dict) or "request_ref" not in row or "status" not in row:
+        return None
+    return {key: row[key] for key in _RECOVERY_JOURNAL_FIELDS if key in row}
+
+
 def source_control_fields(path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
     """Keep exact source controls and the metadata needed to prove admission."""
     fields = ("binding_id", "source", "command", "created_at")

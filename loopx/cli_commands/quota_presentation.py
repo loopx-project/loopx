@@ -12,7 +12,6 @@ from ..control_plane.scheduler.execution_context import SchedulerExecutionContex
 def compose_quota_work_contract(payload: dict[str, object], args: argparse.Namespace, *,
                                    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
                                    capture_directory: Path | None,
-                                   native_context: bool,
                                    record_capture: Callable[[dict[str, object], str], None] | None = None) -> dict[str, object]:
     """Compose every decided should-run source once before capture and display."""
     if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
@@ -26,15 +25,16 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
             composed_settlement=True)
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         from .quota_capture import capture_decision
+        from .quota_failure_report import quota_decision_transport_diagnostic
 
-        # Admission already happened. Keep its source/receipt; never emit a
-        # false v1, discard the receipt or rerun the guard to recover context.
+        error = QuotaDecisionTransportError("Complete Turn context could not be composed.")
+        # Admission may be durable. Retain its receipts through the existing
+        # failure projection so saved-context readers cannot deliver the
+        # unsigned input or register it as a current native claim source.
         capture_decision(
-            capture_directory, payload, args=args, native_context=native_context, record_capture=record_capture,
+            capture_directory, quota_decision_transport_diagnostic(args, payload, error), record_capture=record_capture,
         )
-        raise QuotaDecisionTransportError(
-            "Complete Turn context could not be composed. Read the saved original decision and receipt; do not rerun admission."
-        ) from exc
+        raise error from exc
 
 
 def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, object]:

@@ -19,6 +19,26 @@ from loopx.control_plane.turn_driver.decision_capture import capture_page_range
 from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
 
+def test_small_native_navigation_keeps_both_reader_routes():
+    from loopx.cli_commands.quota_context_reader import _native_context_reference, _native_output_bytes
+
+    # Fixed reader paths isolate the caller's budget from checkout and temporary directory names.
+    capture = {"path": f"/project/{'x' * 255}/required-context.json", "sha256": "a" * 64}
+    view = _native_context_reference(
+        {}, capture, mode="full", current=capture, current_document={"ok": True},
+        total_bytes=2000, metadata=None, progressive_enabled=True, field_index=None,
+        initial_read_pointers=None, initial_read_reference=None, page_bytes=3200,
+        output_bytes=3200, first_read_budget=(3200, 3200),
+        reader_argv=["/install/bin/loopx", "--cli-bin", "/install/bin/loopx"],
+    )
+
+    assert len(_native_output_bytes(view)) <= 3200
+    recovery = shlex.split(view["recovery"]["command"])
+    assert recovery[recovery.index("--capture-file") + 1] == capture["path"]
+    assert recovery[recovery.index("--capture-sha256") + 1] == capture["sha256"]
+    assert recovery[recovery.index("--max-page-output-bytes") + 1] == "3200"
+    assert all(term in view["instruction"] for term in ("--select", "--list", "recovery.command", "context_details"))
+
 @pytest.fixture
 def decision():
     return {
@@ -77,23 +97,26 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
-def test_complete_guard_protocol_is_explicit_and_saved_selection_retains_it(tmp_path):
+@pytest.mark.parametrize(("flag", "option"), [
+    ("--turn-envelope", "turn_envelope"), ("--complete-turn", "complete_turn"),
+])
+def test_new_selection_omits_view_alias_and_saved_selection_retains_it(tmp_path, flag, option):
     from loopx.cli_commands.quota_context_reader import bind_capture_selection_transport
 
     original = {"schema_version": "loopx_turn_envelope_v1", "interaction_contract": {"cli_channel": {
         "selection_command": {"command_args_template": "quota should-run --todo-id <todo-id>"}}}}
-    legacy = deepcopy(original)
-    bind_capture_selection_transport(legacy, Namespace(decision_output_root=str(tmp_path), complete_turn=False))
-    command = legacy["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
-    assert "--complete-turn" not in shlex.split(command)
-    selected = deepcopy(original)
-    bind_capture_selection_transport(selected, Namespace(decision_output_root=str(tmp_path), complete_turn=True))
-    command = selected["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
-    assert shlex.split(command).count("--complete-turn") == 1
-    bind_capture_selection_transport(selected, Namespace(decision_output_root=str(tmp_path), complete_turn=False))
-    recovered = selected["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
-    assert shlex.split(recovered).count("--complete-turn") == 1
-    assert "--complete-turn" not in original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+    current = deepcopy(original)
+    request = Namespace(decision_output_root=str(tmp_path), **{option: True})
+    bind_capture_selection_transport(current, request)
+    current_command = current["interaction_contract"]["cli_channel"]["selection_command"]
+    assert flag not in shlex.split(current_command["command_args_template"])
+
+    # Stored selectors keep their recorded command for same-capture recovery.
+    saved = deepcopy(original)
+    saved_command = saved["interaction_contract"]["cli_channel"]["selection_command"]
+    saved_command["command_args_template"] += " " + flag
+    bind_capture_selection_transport(saved, Namespace(decision_output_root=str(tmp_path)))
+    assert shlex.split(saved_command["command_args_template"]).count(flag) == 1
 
 
 def pinned_initial_view(payload, directory):

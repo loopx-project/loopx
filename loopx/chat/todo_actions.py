@@ -15,6 +15,7 @@ from ..control_plane.goals.activation import goal_is_stopped
 from ..control_plane.coordination.shadow_management import shadow_maintenance_lock_target
 from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
+from ..control_plane.todos.completion_validation import COMPLETION_VALIDATION_IN_PROGRESS
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
@@ -334,6 +335,7 @@ class ChatTodoActionMixin:
         Both paths drain the current projection, never an old receipt's state.
         """
         from ..chat_actions import _digest, _opaque
+        from ..chat_action_store import ActionConflictError
 
         operation_id = f"chat-update:{proposal_id}"
         basis = proposal["canonical_update_basis"]
@@ -344,6 +346,9 @@ class ChatTodoActionMixin:
         try:
             result = run(parameters, dry_run=False, basis=basis, operation_id=operation_id)
         except LocalCoordinationAuthorityUnavailable as error:
+            if error.code == COMPLETION_VALIDATION_IN_PROGRESS:
+                # The original caller still owns its result and proposal.
+                raise ActionConflictError(str(error)) from error
             if (terminal and error.code == "authority_source_changed"
                     and error.payload.get("completion_validation_executed") is True):
                 self.store.mark_failed(

@@ -889,6 +889,11 @@ capability. Disabling removes the extra ordinary-Turn cue and rejects new
 captures before primary commit, while historical findings and successful exact
 replays remain readable.
 
+An Explore context read loads the Yardstick projector when the graph is
+available and the setting is enabled. Ordinary C1 reads use the shared
+guidance and exact references for the captured context. Prior decisions stay
+bound to their original source when selected or replayed.
+
 The existing Research finding reader exposes the recorded target, outcome/proxy
 metrics, source, next action and cost bound. The ordinary task-scoped Explore
 context projects only that Todo's current target, a short next-choice cue and

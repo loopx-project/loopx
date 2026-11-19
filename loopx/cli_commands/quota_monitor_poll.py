@@ -210,6 +210,7 @@ def record_automatic_heartbeat_stall(
     from ..capabilities.explore.composition_frontier import (
         project_live_explore_composition_frontier,
     )
+    from ..capabilities.progress_review.context import external_progress_review_context
 
     poll = monitor_poll_recorder(
         status_payload,
@@ -244,10 +245,7 @@ def record_automatic_heartbeat_stall(
         agent_id=args.agent_id,
         available_capabilities=args.available_capabilities,
         include_scheduler_detail="scheduler" in context.detail_sections,
-        include_agent_todo_detail=(
-            "agent-todos" in context.detail_sections
-            and not bool(getattr(args, "turn_envelope", False))
-        ),
+        include_agent_todo_detail="agent-todos" in context.detail_sections,
         codex_app_current_rrule=args.app_automation_current_rrule,
         registry_path=registry_path,
         runtime_root=context.runtime_root,
@@ -255,6 +253,7 @@ def record_automatic_heartbeat_stall(
         scheduler_execution_context=context.scheduler_context,
         operator_inbox_urgency_projector=context.operator_inbox_urgency_projector,
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
+        progress_review_context_reader=external_progress_review_context,
         receipt_bound_todo_id=action_selection.receipt_bound_todo_id,
         receipt_bound_replan_obligation_id=(
             action_selection.receipt_bound_replan_obligation_id

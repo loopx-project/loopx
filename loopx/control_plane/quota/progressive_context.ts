@@ -652,7 +652,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Repeat --select to batch needed fields without replaying the outcome's requirements. "
         + "unread_context_index lists supporting fields not observed read in this epoch, or changed since that read. "
         + "source_blocks conservatively includes partially read current sources; this index is not a full-read gate. "
-        + "Use its source path and sha256 with quota context-read --select for each exact pointer. "
+        + "Substitute the exact pointer in context_details.command_template, or use the source path and sha256 "
+        + "with quota context-read --select. "
         + "A prior selected read, EOF or saved file does not confirm model-visible coverage or retention. "
         + "Detail reads never establish a full baseline. "
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
