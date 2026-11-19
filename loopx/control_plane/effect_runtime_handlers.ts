@@ -849,7 +849,15 @@ export function createEffectRuntimeHandlers(
     ["explore.measurements.normalize", lazyHandler(() => import("./capabilities/explore_measurements.ts"), ({normalizeExploreMeasurementsRequest}) => normalizeExploreMeasurementsRequest)],
     ["explore.result.evolution", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({planExploreQuestionEvolution}) => planExploreQuestionEvolution)],
     ["explore.result.intent", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({produceExploreResultIntent}) => produceExploreResultIntent)],
-    ["explore.turn_context", lazyHandler(() => import("./capabilities/explore_turn_context.ts"), ({projectExploreTurnContext}) => projectExploreTurnContext)],
+    ["explore.turn_context", lazyHandler(() => import("./capabilities/explore_context_delivery.ts"),
+      ({projectEmptyExploreTurnContext}) => async params => {
+        const empty = projectEmptyExploreTurnContext(params);
+        if (empty !== undefined) return empty;
+        const {projectExploreTurnContext} = await import("./capabilities/explore_turn_context.ts");
+        const yardstick = params.graph_enabled === true && params.yardstick_enabled === true
+          ? await import("./work_items/yardstick_decision.ts") : undefined;
+        return projectExploreTurnContext(params, yardstick);
+      })],
     ["explore.research.normalize", lazyHandler(() => import("./capabilities/explore_research.ts"), ({normalizeResearchObservation}) => normalizeResearchObservation)],
     ["explore.research.validate_attribution", lazyHandler(() => import("./capabilities/explore_research.ts"), ({validateResearchAttribution}) => validateResearchAttribution)],
     ["explore.research.validate_execution", lazyHandler(() => import("./capabilities/explore_research_execution.ts"), ({validateResearchExecution}) => validateResearchExecution)],
