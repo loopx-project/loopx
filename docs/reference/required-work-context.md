@@ -208,6 +208,11 @@ whole Goal/Todo narrative, source availability/revisions and read routes. Detail
 history and optional authoring recipes remain expandable from the same capture.
 Current narrative sources and their provenance precede other sources, including
 large scoped preferences; both retain their complete selected values.
+During workspace repair with an unbound Todo choice, the initial read keeps the
+candidate identities and selection command. It points to long candidate write
+scopes in the original capture when those scopes matter to the choice. After
+moving to an independent worktree, the guard for the same Turn supplies the
+current scopes before delivery.
 The preference source's complete `current` view also stays in the initial read:
 corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the

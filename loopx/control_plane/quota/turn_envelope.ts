@@ -2492,6 +2492,15 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
     path: ["selected_todo", "required_write_scopes"],
     instruction: "If workspace repair needs the Todo's requested write scopes, select /selected_todo/required_write_scopes from the source below. ",
   });
+  const suggestions = jsonObject(payload.action_portfolio)?.suggested_actions;
+  if (repair && selecting && Array.isArray(suggestions)) suggestions.forEach((value, index) => {
+    const candidate = jsonObject(value);
+    if (typeof candidate?.todo_id !== "string" || !longScope(candidate.required_write_scopes)) return;
+    const path = ["action_portfolio", "suggested_actions", index, "required_write_scopes"];
+    scopes.push({path,
+      instruction: `If choosing a candidate depends on its requested write scopes, select /${path.join("/")} from the source below. `,
+    });
+  });
   const finalScope = scopes.at(-1);
   if (repair && finalScope) finalScope.instruction +=
     "After relocating, rerun the guard for this Turn and use its complete current scopes before delivery. ";
