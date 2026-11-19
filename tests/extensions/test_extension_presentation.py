@@ -16,6 +16,7 @@ from loopx.extensions.presentation import (
     default_extension_projection_root,
     publish_extension_projection,
     read_extension_projection,
+    validate_opaque_presentation_view,
 )
 from loopx.extensions.runtime import (
     disable_extension,
@@ -827,3 +828,75 @@ def test_publish_projection_dry_run_does_not_load_validator(
     assert not default_extension_projection_root(state_file).exists(), (
         "dry-run must not write projection"
     )
+
+
+LOCAL_PATH_VIEW_VALUES = (
+    "see file:///Users/alice/goal.md",
+    "path:/Users/alice/goal.md",
+    "///tmp/a.log",
+    "//Users/alex/x",
+    "x=/private/a",
+)
+
+
+@pytest.mark.parametrize("value", LOCAL_PATH_VIEW_VALUES)
+def test_opaque_view_rejects_every_local_path_shape(value: str) -> None:
+    # The migration must not loosen presentation's historical reject side. Each
+    # row was either accepted here before the migration (the first three) or
+    # rejected by the old local regex (the last two); all five now come from the
+    # shared owner.
+    with pytest.raises(ValueError, match="must not contain a local path"):
+        validate_opaque_presentation_view({"headline": value})
+
+
+def test_opaque_view_keeps_ordinary_remote_urls_and_prose() -> None:
+    view = {
+        "headline": "https://example.com/docs",
+        "body": "the token budget is 1200",
+    }
+    assert validate_opaque_presentation_view(view) == view
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX console-script shebang fixture")
+def test_projection_publication_rejects_local_path_without_rewriting(
+    tmp_path: Path,
+) -> None:
+    state_file, _ = _installed_projection_extension(tmp_path)
+    first = publish_extension_projection(
+        "test-research-extension",
+        "investment-research",
+        state_file=state_file,
+        request={"schema_version": "synthetic_request_v0"},
+        execute=True,
+    )
+    projection_file = (
+        default_extension_projection_root(state_file)
+        / "test-research-extension"
+        / "investment-research.json"
+    )
+    previous_bytes = projection_file.read_bytes()
+
+    invalid = _provider_projection()
+    projection = invalid["presentation_projection"]
+    assert isinstance(projection, dict)
+    view = projection["view"]
+    assert isinstance(view, dict)
+    view["headline"] = "see file:///Users/alice/goal.md"
+    _projection_provider(tmp_path / "provider", projection=invalid)
+    doctor_installed_extension(
+        "test-research-extension",
+        state_file=state_file,
+        execute=True,
+    )
+
+    with pytest.raises(ValueError, match="must not contain a local path"):
+        publish_extension_projection(
+            "test-research-extension",
+            "investment-research",
+            state_file=state_file,
+            request={"schema_version": "synthetic_request_v0"},
+            execute=True,
+        )
+
+    assert projection_file.read_bytes() == previous_bytes
+    assert json.loads(previous_bytes)["payload_sha256"] == first["payload_sha256"]

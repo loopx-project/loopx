@@ -134,6 +134,7 @@ def test_neither_site_declares_a_local_path_regex_any_more() -> None:
 def test_owner_recognizes_the_absolute_roots_the_gaps_and_the_boundary_form() -> None:
     assert owner.PUBLIC_SAFE_LOCAL_PATH_PATTERNS == (
         owner.LOCAL_PATH_SURFACE_PATTERN,
+        owner.MULTI_SLASH_LOCAL_PATH_PATTERN,
         owner.HOME_RELATIVE_PATH_PATTERN,
         owner.PATH_PREFIX_LOCAL_PATTERN,
         owner.LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,

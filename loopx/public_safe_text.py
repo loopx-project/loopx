@@ -236,6 +236,19 @@ LOCAL_PATH_SURFACE_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+# Refs #5136, direction 3: a run of two or more leading slashes before a known
+# absolute root is the shape presentation and the public-output guards already
+# treat as a local reference. `LOCAL_PATH_SURFACE_PATTERN`'s negative lookbehind
+# excludes a preceding slash, so that shape needs this named arm. The lookbehind
+# also keeps a URI such as `https://Users/...` out: the character before the run
+# is `:`.
+MULTI_SLASH_LOCAL_PATH_PATTERN = re.compile(
+    r"(?<![:/A-Za-z0-9])(?:/{2,})"
+    r"(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/"
+    r"[^\s`'\"<>]+",
+    re.IGNORECASE,
+)
 # Refs #5136, direction 3: the local-path shapes this owner recognizes.
 # `LOCAL_PATH_SURFACE_PATTERN` carries the absolute roots, Windows drive letters
 # and UNC shares; the gap pair adds the home-relative `~/...` form and a local
@@ -265,6 +278,7 @@ LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN = re.compile(
 FILE_URL_LOCAL_PATH_PATTERN = re.compile(r"\bfile://", re.IGNORECASE)
 PUBLIC_SAFE_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     LOCAL_PATH_SURFACE_PATTERN,
+    MULTI_SLASH_LOCAL_PATH_PATTERN,
     HOME_RELATIVE_PATH_PATTERN,
     PATH_PREFIX_LOCAL_PATTERN,
     LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,
@@ -293,6 +307,7 @@ PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN = re.compile(
 PRESENTATION_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"/(?:Users|home|private|tmp|var)/[^\s`|,)]+"),
     LOCAL_PATH_SURFACE_PATTERN,
+    MULTI_SLASH_LOCAL_PATH_PATTERN,
     PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN,
     PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN,
 )
@@ -330,6 +345,8 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
             + "|"
             + PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN.pattern
             + ")|"
+            + MULTI_SLASH_LOCAL_PATH_PATTERN.pattern
+            + "|"
             + PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN.pattern
         ),
     ),
@@ -577,6 +594,11 @@ def find_private_text_match(value: str | None) -> re.Pattern[str] | None:
 _SHAPE_DETECTORS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     (SECRET_LIKE_SURFACE_PATTERN, CATEGORY_CREDENTIAL, "credential-like value shape"),
     (LOCAL_PATH_SURFACE_PATTERN, CATEGORY_LOCAL_PATH, "local filesystem path"),
+    # #5136 direction 3: the 2+ leading-slash shape presentation and the
+    # public-output guards already rejected. It stays a shape detector, so
+    # `find_private_text_match` keeps its narrower publication-tier set while
+    # `classify_private_text` and the public-output guard recognize it.
+    (MULTI_SLASH_LOCAL_PATH_PATTERN, CATEGORY_LOCAL_PATH, "local filesystem path"),
     (
         REMOTE_LOCATION_SURFACE_PATTERN,
         CATEGORY_REMOTE_LOCATION,
